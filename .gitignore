@@ -1,2 +1,10 @@
 .worktrees/
 .superpowers/
+node_modules/
+internal/webassets/admin/dist/
+/bin/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
