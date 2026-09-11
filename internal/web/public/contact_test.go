@@ -288,6 +288,45 @@ func TestContactFormStorageFailureAndPanicDoNotLeakOrClaimSuccess(t *testing.T) 
 	}
 }
 
+func TestContactFormUnknownCommitWarnsAgainstDuplicateSubmissionWithoutLeakingData(t *testing.T) {
+	t.Parallel()
+
+	secrets := []string{"Nome Incerto", "incerto@example.test", "+39 555 SEGRETO", "messaggio incerto sufficientemente lungo"}
+	clock := &contactTestClock{now: time.Date(2026, 9, 11, 12, 0, 10, 0, time.UTC)}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	service := &contactRecordingService{err: fmt.Errorf("%w: %s", contacts.ErrCommitUnknown, strings.Join(secrets, " "))}
+	handler := newContactTestHandler(t, service, clock, logger, false)
+	form := validContactForm(t, clock.now.Add(-contactMinimumCompletionTime))
+	form.Set("name", secrets[0])
+	form.Set("email", secrets[1])
+	form.Set("phone", secrets[2])
+	form.Set("message", secrets[3])
+	response := submitContactForm(handler, form, "studio.example.test", "https://studio.example.test", "203.0.113.111:4000")
+	body := response.Body.String()
+
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Location") != "" || response.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("unknown commit response = status %d Location %q Set-Cookie %q", response.Code, response.Header().Get("Location"), response.Header().Get("Set-Cookie"))
+	}
+	for _, fragment := range []string{"Non è possibile confermare la ricezione", "non inviare di nuovo", "recapiti diretti", "DATO DA CONFERMARE"} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("unknown commit body lacks %q", fragment)
+		}
+	}
+	if strings.Contains(strings.ToLower(body), "riprova") || strings.Contains(body, "<form") || strings.Contains(body, "Richiesta ricevuta") {
+		t.Fatalf("unknown commit response offers an unsafe retry/success path: %q", body)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(body, secret) || strings.Contains(logs.String(), secret) {
+			t.Fatalf("unknown commit path leaked %q", secret)
+		}
+	}
+	if !strings.Contains(logs.String(), `"outcome":"commit_unknown"`) || strings.Contains(logs.String(), "203.0.113.111") {
+		t.Fatalf("unknown commit log = %s", logs.String())
+	}
+	assertPrivateErrorHeaders(t, response)
+}
+
 func TestContactFormSignedSuccessInvalidExpiredAndPrivacyRetentionCopy(t *testing.T) {
 	t.Parallel()
 

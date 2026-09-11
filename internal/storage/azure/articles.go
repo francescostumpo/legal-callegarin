@@ -52,7 +52,7 @@ func (repository *ArticleMetadataRepository) Create(ctx context.Context, article
 		}
 		return articles.Article{}, mapArticleError(err, false)
 	}
-	return repository.Get(ctx, article.ID)
+	return repository.refreshCommitted(ctx, article, nil)
 }
 
 func (repository *ArticleMetadataRepository) Get(ctx context.Context, id string) (articles.Article, error) {
@@ -211,7 +211,29 @@ func (repository *ArticleMetadataRepository) Update(ctx context.Context, article
 		}
 		return articles.Article{}, mapArticleError(err, false)
 	}
-	return repository.Get(ctx, article.ID)
+	return repository.refreshCommitted(ctx, article, &stored)
+}
+
+func (repository *ArticleMetadataRepository) refreshCommitted(ctx context.Context, desired articles.Article, alternate *articles.Article) (articles.Article, error) {
+	observed, err := repository.Get(ctx, desired.ID)
+	if err != nil {
+		return articles.Article{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, err)
+	}
+	if !sameArticleState(observed, desired) {
+		return articles.Article{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, errors.New("committed article refresh did not match expected state"))
+	}
+	var alternateSlugs map[string]slugRecord
+	if alternate != nil {
+		alternateSlugs = slugRecordMap(*alternate)
+	}
+	ok, err := repository.slugStateMatches(ctx, slugRecordMap(desired), alternateSlugs)
+	if err != nil {
+		return articles.Article{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, err)
+	}
+	if !ok {
+		return articles.Article{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, errors.New("committed article slug refresh did not match expected state"))
+	}
+	return observed, nil
 }
 
 func (repository *ArticleMetadataRepository) reconcileCreate(ctx context.Context, desired articles.Article, cause error) (articles.Article, error) {

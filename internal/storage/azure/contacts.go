@@ -52,7 +52,7 @@ func (repository *ContactRepository) Create(ctx context.Context, contact contact
 	}
 	contact.ETag = etag
 	if etag == "" {
-		return repository.Get(ctx, contact.ID)
+		return repository.refreshCommitted(ctx, contact)
 	}
 	return contact, nil
 }
@@ -182,9 +182,20 @@ func (repository *ContactRepository) Update(ctx context.Context, contact contact
 	}
 	contact.ETag = etag
 	if etag == "" {
-		return repository.Get(ctx, contact.ID)
+		return repository.refreshCommitted(ctx, contact)
 	}
 	return contact, nil
+}
+
+func (repository *ContactRepository) refreshCommitted(ctx context.Context, desired contacts.Contact) (contacts.Contact, error) {
+	observed, err := repository.Get(ctx, desired.ID)
+	if err != nil {
+		return contacts.Contact{}, unknownCommitForContext(ctx, contacts.ErrCommitUnknown, err)
+	}
+	if !sameContactState(observed, desired) {
+		return contacts.Contact{}, unknownCommitForContext(ctx, contacts.ErrCommitUnknown, errors.New("committed contact refresh did not match expected state"))
+	}
+	return observed, nil
 }
 func (repository *ContactRepository) Delete(ctx context.Context, id, expectedETag string) error {
 	stored, err := repository.findByID(ctx, id)

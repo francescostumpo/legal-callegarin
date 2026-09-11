@@ -29,17 +29,40 @@
       <li>PEC: DATO DA CONFERMARE</li>
       <li>Indirizzo e orari: DATO DA CONFERMARE</li>
     </ul>
+    {{if .StorageOutcomeUnknown}}
+    <p>
+      Se la richiesta è urgente, usa i recapiti diretti, al momento indicati
+      come DATO DA CONFERMARE.
+    </p>
+    {{else}}
     <p>
       Se l’invio non riesce, puoi riprovare oppure usare uno dei recapiti
       diretti dopo la loro conferma.
     </p>
+    {{end}}
   </div>
 
   <div class="contact-form-panel">
     <p class="eyebrow">Richiesta di contatto</p>
+    {{if .StorageOutcomeUnknown}}
+    <h2 id="contact-form-heading">Esito dell’invio</h2>
+    {{else}}
     <h2 id="contact-form-heading">Descrivi brevemente la richiesta</h2>
-
-    {{if .Success}}
+    {{end}} {{if .StorageOutcomeUnknown}}
+    <div
+      id="error-summary"
+      class="form-error-summary"
+      role="alert"
+      tabindex="-1"
+    >
+      <h3>Non è possibile confermare la ricezione</h3>
+      <p>
+        Per evitare duplicati, non inviare di nuovo la richiesta. Se la
+        richiesta è urgente, usa i recapiti diretti, al momento indicati come
+        DATO DA CONFERMARE.
+      </p>
+    </div>
+    {{else}} {{if .Success}}
     <div class="form-success" role="status">
       <h3>Richiesta ricevuta</h3>
       <p>Il messaggio è stato registrato correttamente.</p>
@@ -220,6 +243,7 @@
         Invia la richiesta
       </button>
     </form>
+    {{end}}
   </div>
 </section>
 

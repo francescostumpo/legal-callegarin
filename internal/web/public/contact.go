@@ -40,17 +40,18 @@ type contactHandler struct {
 
 type contactPageData struct {
 	PageData
-	Form           contactFormValues
-	ErrorSummary   []contactFieldError
-	NameError      string
-	EmailError     string
-	PhoneError     string
-	MessageError   string
-	PrivacyError   string
-	FormToken      string
-	Success        bool
-	StorageFailure bool
-	GlobalError    string
+	Form                  contactFormValues
+	ErrorSummary          []contactFieldError
+	NameError             string
+	EmailError            string
+	PhoneError            string
+	MessageError          string
+	PrivacyError          string
+	FormToken             string
+	Success               bool
+	StorageFailure        bool
+	StorageOutcomeUnknown bool
+	GlobalError           string
 }
 
 type contactFormValues struct {
@@ -149,6 +150,13 @@ func (handler *contactHandler) post(response http.ResponseWriter, request *http.
 	}
 	_, err = safelySubmitContact(request.Context(), handler.service, submission)
 	if err != nil {
+		if errors.Is(err, contacts.ErrCommitUnknown) {
+			handler.logger.Error("contact submission outcome unknown", "event", "contact_submit", "outcome", "commit_unknown")
+			data := handler.pageData(contactFormValues{})
+			data.StorageOutcomeUnknown = true
+			handler.writePage(response, http.StatusServiceUnavailable, data)
+			return
+		}
 		handler.logger.Error("contact submission unavailable", "event", "contact_submit", "outcome", "storage_error")
 		data := handler.pageData(contactFormValues{})
 		data.StorageFailure = true

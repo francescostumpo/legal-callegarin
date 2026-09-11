@@ -21,6 +21,124 @@ type commitThenErrorTable struct {
 	afterMutation          func()
 }
 
+type successfulMutationUnreadableTable struct {
+	*memoryTableDriver
+	readsFail bool
+}
+
+func (driver *successfulMutationUnreadableTable) Transaction(ctx context.Context, actions []tableAction) error {
+	if err := driver.memoryTableDriver.Transaction(ctx, actions); err != nil {
+		return err
+	}
+	driver.readsFail = true
+	return nil
+}
+func (driver *successfulMutationUnreadableTable) Add(ctx context.Context, value []byte) (string, error) {
+	if _, err := driver.memoryTableDriver.Add(ctx, value); err != nil {
+		return "", err
+	}
+	driver.readsFail = true
+	return "", nil
+}
+func (driver *successfulMutationUnreadableTable) Update(ctx context.Context, value []byte, etag string) (string, error) {
+	if _, err := driver.memoryTableDriver.Update(ctx, value, etag); err != nil {
+		return "", err
+	}
+	driver.readsFail = true
+	return "", nil
+}
+func (driver *successfulMutationUnreadableTable) Get(ctx context.Context, partition, row string) (tableEntity, error) {
+	if driver.readsFail {
+		return tableEntity{}, ErrTransient
+	}
+	return driver.memoryTableDriver.Get(ctx, partition, row)
+}
+func (driver *successfulMutationUnreadableTable) List(ctx context.Context, filter string, maximum int32) ([]tableEntity, error) {
+	if driver.readsFail {
+		return nil, ErrTransient
+	}
+	return driver.memoryTableDriver.List(ctx, filter, maximum)
+}
+
+type mutationErrorTable struct {
+	*memoryTableDriver
+	partialArticle bool
+	contactValue   []byte
+}
+
+func (driver *mutationErrorTable) Transaction(ctx context.Context, actions []tableAction) error {
+	if driver.partialArticle {
+		if err := driver.memoryTableDriver.Transaction(ctx, actions[:1]); err != nil {
+			return err
+		}
+	}
+	return ErrTransient
+}
+func (driver *mutationErrorTable) Update(ctx context.Context, value []byte, etag string) (string, error) {
+	if driver.contactValue != nil {
+		if _, err := driver.memoryTableDriver.Update(ctx, driver.contactValue, etag); err != nil {
+			return "", err
+		}
+	}
+	return "", ErrTransient
+}
+
+type successfulTransactionStaleArticleTable struct {
+	*memoryTableDriver
+	stalePartition string
+	staleRow       string
+	stale          tableEntity
+	returnStale    bool
+}
+
+func (driver *successfulTransactionStaleArticleTable) Transaction(ctx context.Context, actions []tableAction) error {
+	prior, err := driver.memoryTableDriver.Get(ctx, actions[0].PartitionKey, actions[0].RowKey)
+	if err != nil {
+		return err
+	}
+	if err := driver.memoryTableDriver.Transaction(ctx, actions); err != nil {
+		return err
+	}
+	driver.stalePartition, driver.staleRow, driver.stale = actions[0].PartitionKey, actions[0].RowKey, prior
+	driver.returnStale = true
+	return nil
+}
+func (driver *successfulTransactionStaleArticleTable) Get(ctx context.Context, partition, row string) (tableEntity, error) {
+	if driver.returnStale && partition == driver.stalePartition && row == driver.staleRow {
+		return driver.stale, nil
+	}
+	return driver.memoryTableDriver.Get(ctx, partition, row)
+}
+
+type successfulUpdateStaleContactTable struct {
+	*memoryTableDriver
+	stale     tableEntity
+	postWrite bool
+}
+
+func (driver *successfulUpdateStaleContactTable) Update(ctx context.Context, value []byte, etag string) (string, error) {
+	partition, row, err := entityKey(value)
+	if err != nil {
+		return "", err
+	}
+	prior, err := driver.memoryTableDriver.Get(ctx, partition, row)
+	if err != nil {
+		return "", err
+	}
+	if _, err := driver.memoryTableDriver.Update(ctx, value, etag); err != nil {
+		return "", err
+	}
+	driver.stale = prior
+	driver.postWrite = true
+	return "", nil
+}
+func (driver *successfulUpdateStaleContactTable) List(ctx context.Context, filter string, maximum int32) ([]tableEntity, error) {
+	if driver.postWrite {
+		return []tableEntity{driver.stale}, nil
+	}
+	return driver.memoryTableDriver.List(ctx, filter, maximum)
+}
+
 func (driver *commitThenErrorTable) Transaction(ctx context.Context, actions []tableAction) error {
 	if err := driver.memoryTableDriver.Transaction(ctx, actions); err != nil {
 		return err
@@ -182,6 +300,174 @@ func TestUnknownCommitPreservesCancellationCause(t *testing.T) {
 	}
 }
 
+func TestArticleServicePreservesBodyWhenSuccessfulCreateRefreshFails(t *testing.T) {
+	driver := &successfulMutationUnreadableTable{memoryTableDriver: newMemoryTableDriver()}
+	blobs := newMemoryBlobDriver()
+	now := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	service := articles.NewService(newArticleMetadataRepository(driver), newArticleBodyStore(blobs, func() time.Time { return now }, func() string { return "version-1" }), outcomeClock{now}, outcomeIDs{})
+	_, err := service.CreateDraft(context.Background(), outcomeDraft("article-one", "body"))
+	if !errors.Is(err, articles.ErrCommitUnknown) || !errors.Is(err, ErrTransient) {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	if _, ok := blobs.values["articles/article-1/version-1.json"]; !ok {
+		t.Fatal("known-committed metadata with failed refresh deleted the body")
+	}
+}
+
+func TestArticleServicePreservesNewBodyWhenSuccessfulUpdateRefreshFails(t *testing.T) {
+	base := newMemoryTableDriver()
+	blobs := newMemoryBlobDriver()
+	now := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	versions := []string{"version-1", "version-2"}
+	versionIndex := 0
+	bodyStore := newArticleBodyStore(blobs, func() time.Time { return now }, func() string { value := versions[versionIndex]; versionIndex++; return value })
+	baseService := articles.NewService(newArticleMetadataRepository(base), bodyStore, outcomeClock{now}, outcomeIDs{})
+	created, err := baseService.CreateDraft(context.Background(), outcomeDraft("article-one", "first body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := &successfulMutationUnreadableTable{memoryTableDriver: base}
+	service := articles.NewService(newArticleMetadataRepository(driver), bodyStore, outcomeClock{now: now.Add(time.Minute)}, outcomeIDs{})
+	_, err = service.SaveDraft(context.Background(), created.ID, outcomeDraft("article-one", "second body"), created.ETag)
+	if !errors.Is(err, articles.ErrCommitUnknown) || !errors.Is(err, ErrTransient) {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+	if _, ok := blobs.values["articles/article-1/version-2.json"]; !ok {
+		t.Fatal("known-committed metadata with failed refresh deleted the new body")
+	}
+}
+
+func TestContactSuccessfulEmptyETagRefreshFailureIsCommitUnknown(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		driver := &successfulMutationUnreadableTable{memoryTableDriver: newMemoryTableDriver()}
+		_, err := newContactRepository(driver, time.Now).Create(context.Background(), outcomeContact("contact-1"))
+		if !errors.Is(err, contacts.ErrCommitUnknown) || !errors.Is(err, ErrTransient) {
+			t.Fatalf("Create() error = %v", err)
+		}
+	})
+	t.Run("update", func(t *testing.T) {
+		base := newMemoryTableDriver()
+		created, err := newContactRepository(base, time.Now).Create(context.Background(), outcomeContact("contact-1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		updated := created
+		updated.Message = "Messaggio aggiornato sufficientemente lungo"
+		updated.UpdatedAt = updated.UpdatedAt.Add(time.Minute)
+		driver := &successfulMutationUnreadableTable{memoryTableDriver: base}
+		_, err = newContactRepository(driver, time.Now).Update(context.Background(), updated, created.ETag)
+		if !errors.Is(err, contacts.ErrCommitUnknown) || !errors.Is(err, ErrTransient) {
+			t.Fatalf("Update() error = %v", err)
+		}
+	})
+}
+
+func TestArticleReconciliationDistinguishesPriorAndMixedStates(t *testing.T) {
+	base := newMemoryTableDriver()
+	created, err := newArticleMetadataRepository(base).Create(context.Background(), outcomeArticle("article-1", "article-one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := created
+	updated.Slug = "article-two"
+	updated.Title = "Titolo aggiornato"
+	updated.UpdatedAt = updated.UpdatedAt.Add(time.Minute)
+	for _, test := range []struct {
+		name        string
+		partial     bool
+		wantUnknown bool
+	}{
+		{name: "prior state"},
+		{name: "mixed state", partial: true, wantUnknown: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			copyDriver := cloneMemoryTableDriver(base)
+			driver := &mutationErrorTable{memoryTableDriver: copyDriver, partialArticle: test.partial}
+			_, err := newArticleMetadataRepository(driver).Update(context.Background(), updated, created.ETag)
+			if !errors.Is(err, ErrTransient) || errors.Is(err, articles.ErrCommitUnknown) != test.wantUnknown {
+				t.Fatalf("Update() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestSuccessfulArticleRefreshRejectsStaleMixedState(t *testing.T) {
+	base := newMemoryTableDriver()
+	created, err := newArticleMetadataRepository(base).Create(context.Background(), outcomeArticle("article-1", "article-one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := created
+	updated.Slug = "article-two"
+	updated.Title = "Titolo aggiornato"
+	updated.UpdatedAt = updated.UpdatedAt.Add(time.Minute)
+	driver := &successfulTransactionStaleArticleTable{memoryTableDriver: base}
+	_, err = newArticleMetadataRepository(driver).Update(context.Background(), updated, created.ETag)
+	if !errors.Is(err, articles.ErrCommitUnknown) {
+		t.Fatalf("Update() error = %v", err)
+	}
+}
+
+func TestSuccessfulContactRefreshRejectsStaleState(t *testing.T) {
+	base := newMemoryTableDriver()
+	created, err := newContactRepository(base, time.Now).Create(context.Background(), outcomeContact("contact-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := created
+	updated.Message = "Messaggio aggiornato sufficientemente lungo"
+	updated.UpdatedAt = updated.UpdatedAt.Add(time.Minute)
+	driver := &successfulUpdateStaleContactTable{memoryTableDriver: base}
+	_, err = newContactRepository(driver, time.Now).Update(context.Background(), updated, created.ETag)
+	if !errors.Is(err, contacts.ErrCommitUnknown) {
+		t.Fatalf("Update() error = %v", err)
+	}
+}
+
+func TestContactReconciliationDistinguishesPriorAndMixedStates(t *testing.T) {
+	base := newMemoryTableDriver()
+	created, err := newContactRepository(base, time.Now).Create(context.Background(), outcomeContact("contact-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := created
+	updated.Message = "Messaggio aggiornato sufficientemente lungo"
+	updated.UpdatedAt = updated.UpdatedAt.Add(time.Minute)
+	mixed := updated
+	mixed.Message = "Stato concorrente sufficientemente differente"
+	mixedValue, err := marshalContactEntity(mixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name        string
+		value       []byte
+		wantUnknown bool
+	}{
+		{name: "prior state"},
+		{name: "mixed state", value: mixedValue, wantUnknown: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			driver := &mutationErrorTable{memoryTableDriver: cloneMemoryTableDriver(base), contactValue: test.value}
+			_, err := newContactRepository(driver, time.Now).Update(context.Background(), updated, created.ETag)
+			if !errors.Is(err, ErrTransient) || errors.Is(err, contacts.ErrCommitUnknown) != test.wantUnknown {
+				t.Fatalf("Update() error = %v", err)
+			}
+		})
+	}
+}
+
+func cloneMemoryTableDriver(source *memoryTableDriver) *memoryTableDriver {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	clone := newMemoryTableDriver()
+	clone.nextETag = source.nextETag
+	for key, entity := range source.entities {
+		clone.entities[key] = tableEntity{Value: append([]byte(nil), entity.Value...), ETag: entity.ETag}
+	}
+	return clone
+}
+
 func outcomeArticle(id, slug string) articles.Article {
 	now := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	return articles.Article{ID: id, Slug: slug, Title: "Titolo valido", Summary: "Sommario sufficientemente lungo", Area: "civile", CoverID: "cover", Status: articles.StatusDraft, DraftBody: &articles.BodyRef{BlobName: "articles/" + id + "/v1.json", Version: "v1", SavedAt: now}, CreatedAt: now, UpdatedAt: now}
@@ -189,6 +475,10 @@ func outcomeArticle(id, slug string) articles.Article {
 func outcomeContact(id string) contacts.Contact {
 	now := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	return contacts.Contact{ID: id, Name: "Mario Rossi", Email: "mario@example.test", Message: "Messaggio sufficientemente lungo", ConsentVersion: "privacy-v1", PrivacyAcceptedAt: now, State: contacts.StateNew, CreatedAt: now, UpdatedAt: now, ReviewDueAt: now.AddDate(2, 0, 0)}
+}
+
+func outcomeDraft(slug, plainText string) articles.DraftInput {
+	return articles.DraftInput{Slug: slug, Title: "Titolo valido", Summary: "Sommario sufficientemente lungo", Area: "civile", CoverID: "cover", Body: articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc"}`), HTML: "<p>" + plainText + "</p>", PlainText: plainText}}
 }
 
 func outcomeSession(label string, created time.Time) auth.Session {
