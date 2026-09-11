@@ -58,6 +58,11 @@ bytes. No literal session-key fallback is accepted outside development.
 `false`; enable it only when every direct request reaches the application
 through a trusted reverse proxy that replaces forwarding headers.
 
+Generate the administrator password hash offline with `go run ./cmd/adminhash`.
+See [administrator password recovery](docs/password-recovery.md) for the safe
+generation, Azure secret rotation, session invalidation, and verification
+procedure.
+
 Azure mode uses `AZURE_STORAGE_ACCOUNT_URL` with a canonical
 `https://<account>.blob.core.windows.net` origin and `DefaultAzureCredential`.
 `AZURE_STORAGE_CONNECTION_STRING` is limited to development/test (for example,

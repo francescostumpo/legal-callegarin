@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
+	"github.com/francescostumpo/legal-callegarin/internal/auth"
 	"github.com/francescostumpo/legal-callegarin/internal/config"
 	"github.com/francescostumpo/legal-callegarin/internal/contacts"
 	storagebundle "github.com/francescostumpo/legal-callegarin/internal/storage"
@@ -21,6 +23,50 @@ import (
 	publicweb "github.com/francescostumpo/legal-callegarin/internal/web/public"
 	"github.com/francescostumpo/legal-callegarin/internal/webassets"
 )
+
+func TestNewComposesProtectedAdminRoutes(t *testing.T) {
+	t.Parallel()
+	phc, err := auth.HashPassword([]byte("correct-password"), bytes.NewReader(bytes.Repeat([]byte{0x41}, 16)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := New(Options{
+		Config: config.Config{
+			Environment:       "test",
+			StorageMode:       "memory",
+			PublicBaseURL:     "https://studio.example.test",
+			AdminUsername:     "admin",
+			AdminPasswordHash: phc,
+			SessionKey:        []byte("0123456789abcdef0123456789abcdef"),
+		},
+		Assets: webassets.Files,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	protected := httptest.NewRecorder()
+	handler.ServeHTTP(protected, httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin", nil))
+	if protected.Code != http.StatusSeeOther || protected.Header().Get("Location") != "/admin/login" || protected.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("protected admin = %d location=%q cache=%q", protected.Code, protected.Header().Get("Location"), protected.Header().Get("Cache-Control"))
+	}
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin/login", nil))
+	if login.Code != http.StatusOK || login.Header().Get("Content-Security-Policy") == "" {
+		t.Fatalf("admin login = %d headers=%#v", login.Code, login.Header())
+	}
+}
+
+func TestNewRejectsPartialOrMalformedAdminCredentials(t *testing.T) {
+	t.Parallel()
+	for _, cfg := range []config.Config{
+		{PublicBaseURL: "https://studio.example.test", AdminUsername: "admin"},
+		{PublicBaseURL: "https://studio.example.test", AdminUsername: "admin", AdminPasswordHash: "malformed", SessionKey: []byte("0123456789abcdef0123456789abcdef")},
+	} {
+		if _, err := New(Options{Config: cfg, Assets: webassets.Files}); err == nil {
+			t.Fatalf("New(%#v) error = nil", cfg)
+		}
+	}
+}
 
 type readinessProbe struct {
 	err         error
