@@ -116,6 +116,27 @@ func TestNavigationIsProgressivelyEnhancedAndMarksCurrentPage(t *testing.T) {
 	}
 }
 
+func TestNavigationEnhancementIsServedFirstPartyAndMarksJavaScriptBeforeSetup(t *testing.T) {
+	t.Parallel()
+
+	handler := newPublicHandler(t)
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, httptest.NewRequest(http.MethodGet, "/", nil))
+	if strings.Contains(pageResponse.Body.String(), `class="js-enabled"`) {
+		t.Fatal("server HTML must not claim JavaScript enhancement")
+	}
+
+	scriptResponse := httptest.NewRecorder()
+	handler.ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/assets/nav.js", nil))
+	if scriptResponse.Code != http.StatusOK {
+		t.Fatalf("GET /assets/nav.js status = %d, want 200", scriptResponse.Code)
+	}
+	marker := `document.documentElement.classList.add("js-enabled")`
+	if !strings.HasPrefix(strings.TrimSpace(scriptResponse.Body.String()), marker) {
+		t.Fatal("first-party navigation script does not set its enhancement marker before setup")
+	}
+}
+
 func TestRendererFailsWhenTemplatesCannotBeParsed(t *testing.T) {
 	t.Parallel()
 

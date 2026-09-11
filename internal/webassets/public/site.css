@@ -292,12 +292,18 @@ h3 {
 }
 
 .mobile-navigation__close {
+  display: none;
   min-height: 2.75rem;
   align-self: flex-end;
+  align-items: center;
   padding-inline: var(--space-3);
   border: var(--border);
   background: transparent;
   cursor: pointer;
+}
+
+.js-enabled .mobile-navigation__close {
+  display: inline-flex;
 }
 
 .navigation-list {
@@ -454,6 +460,9 @@ h3 {
 }
 
 .area-card h3 a {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
   text-decoration: none;
 }
 
@@ -607,6 +616,12 @@ h3 {
 .site-footer__muted {
   color: var(--color-ivory-muted);
   font-size: 0.9rem;
+}
+
+.site-footer nav a {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
 }
 
 @container (min-width: 40rem) {

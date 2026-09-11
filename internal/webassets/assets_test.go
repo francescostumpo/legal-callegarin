@@ -176,6 +176,60 @@ func TestPublicVisualSystemIsLocalAndAccessible(t *testing.T) {
 	}
 }
 
+func TestStandaloneLinksMeetMinimumPointerTarget(t *testing.T) {
+	t.Parallel()
+
+	cssBytes, err := fs.ReadFile(webassets.Files, "public/site.css")
+	if err != nil {
+		t.Fatalf("read site.css: %v", err)
+	}
+	css := string(cssBytes)
+	for _, selector := range []string{".area-card h3 a", ".site-footer nav a"} {
+		assertCSSRuleContains(t, css, selector, "display: inline-flex", "min-height: 2.75rem", "align-items: center")
+	}
+}
+
+func TestMobileCloseControlRequiresJavaScriptEnhancement(t *testing.T) {
+	t.Parallel()
+
+	cssBytes, err := fs.ReadFile(webassets.Files, "public/site.css")
+	if err != nil {
+		t.Fatalf("read site.css: %v", err)
+	}
+	css := string(cssBytes)
+	assertCSSRuleContains(t, css, ".mobile-navigation__close", "display: none")
+	assertCSSRuleContains(t, css, ".js-enabled .mobile-navigation__close", "display: inline-flex")
+
+	navigationBytes, err := fs.ReadFile(webassets.Files, "public/nav.js")
+	if err != nil {
+		t.Fatalf("read nav.js: %v", err)
+	}
+	navigation := strings.TrimSpace(string(navigationBytes))
+	marker := `document.documentElement.classList.add("js-enabled")`
+	if !strings.HasPrefix(navigation, marker) {
+		t.Fatalf("nav.js must apply the enhancement marker before controller setup; got %q", navigation[:min(len(navigation), 80)])
+	}
+}
+
+func assertCSSRuleContains(t *testing.T, css, selector string, declarations ...string) {
+	t.Helper()
+
+	start := strings.Index(css, selector+" {")
+	if start < 0 {
+		t.Fatalf("site.css lacks rule for %q", selector)
+	}
+	end := strings.Index(css[start:], "}")
+	if end < 0 {
+		t.Fatalf("site.css rule for %q is not closed", selector)
+	}
+	rule := css[start : start+end]
+	for _, declaration := range declarations {
+		if !strings.Contains(rule, declaration) {
+			t.Fatalf("site.css rule for %q lacks %q", selector, declaration)
+		}
+	}
+}
+
 func assertDerivativeContract(t *testing.T, assetID string, item derivative) {
 	t.Helper()
 

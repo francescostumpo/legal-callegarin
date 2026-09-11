@@ -1,3 +1,5 @@
+document.documentElement.classList.add("js-enabled")
+
 const navigations = document.querySelectorAll("[data-navigation]")
 
 for (const navigation of navigations) {
