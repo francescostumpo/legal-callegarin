@@ -407,11 +407,11 @@ function ContactList({ client }: { client: AdminClient }) {
             return
           }
           if (data.nextCursor && seenCursors.has(data.nextCursor)) {
-            consumedCursors.current = seenCursors
+            consumedCursors.current = new Set()
             setList((current) => ({
               loading: false,
               items: append ? current.items : [],
-              nextCursor: append ? cursor : "",
+              nextCursor: "",
               error: "Impossibile continuare: paginazione non valida",
             }))
             return

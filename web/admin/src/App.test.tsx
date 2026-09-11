@@ -611,6 +611,49 @@ describe("admin shell", () => {
     expect(loadMoreAttempts).toBe(2)
   })
 
+  it("makes a cyclic load-more cursor terminal while preserving loaded contacts", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    const initial = contactFixture({ id: "initial", name: "Cycle Existing" })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return jsonResponse({ username: "admin", csrfToken: "csrf" })
+      }
+      if (path === "/api/admin/contacts") {
+        return jsonResponse({ items: [initial], nextCursor: "c1" })
+      }
+      if (path === "/api/admin/contacts?cursor=c1") {
+        return jsonResponse({ items: [], nextCursor: "c2" })
+      }
+      if (path === "/api/admin/contacts?cursor=c2") {
+        return jsonResponse({ items: [], nextCursor: "c1" })
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const { rerender } = render(<App />)
+
+    expect(await screen.findByText("Cycle Existing")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Carica altri" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Impossibile continuare: paginazione non valida",
+    )
+    expect(screen.getByText("Cycle Existing")).toBeInTheDocument()
+
+    const terminalButton = screen.queryByRole("button", {
+      name: "Carica altri",
+    })
+    if (terminalButton) fireEvent.click(terminalButton)
+    rerender(<App />)
+
+    expect(terminalButton).not.toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.filter(([path]) =>
+        String(path).startsWith("/api/admin/contacts"),
+      ),
+    ).toHaveLength(3)
+  })
+
   it("opens a new contact with an explicit read mutation and uses CSRF and If-Match", async () => {
     window.history.replaceState({}, "", "/admin/contatti/contact-1")
     const created = contactFixture({ state: "new" })
