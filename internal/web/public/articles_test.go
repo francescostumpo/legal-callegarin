@@ -55,7 +55,18 @@ func TestArticleRoutesExposeOnlyCurrentPublishedVersions(t *testing.T) {
 		if response.Code != http.StatusNotFound || strings.Contains(response.Body.String(), "segreto") {
 			t.Fatalf("non-public detail %q status/body = %d, %q", path, response.Code, response.Body.String())
 		}
+		assertPublicErrorHeaders(t, response)
 	}
+}
+
+func TestArticleErrorResponseForInvalidCursorIsNoStoreAndNoIndex(t *testing.T) {
+	t.Parallel()
+
+	response := serveRequest(newArticleHandler(t, newPublicArticleFixture(t, 0).service), "/sentenze-e-riflessioni?cursor=invalid")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("invalid cursor status = %d, want 404", response.Code)
+	}
+	assertPublicErrorHeaders(t, response)
 }
 
 func TestArticleIndexPaginatesDeterministically(t *testing.T) {
@@ -132,6 +143,29 @@ func TestArticleMissingCoverUsesEditorialFallback(t *testing.T) {
 	}
 }
 
+func TestAreaRelatedArticlesPaginatesPastFirstHundredPublications(t *testing.T) {
+	t.Parallel()
+
+	fixture := newPublicArticleFixture(t, 102)
+	target := fixture.publish(t, fixture.create(t, "articolo-area-profondo", "Titolo area oltre cento", "corpo area profondo"))
+	fixture.tick()
+	for index := range 101 {
+		input := publicArticleDraft(fmt.Sprintf("altro-%03d", index), fmt.Sprintf("Titolo altra area %03d", index), "corpo altra area")
+		input.Area = "diritto-tributario"
+		article, err := fixture.service.CreateDraft(context.Background(), input)
+		if err != nil {
+			t.Fatalf("CreateDraft(other %d) error = %v", index, err)
+		}
+		fixture.publish(t, article)
+		fixture.tick()
+	}
+
+	response := serveRequest(newArticleHandler(t, fixture.service), "/aree-di-attivita/obbligazioni-e-contratti")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), target.Title) {
+		t.Fatalf("area response status/body = %d, %q", response.Code, response.Body.String())
+	}
+}
+
 func TestPreviewUsesExactArticleTemplateWithoutPublicRoute(t *testing.T) {
 	t.Parallel()
 
@@ -170,6 +204,7 @@ func TestPreviewUsesExactArticleTemplateWithoutPublicRoute(t *testing.T) {
 	if previewRoute.Code != http.StatusNotFound {
 		t.Fatalf("preview route status = %d, want 404", previewRoute.Code)
 	}
+	assertPublicErrorHeaders(t, previewRoute)
 }
 
 func newArticleHandler(t *testing.T, reader publicweb.ArticleReader) http.Handler {
@@ -190,6 +225,16 @@ func serveRequest(handler http.Handler, target string) *httptest.ResponseRecorde
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+func assertPublicErrorHeaders(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("error Cache-Control = %q, want no-store", got)
+	}
+	if got := response.Header().Get("X-Robots-Tag"); got != "noindex, nofollow" {
+		t.Fatalf("error X-Robots-Tag = %q, want noindex, nofollow", got)
+	}
 }
 
 func articleFragment(page string) string {

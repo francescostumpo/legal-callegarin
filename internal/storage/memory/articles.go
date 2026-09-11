@@ -144,6 +144,9 @@ func (repository *ArticleMetadataRepository) Update(ctx context.Context, article
 	if stored.ETag != expectedETag {
 		return articles.Article{}, articles.ErrConflict
 	}
+	if err := validatePermanentPublishedSlugs(stored, article); err != nil {
+		return articles.Article{}, err
+	}
 	for _, slug := range articleSlugs(article) {
 		if repository.slugOwnedByOther(slug, article.ID) {
 			return articles.Article{}, articles.ErrSlugTaken
@@ -156,6 +159,30 @@ func (repository *ArticleMetadataRepository) Update(ctx context.Context, article
 	article.ETag = repository.newETag()
 	repository.articles[article.ID] = cloneArticle(article)
 	return cloneArticle(article), nil
+}
+
+func validatePermanentPublishedSlugs(stored, updated articles.Article) error {
+	if stored.Published == nil {
+		return nil
+	}
+	if slices.Contains(stored.Published.HistoricalSlugs, updated.Slug) {
+		return articles.ErrSlugTaken
+	}
+	if updated.Published == nil {
+		return fmt.Errorf("%w: published aliases cannot be removed", articles.ErrValidation)
+	}
+	if slices.Contains(stored.Published.HistoricalSlugs, updated.Published.Slug) {
+		return articles.ErrSlugTaken
+	}
+	for _, slug := range stored.Published.HistoricalSlugs {
+		if !slices.Contains(updated.Published.HistoricalSlugs, slug) {
+			return fmt.Errorf("%w: historical published aliases cannot be removed", articles.ErrValidation)
+		}
+	}
+	if stored.Published.Slug != updated.Published.Slug && !slices.Contains(updated.Published.HistoricalSlugs, stored.Published.Slug) {
+		return fmt.Errorf("%w: replaced canonical slug must remain a historical alias", articles.ErrValidation)
+	}
+	return nil
 }
 
 func (repository *ArticleMetadataRepository) newETag() string {

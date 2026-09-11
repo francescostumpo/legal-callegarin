@@ -23,17 +23,23 @@ type Renderer struct {
 	images       map[string]EditorialImage
 	articles     ArticleReader
 	cache        *htmlCache
+	assets       *assetCatalog
 }
 
 type rendererOptions struct {
 	articles ArticleReader
 	now      func() time.Time
+	events   *ArticleEventSink
 }
 
 type RendererOption func(*rendererOptions)
 
 func WithArticleReader(reader ArticleReader) RendererOption {
 	return func(options *rendererOptions) { options.articles = reader }
+}
+
+func WithArticleEventSink(events *ArticleEventSink) RendererOption {
+	return func(options *rendererOptions) { options.events = events }
 }
 
 type assetManifest struct {
@@ -60,23 +66,27 @@ func NewRenderer(files fs.FS, publicBaseURL string, optionFunctions ...RendererO
 	if err != nil {
 		return nil, err
 	}
-	home, err := parsePageTemplate(files, "templates/pages/home.html")
+	assets, err := newAssetCatalog(files)
+	if err != nil {
+		return nil, err
+	}
+	home, err := parsePageTemplate(files, assets, "templates/pages/home.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse home templates: %w", err)
 	}
-	standard, err := parsePageTemplate(files, "templates/pages/standard.html")
+	standard, err := parsePageTemplate(files, assets, "templates/pages/standard.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse standard templates: %w", err)
 	}
-	articleIndex, err := parsePageTemplate(files, "templates/pages/articles.html")
+	articleIndex, err := parsePageTemplate(files, assets, "templates/pages/articles.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse article index templates: %w", err)
 	}
-	article, err := parsePageTemplate(files, "templates/pages/article.html")
+	article, err := parsePageTemplate(files, assets, "templates/pages/article.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse article templates: %w", err)
 	}
-	images, err := loadEditorialImages(files)
+	images, err := loadEditorialImages(files, assets)
 	if err != nil {
 		return nil, err
 	}
@@ -90,31 +100,25 @@ func NewRenderer(files fs.FS, publicBaseURL string, optionFunctions ...RendererO
 	if options.articles == nil {
 		options.articles = emptyArticleReader{}
 	}
-	return &Renderer{
+	renderer := &Renderer{
 		baseURL:      baseURL,
 		home:         home,
 		standard:     standard,
 		articleIndex: articleIndex,
 		article:      article,
 		pages:        pageCatalog(images), images: images, articles: options.articles,
-		cache: newHTMLCache(options.now, publicCacheMaxEntries, publicCacheMaxBytes, publicCacheTTL),
-	}, nil
+		cache:  newHTMLCache(options.now, publicCacheMaxEntries, publicCacheMaxBytes, publicCacheTTL),
+		assets: assets,
+	}
+	options.events.subscribe(renderer)
+	return renderer, nil
 }
 
-func RegisterRoutes(mux *http.ServeMux, renderer *Renderer, files fs.FS) error {
+func RegisterRoutes(mux *http.ServeMux, renderer *Renderer, _ fs.FS) error {
 	if mux == nil || renderer == nil {
 		return fmt.Errorf("public mux and renderer are required")
 	}
-	publicFiles, err := fs.Sub(files, "public")
-	if err != nil {
-		return fmt.Errorf("open public assets: %w", err)
-	}
-	coverFiles, err := fs.Sub(files, "covers")
-	if err != nil {
-		return fmt.Errorf("open editorial assets: %w", err)
-	}
-	mux.Handle("GET /assets/covers/", http.StripPrefix("/assets/covers/", staticAssetHandler(coverFiles)))
-	mux.Handle("GET /assets/", http.StripPrefix("/assets/", staticAssetHandler(publicFiles)))
+	mux.Handle("GET /assets/", renderer.assets)
 	mux.HandleFunc("GET /sitemap.xml", renderer.sitemapHandler())
 	mux.HandleFunc("GET /robots.txt", renderer.robotsHandler())
 
@@ -130,6 +134,9 @@ func RegisterRoutes(mux *http.ServeMux, renderer *Renderer, files fs.FS) error {
 		}
 	}
 	mux.HandleFunc("GET /sentenze-e-riflessioni/{slug}", renderer.articleDetailHandler())
+	mux.HandleFunc("GET /", func(response http.ResponseWriter, _ *http.Request) {
+		writePublicError(response, http.StatusNotFound, "page not found")
+	})
 	return nil
 }
 
@@ -145,7 +152,7 @@ func (renderer *Renderer) pageHandler(path string) http.HandlerFunc {
 			return renderer.renderPage(ctx, path)
 		})
 		if err != nil {
-			http.Error(response, "content temporarily unavailable", http.StatusServiceUnavailable)
+			writePublicError(response, http.StatusServiceUnavailable, "content temporarily unavailable")
 			return
 		}
 		writeRevalidatingHTML(response, request, body)
@@ -192,8 +199,8 @@ func normalizePublicBaseURL(raw string) (string, error) {
 	return strings.TrimRight(raw, "/"), nil
 }
 
-func parsePageTemplate(files fs.FS, pageTemplate string) (*template.Template, error) {
-	return template.New("public").Option("missingkey=error").ParseFS(
+func parsePageTemplate(files fs.FS, assets *assetCatalog, pageTemplate string) (*template.Template, error) {
+	return template.New("public").Funcs(template.FuncMap{"assetURL": assets.publicURL}).Option("missingkey=error").ParseFS(
 		files,
 		"templates/layouts/base.html",
 		"templates/partials/header.html",
@@ -203,7 +210,7 @@ func parsePageTemplate(files fs.FS, pageTemplate string) (*template.Template, er
 	)
 }
 
-func loadEditorialImages(files fs.FS) (map[string]EditorialImage, error) {
+func loadEditorialImages(files fs.FS, assets *assetCatalog) (map[string]EditorialImage, error) {
 	encoded, err := fs.ReadFile(files, "covers/manifest.json")
 	if err != nil {
 		return nil, fmt.Errorf("read editorial asset manifest: %w", err)
@@ -216,15 +223,19 @@ func loadEditorialImages(files fs.FS) (map[string]EditorialImage, error) {
 	for _, asset := range manifest.Assets {
 		image := EditorialImage{ID: asset.ID, Alt: asset.Alt}
 		for _, derivative := range asset.Derivatives {
+			fingerprinted, err := assets.coverName(derivative.Filename)
+			if err != nil {
+				return nil, err
+			}
 			switch derivative.Variant + ":" + derivative.Format {
 			case "landscape:avif":
-				image.LandscapeAVIF = derivative.Filename
+				image.LandscapeAVIF = fingerprinted
 			case "landscape:webp":
-				image.LandscapeWebP = derivative.Filename
+				image.LandscapeWebP = fingerprinted
 			case "card:avif":
-				image.CardAVIF = derivative.Filename
+				image.CardAVIF = fingerprinted
 			case "card:webp":
-				image.CardWebP = derivative.Filename
+				image.CardWebP = fingerprinted
 			}
 		}
 		images[asset.ID] = image

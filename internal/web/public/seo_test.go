@@ -2,7 +2,9 @@ package public_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -31,7 +33,6 @@ func TestSEOPublicPagesHaveOpenGraphAndStructuredData(t *testing.T) {
 		`<meta property="og:description"`,
 		`<meta property="og:type" content="website"`,
 		`<meta property="og:url" content="https://studio.example.test/"`,
-		`<meta property="og:image" content="https://studio.example.test/assets/covers/hero-architecture-landscape.webp"`,
 		`<script type="application/ld+json">`,
 		`"@type":"LegalService"`,
 		`"@type":"Person"`,
@@ -39,6 +40,9 @@ func TestSEOPublicPagesHaveOpenGraphAndStructuredData(t *testing.T) {
 		if !strings.Contains(body, fragment) {
 			t.Fatalf("home SEO lacks %q", fragment)
 		}
+	}
+	if !regexp.MustCompile(`<meta property="og:image" content="https://studio\.example\.test/assets/covers/hero-architecture-landscape-[0-9a-f]{12}\.webp"`).MatchString(body) {
+		t.Fatal("home SEO lacks content-addressed Open Graph image")
 	}
 }
 
@@ -60,6 +64,34 @@ func TestSEOArticleMetadataDatesDisclaimerAndAreaLink(t *testing.T) {
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Fatalf("article SEO lacks %q", fragment)
+		}
+	}
+}
+
+func TestSEOPaginatedArticleIndexSelfReferencesValidCursor(t *testing.T) {
+	t.Parallel()
+
+	fixture := newPublicArticleFixture(t, 7)
+	for index := range 7 {
+		fixture.publish(t, fixture.create(t, fmt.Sprintf("seo-page-%d", index), fmt.Sprintf("Titolo SEO pagina %d", index), "corpo SEO pagina"))
+		fixture.tick()
+	}
+	handler := newArticleHandler(t, fixture.service)
+	first := serveRequest(handler, "/sentenze-e-riflessioni")
+	match := regexp.MustCompile(`href="(/sentenze-e-riflessioni\?cursor=[^"]+)"`).FindStringSubmatch(first.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("first page lacks next cursor link: %q", first.Body.String())
+	}
+	second := serveRequest(handler, match[1])
+	wantURL := canonicalBaseURL + match[1]
+	for _, fragment := range []string{
+		`<link rel="canonical" href="` + wantURL + `"`,
+		`<meta property="og:url" content="` + wantURL + `"`,
+		`<title>Sentenze e riflessioni — pagina successiva`,
+		`content="Approfondimenti su decisioni e temi di diritto. Pagina successiva della raccolta."`,
+	} {
+		if second.Code != http.StatusOK || !strings.Contains(second.Body.String(), fragment) {
+			t.Fatalf("second-page SEO lacks %q: status %d, body %q", fragment, second.Code, second.Body.String())
 		}
 	}
 }
@@ -96,9 +128,19 @@ func TestSEOSitemapRobotsAndRelatedArticleInvalidation(t *testing.T) {
 		t.Fatalf("sitemap status/headers/body = %d, %q, %q", sitemap.Code, sitemap.Header(), sitemap.Body.String())
 	}
 	robots := serveRequest(handler, "/robots.txt")
-	for _, fragment := range []string{"User-agent: *", "Disallow: /admin/", "Disallow: /admin/preview/", "Disallow: /api/admin/", "Sitemap: " + canonicalBaseURL + "/sitemap.xml"} {
-		if robots.Code != http.StatusOK || !strings.Contains(robots.Body.String(), fragment) {
-			t.Fatalf("robots lacks %q: status %d, body %q", fragment, robots.Code, robots.Body.String())
+	lines := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(robots.Body.String()), "\n") {
+		lines[line] = true
+	}
+	for _, exactLine := range []string{
+		"User-agent: *",
+		"Disallow: /admin", "Disallow: /admin/",
+		"Disallow: /admin/preview", "Disallow: /admin/preview/",
+		"Disallow: /api/admin", "Disallow: /api/admin/",
+		"Sitemap: " + canonicalBaseURL + "/sitemap.xml",
+	} {
+		if robots.Code != http.StatusOK || !lines[exactLine] {
+			t.Fatalf("robots lacks exact line %q: status %d, body %q", exactLine, robots.Code, robots.Body.String())
 		}
 	}
 
@@ -134,4 +176,5 @@ func TestSEOSitemapRobotsAndRelatedArticleInvalidation(t *testing.T) {
 	if nonPublic.Code != http.StatusNotFound || nonPublic.Header().Get("X-Robots-Tag") != "noindex, nofollow" || strings.Contains(nonPublic.Body.String(), "corpo") {
 		t.Fatalf("withdrawn response = status %d, robots %q, body %q", nonPublic.Code, nonPublic.Header().Get("X-Robots-Tag"), nonPublic.Body.String())
 	}
+	assertPublicErrorHeaders(t, nonPublic)
 }

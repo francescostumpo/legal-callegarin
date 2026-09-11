@@ -120,6 +120,11 @@ func (renderer *Renderer) renderArticleIndex(ctx context.Context, cursor string)
 	}
 	base := renderer.pages["/sentenze-e-riflessioni"]
 	base.CanonicalURL = renderer.baseURL + base.Path
+	if cursor != "" {
+		base.CanonicalURL += "?cursor=" + url.QueryEscape(cursor)
+		base.Title += " — pagina successiva"
+		base.Description += " Pagina successiva della raccolta."
+	}
 	base.Sections = nil
 	renderer.applyPageSEO(&base, "website", base.HeroImage, nil)
 	data := ArticleIndexPageData{PageData: base, Articles: make([]ArticleCard, 0, len(page.Items))}
@@ -188,11 +193,10 @@ func (renderer *Renderer) editorialImage(id string) EditorialImage {
 
 func writeArticleReadError(response http.ResponseWriter, err error) {
 	if errors.Is(err, articles.ErrNotFound) || errors.Is(err, articles.ErrValidation) {
-		response.Header().Set("X-Robots-Tag", "noindex, nofollow")
-		http.NotFound(response, nil)
+		writePublicError(response, http.StatusNotFound, "page not found")
 		return
 	}
-	http.Error(response, "content temporarily unavailable", http.StatusServiceUnavailable)
+	writePublicError(response, http.StatusServiceUnavailable, "content temporarily unavailable")
 }
 
 func writeRevalidatingHTML(response http.ResponseWriter, request *http.Request, body []byte) {
@@ -240,26 +244,32 @@ func (renderer *Renderer) PublicArticleChanged(_ context.Context, before, after 
 var _ articles.ArticleEvents = (*Renderer)(nil)
 
 func (renderer *Renderer) latestArticleCards(ctx context.Context, area string, limit int) ([]ArticleCard, error) {
-	page, err := renderer.articles.ListPublished(ctx, articles.ListOptions{Limit: 100})
-	if err != nil {
-		return nil, err
-	}
 	cards := make([]ArticleCard, 0, limit)
-	for _, article := range page.Items {
-		if area != "" && article.Area != area {
-			continue
+	cursor := ""
+	for {
+		page, err := renderer.articles.ListPublished(ctx, articles.ListOptions{Cursor: cursor, Limit: 100})
+		if err != nil {
+			return nil, err
 		}
-		areaTitle, _ := practiceArea(article.Area)
-		cards = append(cards, ArticleCard{
-			Title: article.Title, Summary: article.Summary,
-			Href:      "/sentenze-e-riflessioni/" + article.Slug,
-			AreaTitle: areaTitle, Image: renderer.editorialImage(article.CoverID),
-		})
-		if len(cards) == limit {
-			break
+		for _, article := range page.Items {
+			if area != "" && article.Area != area {
+				continue
+			}
+			areaTitle, _ := practiceArea(article.Area)
+			cards = append(cards, ArticleCard{
+				Title: article.Title, Summary: article.Summary,
+				Href:      "/sentenze-e-riflessioni/" + article.Slug,
+				AreaTitle: areaTitle, Image: renderer.editorialImage(article.CoverID),
+			})
+			if len(cards) == limit {
+				return cards, nil
+			}
 		}
+		if page.NextCursor == "" {
+			return cards, nil
+		}
+		cursor = page.NextCursor
 	}
-	return cards, nil
 }
 
 func practiceArea(slug string) (string, string) {

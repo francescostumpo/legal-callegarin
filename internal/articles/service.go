@@ -3,6 +3,7 @@ package articles
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -102,6 +103,9 @@ func (service *service) SaveDraft(ctx context.Context, id string, input DraftInp
 	if err != nil {
 		return Article{}, err
 	}
+	if stored.Published != nil && slices.Contains(stored.Published.HistoricalSlugs, normalized.Slug) {
+		return Article{}, ErrSlugTaken
+	}
 	newRef, err := service.bodies.Put(ctx, stored.ID, normalized.Body)
 	if err != nil {
 		return Article{}, err
@@ -140,6 +144,9 @@ func (service *service) Publish(ctx context.Context, id, expectedETag string) (A
 	}
 	if stored.DraftBody == nil {
 		return Article{}, fmt.Errorf("%w: a saved draft is required", ErrInvalidTransition)
+	}
+	if stored.Published != nil && slices.Contains(stored.Published.HistoricalSlugs, stored.Slug) {
+		return Article{}, ErrSlugTaken
 	}
 	now := service.clock.Now()
 	updated := stored
@@ -255,7 +262,7 @@ func cloneBodyReference(ref *BodyRef) *BodyRef {
 
 func nextPublishedMetadata(previous *PublishedMetadata, draft Article) *PublishedMetadata {
 	history := make([]string, 0)
-	seen := map[string]bool{draft.Slug: true}
+	seen := make(map[string]bool)
 	if previous != nil {
 		for _, slug := range previous.HistoricalSlugs {
 			if !seen[slug] {
@@ -263,7 +270,7 @@ func nextPublishedMetadata(previous *PublishedMetadata, draft Article) *Publishe
 				seen[slug] = true
 			}
 		}
-		if !seen[previous.Slug] {
+		if previous.Slug != draft.Slug && !seen[previous.Slug] {
 			history = append(history, previous.Slug)
 		}
 	}

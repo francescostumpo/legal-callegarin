@@ -11,16 +11,20 @@ import (
 )
 
 type Options struct {
-	Config   config.Config
-	Assets   fs.FS
-	Logger   *slog.Logger
-	Articles publicweb.ArticleReader
+	Config        config.Config
+	Assets        fs.FS
+	Logger        *slog.Logger
+	Articles      publicweb.ArticleReader
+	ArticleEvents *publicweb.ArticleEventSink
 }
 
 func New(options Options) (http.Handler, error) {
 	rendererOptions := make([]publicweb.RendererOption, 0, 1)
 	if options.Articles != nil {
 		rendererOptions = append(rendererOptions, publicweb.WithArticleReader(options.Articles))
+	}
+	if options.ArticleEvents != nil {
+		rendererOptions = append(rendererOptions, publicweb.WithArticleEventSink(options.ArticleEvents))
 	}
 	renderer, err := publicweb.NewRenderer(options.Assets, options.Config.PublicBaseURL, rendererOptions...)
 	if err != nil {

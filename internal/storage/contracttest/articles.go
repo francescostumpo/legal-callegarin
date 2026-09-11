@@ -123,7 +123,8 @@ func ArticleMetadataRepository(t *testing.T, factory func() articles.MetadataRep
 		publishedAt := createdAt
 		published.FirstPublishedAt = &publishedAt
 		published.LastPublishedAt = &publishedAt
-		if _, err := repository.Create(ctx, published); err != nil {
+		created, err := repository.Create(ctx, published)
+		if err != nil {
 			t.Fatalf("Create(published aliases) error = %v", err)
 		}
 		for index, slug := range []string{"public-canonical", "public-historical"} {
@@ -131,6 +132,22 @@ func ArticleMetadataRepository(t *testing.T, factory func() articles.MetadataRep
 			if _, err := repository.Create(ctx, conflict); !errors.Is(err, articles.ErrSlugTaken) {
 				t.Fatalf("Create(%q) error = %v, want ErrSlugTaken", slug, err)
 			}
+		}
+
+		reuse := created
+		reuse.Slug = "public-historical"
+		reuse.UpdatedAt = reuse.UpdatedAt.Add(time.Minute)
+		if _, err := repository.Update(ctx, reuse, created.ETag); !errors.Is(err, articles.ErrSlugTaken) {
+			t.Fatalf("Update(same-owner historical slug) error = %v, want ErrSlugTaken", err)
+		}
+
+		removeAlias := created
+		metadata := *created.Published
+		metadata.HistoricalSlugs = nil
+		removeAlias.Published = &metadata
+		removeAlias.UpdatedAt = removeAlias.UpdatedAt.Add(time.Minute)
+		if _, err := repository.Update(ctx, removeAlias, created.ETag); !errors.Is(err, articles.ErrValidation) {
+			t.Fatalf("Update(remove historical alias) error = %v, want ErrValidation", err)
 		}
 	})
 }

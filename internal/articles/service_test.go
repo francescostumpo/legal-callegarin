@@ -158,7 +158,7 @@ func TestArticleServiceListsOnlyPublishedSnapshots(t *testing.T) {
 	}
 }
 
-func TestArticleServiceCanReturnToHistoricalSlugWithoutDuplicateAliases(t *testing.T) {
+func TestArticleServiceRejectsReturningToAPermanentlyReservedHistoricalSlug(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -185,15 +185,15 @@ func TestArticleServiceCanReturnToHistoricalSlugWithoutDuplicateAliases(t *testi
 	}
 	clock.now = clock.now.Add(time.Minute)
 	article, err = service.SaveDraft(ctx, article.ID, articleDraft("slug-a", "terza"), article.ETag)
-	if err != nil {
-		t.Fatalf("SaveDraft(return slug-a) error = %v", err)
+	if !errors.Is(err, articles.ErrSlugTaken) {
+		t.Fatalf("SaveDraft(return slug-a) error = %v, want ErrSlugTaken", err)
 	}
-	article, err = service.Publish(ctx, article.ID, article.ETag)
+	live, err := service.GetPublished(ctx, "slug-a")
 	if err != nil {
-		t.Fatalf("Publish(return slug-a) error = %v", err)
+		t.Fatalf("GetPublished(permanent alias) error = %v", err)
 	}
-	if article.Published == nil || article.Published.Slug != "slug-a" || !slices.Equal(article.Published.HistoricalSlugs, []string{"slug-b"}) {
-		t.Fatalf("returned publication aliases = %#v", article.Published)
+	if live.Article.Slug != "slug-b" || live.Article.Published == nil || !slices.Equal(live.Article.Published.HistoricalSlugs, []string{"slug-a"}) {
+		t.Fatalf("published alias reservation = %#v", live.Article.Published)
 	}
 }
 

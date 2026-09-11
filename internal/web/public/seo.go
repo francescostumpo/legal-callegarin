@@ -73,7 +73,7 @@ func (renderer *Renderer) sitemapHandler() http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		body, err := renderer.cache.GetOrFill(request.Context(), cacheKeySitemap, renderer.renderSitemap)
 		if err != nil {
-			http.Error(response, "content temporarily unavailable", http.StatusServiceUnavailable)
+			writePublicError(response, http.StatusServiceUnavailable, "content temporarily unavailable")
 			return
 		}
 		writeRevalidating(response, request, body, "application/xml; charset=utf-8")
@@ -118,7 +118,7 @@ func (renderer *Renderer) renderSitemap(ctx context.Context) ([]byte, error) {
 }
 
 func (renderer *Renderer) robotsHandler() http.HandlerFunc {
-	body := []byte("User-agent: *\nDisallow: /admin/\nDisallow: /admin/preview/\nDisallow: /api/admin/\nSitemap: " + renderer.baseURL + "/sitemap.xml\n")
+	body := []byte("User-agent: *\nDisallow: /admin\nDisallow: /admin/\nDisallow: /admin/preview\nDisallow: /admin/preview/\nDisallow: /api/admin\nDisallow: /api/admin/\nSitemap: " + renderer.baseURL + "/sitemap.xml\n")
 	return func(response http.ResponseWriter, request *http.Request) {
 		writeRevalidating(response, request, body, "text/plain; charset=utf-8")
 	}

@@ -48,6 +48,12 @@ func TestCachedArticleSurvivesStorageOutageAndSupportsConditionalGET(t *testing.
 	if miss.Code != http.StatusServiceUnavailable {
 		t.Fatalf("uncached outage status = %d, want 503", miss.Code)
 	}
+	assertPublicErrorHeaders(t, miss)
+	sitemap := serveRequest(handler, "/sitemap.xml")
+	if sitemap.Code != http.StatusServiceUnavailable {
+		t.Fatalf("uncached sitemap outage status = %d, want 503", sitemap.Code)
+	}
+	assertPublicErrorHeaders(t, sitemap)
 }
 
 func TestArticlePublicationEventInvalidatesPublicHTML(t *testing.T) {

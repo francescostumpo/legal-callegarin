@@ -102,11 +102,13 @@ func TestNavigationIsProgressivelyEnhancedAndMarksCurrentPage(t *testing.T) {
 		`<details class="mobile-navigation" data-navigation>`,
 		`<summary`,
 		`data-navigation-close`,
-		`src="/assets/nav.js"`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Fatalf("navigation HTML lacks %q", fragment)
 		}
+	}
+	if !regexp.MustCompile(`src=['"]/assets/nav-[0-9a-f]{12}\.js['"]`).MatchString(body) {
+		t.Fatal("navigation HTML lacks content-addressed script URL")
 	}
 	if !regexp.MustCompile(`href="/approccio"\s+aria-current="page"`).MatchString(body) {
 		t.Fatal("navigation does not mark the current page")
@@ -126,10 +128,14 @@ func TestNavigationEnhancementIsServedFirstPartyAndMarksJavaScriptBeforeSetup(t 
 		t.Fatal("server HTML must not claim JavaScript enhancement")
 	}
 
+	scriptMatch := regexp.MustCompile(`src=['"](/assets/nav-[0-9a-f]{12}\.js)['"]`).FindStringSubmatch(pageResponse.Body.String())
+	if len(scriptMatch) != 2 {
+		t.Fatalf("page lacks content-addressed navigation script: %q", pageResponse.Body.String())
+	}
 	scriptResponse := httptest.NewRecorder()
-	handler.ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/assets/nav.js", nil))
+	handler.ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, scriptMatch[1], nil))
 	if scriptResponse.Code != http.StatusOK {
-		t.Fatalf("GET /assets/nav.js status = %d, want 200", scriptResponse.Code)
+		t.Fatalf("GET %s status = %d, want 200", scriptMatch[1], scriptResponse.Code)
 	}
 	marker := `document.documentElement.classList.add("js-enabled")`
 	if !strings.HasPrefix(strings.TrimSpace(scriptResponse.Body.String()), marker) {
