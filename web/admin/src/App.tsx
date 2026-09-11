@@ -1117,6 +1117,10 @@ function ArticleEditor({ client }: { client: AdminClient }) {
   const [previewWidth, setPreviewWidth] = useState("100%")
   const [previewVersion, setPreviewVersion] = useState(0)
   const [message, setMessage] = useState("")
+  const [pendingAction, setPendingAction] = useState<
+    "save" | "publish" | "withdraw" | null
+  >(null)
+  const mutation = useRef<symbol | null>(null)
   const allowNavigation = useRef(false)
   const blocker = useBlocker(
     useCallback(() => dirty && !allowNavigation.current, [dirty]),
@@ -1178,6 +1182,9 @@ function ArticleEditor({ client }: { client: AdminClient }) {
       window.removeEventListener("beforeunload", unload)
     }
   }, [dirty])
+  useEffect(() => {
+    editor?.setEditable(pendingAction === null, false)
+  }, [editor, pendingAction])
   const change = (field: keyof typeof form, value: string) => {
     setForm((current) => ({ ...current, [field]: value }))
     setDirty(true)
@@ -1189,9 +1196,29 @@ function ArticleEditor({ client }: { client: AdminClient }) {
       document: editor?.getJSON() ?? { type: "doc" },
     },
   })
+  const beginMutation = (action: "save" | "publish" | "withdraw") => {
+    if (mutation.current !== null || reloadRequired) return null
+    const token = Symbol(action)
+    mutation.current = token
+    setPendingAction(action)
+    setMessage(
+      action === "save"
+        ? "Salvataggio in corso…"
+        : action === "publish"
+          ? "Pubblicazione in corso…"
+          : "Ritiro in corso…",
+    )
+    return token
+  }
+  const finishMutation = (token: symbol) => {
+    if (mutation.current !== token) return
+    mutation.current = null
+    setPendingAction(null)
+  }
   const save = async () => {
     if (!editor) return
-    setMessage("")
+    const token = beginMutation("save")
+    if (token === null) return
     try {
       if (!id) {
         const result = await client.fetchJSON<ArticleDetailDTO>(
@@ -1230,10 +1257,14 @@ function ArticleEditor({ client }: { client: AdminClient }) {
             ? reason.message
             : "Salvataggio non riuscito",
         )
+    } finally {
+      finishMutation(token)
     }
   }
   const transition = async (action: "publish" | "withdraw") => {
     if (!id || !etag || dirty) return
+    const token = beginMutation(action)
+    if (token === null) return
     try {
       const result = await client.fetchJSON<ArticleMutationDTO>(
         `/api/admin/articles/${id}/${action}`,
@@ -1263,6 +1294,8 @@ function ArticleEditor({ client }: { client: AdminClient }) {
             : "Operazione non riuscita",
         )
       }
+    } finally {
+      finishMutation(token)
     }
   }
   return (
@@ -1306,6 +1339,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
         <label>
           Titolo{" "}
           <input
+            disabled={pendingAction !== null}
             value={form.title}
             onChange={(e) => change("title", e.target.value)}
           />
@@ -1313,6 +1347,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
         <label>
           Slug{" "}
           <input
+            disabled={pendingAction !== null}
             value={form.slug}
             onChange={(e) => change("slug", e.target.value)}
           />
@@ -1320,6 +1355,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
         <label>
           Sommario{" "}
           <textarea
+            disabled={pendingAction !== null}
             value={form.summary}
             onChange={(e) => change("summary", e.target.value)}
           />
@@ -1327,6 +1363,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
         <label>
           Area{" "}
           <select
+            disabled={pendingAction !== null}
             value={form.area}
             onChange={(e) => change("area", e.target.value)}
           >
@@ -1338,6 +1375,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
         <label>
           Copertina{" "}
           <select
+            disabled={pendingAction !== null}
             value={form.coverId}
             onChange={(e) => change("coverId", e.target.value)}
           >
@@ -1352,18 +1390,21 @@ function ArticleEditor({ client }: { client: AdminClient }) {
       </div>
       <div className="editor-toolbar" aria-label="Formattazione">
         <button
+          disabled={pendingAction !== null}
           type="button"
           onClick={() => editor?.chain().focus().toggleBold().run()}
         >
           Grassetto
         </button>
         <button
+          disabled={pendingAction !== null}
           type="button"
           onClick={() => editor?.chain().focus().toggleItalic().run()}
         >
           Corsivo
         </button>
         <button
+          disabled={pendingAction !== null}
           type="button"
           onClick={() =>
             editor?.chain().focus().toggleHeading({ level: 2 }).run()
@@ -1372,6 +1413,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
           Titolo 2
         </button>
         <button
+          disabled={pendingAction !== null}
           type="button"
           onClick={() =>
             editor?.chain().focus().toggleHeading({ level: 3 }).run()
@@ -1380,24 +1422,28 @@ function ArticleEditor({ client }: { client: AdminClient }) {
           Titolo 3
         </button>
         <button
+          disabled={pendingAction !== null}
           type="button"
           onClick={() => editor?.chain().focus().toggleBulletList().run()}
         >
           Elenco
         </button>
         <button
+          disabled={pendingAction !== null}
           type="button"
           onClick={() => editor?.chain().focus().toggleOrderedList().run()}
         >
           Numerato
         </button>
         <button
+          disabled={pendingAction !== null}
           type="button"
           onClick={() => editor?.chain().focus().toggleBlockquote().run()}
         >
           Citazione
         </button>
         <button
+          disabled={pendingAction !== null}
           type="button"
           onClick={() => {
             const href = window.prompt("Indirizzo del collegamento")
@@ -1411,7 +1457,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
       <div className="article-editor-actions">
         <button
           className="primary"
-          disabled={reloadRequired}
+          disabled={reloadRequired || pendingAction !== null}
           type="button"
           onClick={() => void save()}
         >
@@ -1420,7 +1466,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
         {id ? (
           <>
             <button
-              disabled={dirty || reloadRequired}
+              disabled={dirty || reloadRequired || pendingAction !== null}
               type="button"
               onClick={() => void transition("publish")}
             >
@@ -1428,7 +1474,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
             </button>
             {status === "published" ? (
               <button
-                disabled={dirty || reloadRequired}
+                disabled={dirty || reloadRequired || pendingAction !== null}
                 type="button"
                 onClick={() => void transition("withdraw")}
               >

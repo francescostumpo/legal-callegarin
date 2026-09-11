@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +59,19 @@ func TestArticleAPICreateDetailCoversPreviewAndPreconditions(t *testing.T) {
 	}
 	covers := httptest.NewRecorder()
 	handler.ServeHTTP(covers, httptest.NewRequest(http.MethodGet, "https://studio.example.test/api/admin/covers", nil))
-	if covers.Code != 200 || strings.Count(covers.Body.String(), `"id"`) != 12 {
+	var coverOptions []coverDTO
+	if err := json.Unmarshal(covers.Body.Bytes(), &coverOptions); err != nil {
+		t.Fatal(err)
+	}
+	wantCoverIDs := []string{"hero-architecture", "approach-library", "family-objects", "succession-seal", "contracts-pen", "debt-ledger", "damages-road", "property-key", "criminal-threshold", "tax-ledger", "article-notebook", "contact-entrance"}
+	seenCoverIDs := make(map[string]bool, len(coverOptions))
+	for index, cover := range coverOptions {
+		if index >= len(wantCoverIDs) || cover.ID != wantCoverIDs[index] || seenCoverIDs[cover.ID] {
+			t.Fatalf("cover[%d]=%q options=%#v", index, cover.ID, coverOptions)
+		}
+		seenCoverIDs[cover.ID] = true
+	}
+	if covers.Code != 200 || len(coverOptions) != len(wantCoverIDs) {
 		t.Fatalf("covers=%d %s", covers.Code, covers.Body.String())
 	}
 	preview := httptest.NewRecorder()

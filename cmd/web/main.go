@@ -40,19 +40,29 @@ func run(logger *slog.Logger) error {
 	case "memory":
 		bundle = memorystorage.NewBundle(time.Now)
 	case "azure":
-		storageContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		storageContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+		var migration azurestorage.ArticleMigrationResult
 		if cfg.AzureStorageConnectionString != "" {
 			if err = azurestorage.EnsureFromConnectionString(storageContext, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames()); err != nil {
 				return fmt.Errorf("provision development Azure storage: %w", err)
 			}
+			migration, err = azurestorage.MigrateArticleRowsFromConnectionString(storageContext, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames())
+			if err != nil {
+				return fmt.Errorf("migrate article storage schema: %w", err)
+			}
 			bundle, err = azurestorage.OpenFromConnectionString(storageContext, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames(), time.Now)
 		} else {
+			migration, err = azurestorage.MigrateArticleRows(storageContext, cfg.AzureStorageAccountURL, azurestorage.DefaultResourceNames())
+			if err != nil {
+				return fmt.Errorf("migrate article storage schema: %w", err)
+			}
 			bundle, err = azurestorage.Open(storageContext, cfg.AzureStorageAccountURL, azurestorage.DefaultResourceNames(), time.Now)
 		}
 		if err != nil {
 			return fmt.Errorf("initialize storage: %w", err)
 		}
+		logger.Info("article storage schema ready", "migrated", migration.Migrated, "scanned", migration.Scanned)
 	default:
 		return fmt.Errorf("initialize storage: unsupported mode %q", cfg.StorageMode)
 	}

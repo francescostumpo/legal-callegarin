@@ -130,6 +130,57 @@ func TestMiddlewareAddsSecurityHeadersRequestIDAndRecoversWithoutLeaking(t *test
 	}
 }
 
+func TestPreviewFrameHeadersRequireTheExactArticleRoute(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	authenticator := &authenticatorStub{session: auth.Session{Username: "admin"}}
+	handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusInternalServerError)
+	}), Options{Authenticator: authenticator, SessionKey: key, PublicBaseURL: "https://studio.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		path       string
+		authorized bool
+		wantStatus int
+		wantFrame  string
+		wantCSP    string
+	}{
+		{name: "exact authenticated error", path: "/admin/preview/articles/article-1", authorized: true, wantStatus: http.StatusInternalServerError, wantFrame: "SAMEORIGIN", wantCSP: "frame-ancestors 'self'"},
+		{name: "exact unauthorized", path: "/admin/preview/articles/article-1", wantStatus: http.StatusSeeOther, wantFrame: "SAMEORIGIN", wantCSP: "frame-ancestors 'self'"},
+		{name: "empty id", path: "/admin/preview/articles/", authorized: true, wantStatus: http.StatusInternalServerError, wantFrame: "DENY", wantCSP: "frame-ancestors 'none'"},
+		{name: "nested", path: "/admin/preview/articles/article-1/more", authorized: true, wantStatus: http.StatusInternalServerError, wantFrame: "DENY", wantCSP: "frame-ancestors 'none'"},
+		{name: "encoded slash", path: "/admin/preview/articles/article-1%2Fmore", authorized: true, wantStatus: http.StatusInternalServerError, wantFrame: "DENY", wantCSP: "frame-ancestors 'none'"},
+		{name: "dot cleaned extra", path: "/admin/preview/articles/article-1/../more", authorized: true, wantStatus: http.StatusInternalServerError, wantFrame: "DENY", wantCSP: "frame-ancestors 'none'"},
+		{name: "spa prefix", path: "/admin/preview/articles", authorized: true, wantStatus: http.StatusInternalServerError, wantFrame: "DENY", wantCSP: "frame-ancestors 'none'"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			authenticator.err = auth.ErrUnauthenticated
+			if testCase.authorized {
+				authenticator.err = nil
+			}
+			request := httptest.NewRequest(http.MethodGet, "https://studio.example.test"+testCase.path, nil)
+			if testCase.authorized {
+				request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "raw-token"})
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != testCase.wantStatus {
+				t.Fatalf("status = %d, want %d", response.Code, testCase.wantStatus)
+			}
+			if got := response.Header().Get("X-Frame-Options"); got != testCase.wantFrame {
+				t.Fatalf("X-Frame-Options = %q, want %q", got, testCase.wantFrame)
+			}
+			if got := response.Header().Get("Content-Security-Policy"); !strings.Contains(got, testCase.wantCSP) {
+				t.Fatalf("Content-Security-Policy = %q, want %q", got, testCase.wantCSP)
+			}
+		})
+	}
+}
+
 func TestAdminResponseBufferFailsClosedAtBoundWithoutPartialOutput(t *testing.T) {
 	var logs strings.Builder
 	handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {

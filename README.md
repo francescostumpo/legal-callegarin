@@ -69,10 +69,13 @@ Azure mode uses `AZURE_STORAGE_ACCOUNT_URL` with a canonical
 Azurite). The former `AZURE_ACCOUNT_URL` name is rejected explicitly. Storage
 connection strings and credentials must never be logged.
 
-Production startup is non-provisioning: it constructs clients and starts even
-when Azure Storage is temporarily unavailable; readiness then reports `503`
-while liveness remains `200`. The deployment Bicep is responsible for creating
-the `articles`, `contacts`, and `sessions` tables and the private
-`article-bodies` container before the application revision starts. The explicit
-connection-string development path provisions those resources for Azurite and
-local tests only.
+Production startup is non-provisioning. Before the HTTP listener starts, an
+explicit, idempotent schema hook scans the existing article rows in bounded
+pages and moves legacy direct-ID rows to reverse-time RowKeys with conditional
+same-partition transactions. A failed or interrupted migration aborts startup
+and is safe to rerun; normal reads, including `GET`, never migrate data. The
+deployment Bicep remains responsible for creating the `articles`, `contacts`,
+and `sessions` tables and the private `article-bodies` container before the
+application revision starts. The separate connection-string development path
+provisions those resources for Azurite/local tests before running the same
+migration hook.

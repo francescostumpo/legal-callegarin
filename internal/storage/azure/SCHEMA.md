@@ -10,7 +10,7 @@ return and compare the exact service ETag.
 
 | Table | Partition | Row key | Entity type |
 | --- | --- | --- | --- |
-| `articles` | `articles` | stable article ID | `article` |
+| `articles` | `articles` | reverse Unix-nanoseconds plus inverse article ID | `article` |
 | `articles` | `articles` | `slug:<normalized-slug>` | `slug` |
 | `contacts` | `contacts` | reverse Unix-nanoseconds plus contact ID | `contact` |
 | `sessions` | `sessions` | lowercase SHA-256 token hash | `session` |
@@ -19,6 +19,17 @@ An article row and all of its linked slug reservations change in one
 same-partition transaction. Preflight rejects batches above 100 operations or
 4 MiB. Published canonical and historical slug rows are permanent; each stores
 the current canonical published target so old slugs remain redirects.
+
+The reverse-time article key is the server-side listing index: status and
+`RowKey gt <cursor-boundary>` are pushed into each bounded Table query, so a
+logical page does not rescan earlier rows. Before the HTTP listener starts,
+the explicit migration hook finds legacy rows whose RowKey is the direct
+article ID and moves each one with a conditional same-partition add+delete
+transaction. It preserves the article ID, metadata, body references, and slug
+records. A retry reconciles both committed-but-unacknowledged transactions and
+the safe intermediate state where identical old and new rows coexist. A
+conflicting target is left untouched and fails startup. After a verified
+migration, listing accepts current rows only; ordinary reads never write.
 
 Article bodies are immutable JSON blobs named
 `articles/{articleID}/{version}.json`. Uploads use `If-None-Match: *` and

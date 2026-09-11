@@ -8,7 +8,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
 )
@@ -143,9 +142,18 @@ func (repository *ArticleMetadataRepository) List(ctx context.Context, options a
 	if options.Status != nil {
 		filter += " and status eq '" + string(*options.Status) + "'"
 	}
+	if options.Cursor != "" {
+		rowKey, rowErr := articleRowKey(cursor.ID, cursor.CreatedAt)
+		if rowErr != nil {
+			return articles.ArticlePage{}, fmt.Errorf("%w: invalid cursor", articles.ErrValidation)
+		}
+		filter += " and RowKey gt '" + rowKey + "'"
+	}
 	var continuation *tableContinuation
-	for {
-		entities, next, listErr := repository.table.ListPage(ctx, filter, articleRawPageSize, continuation)
+	more := false
+	for len(items) < limit {
+		top := int32(min(limit-len(items), articleRawPageSize))
+		entities, next, listErr := repository.table.ListPage(ctx, filter, top, continuation)
 		if listErr != nil {
 			return articles.ArticlePage{}, mapArticleError(listErr, false)
 		}
@@ -164,22 +172,23 @@ func (repository *ArticleMetadataRepository) List(ctx context.Context, options a
 			if err != nil {
 				return articles.ArticlePage{}, err
 			}
-			if (options.Cursor == "" || articleStrictlyAfter(article, cursor.CreatedAt, cursor.ID)) && (options.Status == nil || article.Status == *options.Status) {
-				items = append(items, article)
-				sort.Slice(items, func(i, j int) bool { return articleBefore(items[i], items[j]) })
-				if len(items) > limit+1 {
-					items = items[:limit+1]
-				}
+			wantedRowKey, keyErr := articleRowKey(article.ID, article.CreatedAt)
+			if keyErr != nil || header.RowKey != wantedRowKey {
+				return articles.ArticlePage{}, errors.New("legacy article rows require explicit migration before listing")
 			}
+			items = append(items, article)
 		}
 		if next == nil {
+			break
+		}
+		if len(items) == limit {
+			more = true
 			break
 		}
 		continuation = next
 	}
 	page := articles.ArticlePage{Items: items, PageNumber: cursor.Page + 1}
-	if len(items) > limit {
-		page.Items = items[:limit]
+	if more {
 		last := page.Items[len(page.Items)-1]
 		page.NextCursor = encodeArticlePageCursor(articlePageCursor{Page: cursor.Page + 1, CreatedAt: last.CreatedAt, ID: last.ID})
 	}
@@ -383,12 +392,6 @@ func validatePermanentPublishedSlugs(stored, updated articles.Article) error {
 		return fmt.Errorf("%w: replaced canonical slug must remain a historical alias", articles.ErrValidation)
 	}
 	return nil
-}
-func articleBefore(left, right articles.Article) bool {
-	return left.CreatedAt.After(right.CreatedAt) || left.CreatedAt.Equal(right.CreatedAt) && left.ID > right.ID
-}
-func articleStrictlyAfter(article articles.Article, createdAt time.Time, id string) bool {
-	return article.CreatedAt.Before(createdAt) || article.CreatedAt.Equal(createdAt) && article.ID < id
 }
 func decodeHeader(value []byte, header *entityHeader) error { return json.Unmarshal(value, header) }
 func mapArticleError(err error, slug bool) error {

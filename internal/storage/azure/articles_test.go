@@ -46,14 +46,25 @@ func TestLegacyArticleRowCanBeUpdatedWithItsStoredETag(t *testing.T) {
 	if _, mutated := properties["id"]; mutated {
 		t.Fatal("read-only Get mutated legacy entity")
 	}
+	result, err := migrateLegacyArticleRows(context.Background(), driver)
+	if err != nil || result.Migrated != 1 {
+		t.Fatalf("migrate legacy rows = %#v, %v", result, err)
+	}
+	loaded, err = repository.Get(context.Background(), article.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	loaded.Title = "Titolo legacy aggiornato"
 	loaded.UpdatedAt = loaded.UpdatedAt.Add(time.Minute)
-	updated, err := repository.Update(context.Background(), loaded, etag)
+	updated, err := repository.Update(context.Background(), loaded, loaded.ETag)
 	if err != nil || updated.Title != loaded.Title {
 		t.Fatalf("Update legacy=%#v %v", updated, err)
 	}
-	if _, err = driver.Get(context.Background(), articlesPartition, article.ID); err != nil {
-		t.Fatalf("legacy row moved or disappeared: %v", err)
+	if _, err = driver.Get(context.Background(), articlesPartition, article.ID); err != ErrNotFound {
+		t.Fatalf("legacy row remains after migration: %v", err)
+	}
+	if _, err = driver.Get(context.Background(), articlesPartition, computedRow); err != nil {
+		t.Fatalf("migrated row missing after update: %v", err)
 	}
 }
 
@@ -78,6 +89,9 @@ func TestMixedLegacyAndCurrentRowsPageInGlobalNewestFirstOrder(t *testing.T) {
 		if _, err = driver.Add(context.Background(), encoded); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if result, err := migrateLegacyArticleRows(context.Background(), driver); err != nil || result.Migrated != 9 {
+		t.Fatalf("migration = %#v, %v", result, err)
 	}
 	repository := newArticleMetadataRepository(driver)
 	cursor := ""
@@ -137,7 +151,7 @@ func TestStatusFilterFillsPageAcrossSparseStoragePages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Items) != 5 || page.NextCursor == "" || driver.pageCalls < 13 {
+	if len(page.Items) != 5 || page.NextCursor == "" || driver.pageCalls != 1 {
 		t.Fatalf("items=%d cursor=%q calls=%d", len(page.Items), page.NextCursor, driver.pageCalls)
 	}
 	if len(driver.filters) == 0 || !strings.Contains(driver.filters[0], "status eq 'draft'") {
@@ -197,17 +211,15 @@ func TestArticleRepositoryPagesBeyondOneThousandWithBoundedRequests(t *testing.T
 		}
 		cursor = page.NextCursor
 	}
-	if seen != 1205 || driver.pageCalls < 13 || driver.maxTop != 100 {
+	if seen != 1205 || driver.pageCalls != 13 || driver.maxTop != 100 {
 		t.Fatalf("seen=%d calls=%d maxTop=%d", seen, driver.pageCalls, driver.maxTop)
 	}
 }
 
-// articlePagingTableDriver snapshots immutable article fixtures once so the
-// repository's many bounded raw-page requests do not make the fake itself
-// rescan and decode the complete table for every continuation.
+// articlePagingTableDriver records the raw Table requests made by a logical
+// sequence of repository pages.
 type articlePagingTableDriver struct {
 	*memoryTableDriver
-	ordered   []tableEntity
 	pageCalls int
 	maxTop    int32
 	filters   []string
@@ -219,30 +231,124 @@ func (driver *articlePagingTableDriver) ListPage(ctx context.Context, filter str
 	if top > driver.maxTop {
 		driver.maxTop = top
 	}
-	if driver.ordered == nil {
-		ordered, _, err := driver.memoryTableDriver.ListPage(ctx, filter, 1<<30, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		driver.ordered = ordered
-	}
-	start := 0
-	if continuation != nil {
-		for start < len(driver.ordered) {
-			partition, row, _ := entityKey(driver.ordered[start].Value)
-			if partition > continuation.PartitionKey || partition == continuation.PartitionKey && row > continuation.RowKey {
-				break
-			}
-			start++
+	return driver.memoryTableDriver.ListPage(ctx, filter, top, continuation)
+}
+
+func TestLegacyArticleMigrationIsIdempotentAndResumesAfterInterruption(t *testing.T) {
+	driver := newMemoryTableDriver()
+	base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	for index := range 3 {
+		article := outcomeArticle(fmt.Sprintf("legacy-resume-%d", index), fmt.Sprintf("legacy-resume-%d", index))
+		article.CreatedAt = base.Add(time.Duration(index) * time.Minute)
+		article.UpdatedAt, article.DraftBody.SavedAt = article.CreatedAt, article.CreatedAt
+		if _, err := driver.Add(context.Background(), legacyArticleEntity(t, article)); err != nil {
+			t.Fatal(err)
 		}
 	}
-	end := min(start+int(top), len(driver.ordered))
-	page := append([]tableEntity(nil), driver.ordered[start:end]...)
-	if end == len(driver.ordered) {
-		return page, nil, nil
+	interrupted := &interruptingMigrationDriver{memoryTableDriver: driver, failBeforeAt: 2}
+	if _, err := migrateLegacyArticleRows(context.Background(), interrupted); err == nil {
+		t.Fatal("migration succeeded despite injected interruption")
 	}
-	partition, row, _ := entityKey(page[len(page)-1].Value)
-	return page, &tableContinuation{PartitionKey: partition, RowKey: row}, nil
+	result, err := migrateLegacyArticleRows(context.Background(), driver)
+	if err != nil || result.Migrated != 2 {
+		t.Fatalf("resumed migration = %#v, %v", result, err)
+	}
+	result, err = migrateLegacyArticleRows(context.Background(), driver)
+	if err != nil || result.Migrated != 0 {
+		t.Fatalf("idempotent migration = %#v, %v", result, err)
+	}
+	for index := range 3 {
+		id := fmt.Sprintf("legacy-resume-%d", index)
+		if _, err = driver.Get(context.Background(), articlesPartition, id); err != ErrNotFound {
+			t.Fatalf("legacy row %q remains: %v", id, err)
+		}
+	}
+}
+
+func TestLegacyArticleMigrationReconcilesCommitUnknownAndDuplicateRows(t *testing.T) {
+	driver := newMemoryTableDriver()
+	article := outcomeArticle("legacy-unknown", "legacy-unknown")
+	if _, err := driver.Add(context.Background(), legacyArticleEntity(t, article)); err != nil {
+		t.Fatal(err)
+	}
+	unknown := &interruptingMigrationDriver{memoryTableDriver: driver, failAfterAt: 1}
+	result, err := migrateLegacyArticleRows(context.Background(), unknown)
+	if err != nil || result.Migrated != 1 {
+		t.Fatalf("unknown commit migration = %#v, %v", result, err)
+	}
+	if _, err = driver.Get(context.Background(), articlesPartition, article.ID); err != ErrNotFound {
+		t.Fatalf("legacy row remains after reconciled commit: %v", err)
+	}
+
+	duplicate := outcomeArticle("legacy-duplicate", "legacy-duplicate")
+	if _, err = driver.Add(context.Background(), legacyArticleEntity(t, duplicate)); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := marshalArticleEntity(duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = driver.Add(context.Background(), encoded); err != nil {
+		t.Fatal(err)
+	}
+	result, err = migrateLegacyArticleRows(context.Background(), driver)
+	if err != nil || result.Migrated != 1 {
+		t.Fatalf("duplicate reconciliation = %#v, %v", result, err)
+	}
+	if _, err = driver.Get(context.Background(), articlesPartition, duplicate.ID); err != ErrNotFound {
+		t.Fatalf("duplicate legacy row remains: %v", err)
+	}
+}
+
+func TestLegacyArticleMigrationLeavesConflictingTargetUntouched(t *testing.T) {
+	driver := newMemoryTableDriver()
+	legacy := outcomeArticle("legacy-conflict", "legacy-conflict")
+	if _, err := driver.Add(context.Background(), legacyArticleEntity(t, legacy)); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := legacy
+	conflicting.Title = "Titolo concorrente"
+	encoded, err := marshalArticleEntity(conflicting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = driver.Add(context.Background(), encoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = migrateLegacyArticleRows(context.Background(), driver); err == nil {
+		t.Fatal("migration accepted a conflicting target")
+	}
+	rowKey, _ := articleRowKey(legacy.ID, legacy.CreatedAt)
+	if _, err = driver.Get(context.Background(), articlesPartition, legacy.ID); err != nil {
+		t.Fatalf("legacy source was removed: %v", err)
+	}
+	stored, err := driver.Get(context.Background(), articlesPartition, rowKey)
+	if err != nil {
+		t.Fatalf("conflicting target was removed: %v", err)
+	}
+	got, err := unmarshalArticleEntity(stored.Value, stored.ETag)
+	if err != nil || got.Title != conflicting.Title {
+		t.Fatalf("conflicting target changed: %#v, %v", got, err)
+	}
+}
+
+type interruptingMigrationDriver struct {
+	*memoryTableDriver
+	transactions int
+	failBeforeAt int
+	failAfterAt  int
+}
+
+func (driver *interruptingMigrationDriver) Transaction(ctx context.Context, actions []tableAction) error {
+	driver.transactions++
+	if driver.transactions == driver.failBeforeAt {
+		return context.DeadlineExceeded
+	}
+	err := driver.memoryTableDriver.Transaction(ctx, actions)
+	if err == nil && driver.transactions == driver.failAfterAt {
+		return context.DeadlineExceeded
+	}
+	return err
 }
 
 func TestArticleKeysetCursorRemainsStableAcrossBoundaryInsertions(t *testing.T) {

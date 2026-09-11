@@ -120,6 +120,10 @@ func (driver *memoryTableDriver) ListPage(ctx context.Context, filter string, ma
 	result := make([]tableEntity, 0)
 	for key, entity := range driver.entities {
 		if strings.HasPrefix(key, partitionFromFilter(filter)+"\x00") {
+			_, row, _ := entityKey(entity.Value)
+			if boundary := propertyComparisonFromFilter(filter, "RowKey", "gt"); boundary != "" && row <= boundary {
+				continue
+			}
 			if entityType := propertyFromFilter(filter, "entityType"); entityType != "" {
 				var value map[string]any
 				if err := json.Unmarshal(entity.Value, &value); err != nil || value["entityType"] != entityType {
@@ -129,6 +133,12 @@ func (driver *memoryTableDriver) ListPage(ctx context.Context, filter string, ma
 			if id := propertyFromFilter(filter, "id"); id != "" {
 				var value map[string]any
 				if err := json.Unmarshal(entity.Value, &value); err != nil || value["id"] != id {
+					continue
+				}
+			}
+			if status := propertyFromFilter(filter, "status"); status != "" {
+				var value map[string]any
+				if err := json.Unmarshal(entity.Value, &value); err != nil || value["status"] != status {
 					continue
 				}
 			}
@@ -162,7 +172,11 @@ func (driver *memoryTableDriver) ListPage(ctx context.Context, filter string, ma
 }
 
 func propertyFromFilter(filter, property string) string {
-	prefix := property + " eq '"
+	return propertyComparisonFromFilter(filter, property, "eq")
+}
+
+func propertyComparisonFromFilter(filter, property, comparison string) string {
+	prefix := property + " " + comparison + " '"
 	start := strings.Index(filter, prefix)
 	if start < 0 {
 		return ""

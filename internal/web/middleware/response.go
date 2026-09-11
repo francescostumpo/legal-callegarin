@@ -212,7 +212,7 @@ func (capture *responseCapture) responseStatus() int {
 func (*responseCapture) responseOverflowed() bool { return false }
 
 func applySecurityHeaders(header http.Header, path string) {
-	if strings.HasPrefix(path, "/admin/preview/articles/") {
+	if exactArticlePreviewPath(path) {
 		header.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'; object-src 'none'")
 		header.Set("X-Frame-Options", "SAMEORIGIN")
 	} else {
@@ -227,6 +227,23 @@ func applySecurityHeaders(header http.Header, path string) {
 		header.Set("Cache-Control", "no-store")
 		header.Set("X-Robots-Tag", "noindex, nofollow")
 	}
+}
+
+func exactArticlePreviewPath(path string) bool {
+	const prefix = "/admin/preview/articles/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	id := strings.TrimPrefix(path, prefix)
+	if id == "" {
+		return false
+	}
+	for _, character := range id {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func writeAtomicAdminFailure(response http.ResponseWriter, path string) {

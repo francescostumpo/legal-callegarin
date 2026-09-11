@@ -83,6 +83,14 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 	if _, err = driver.Get(context.Background(), articlesPartition, rowKey); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GET migrated legacy row or unexpected error: %v", err)
 	}
+	migration, err := MigrateArticleRowsFromConnectionString(context.Background(), connectionString, names)
+	if err != nil || migration.Migrated != 1 {
+		t.Fatalf("initial legacy migration = %#v, %v", migration, err)
+	}
+	loaded, err = service.Get(context.Background(), legacy.ID)
+	if err != nil {
+		t.Fatalf("Get migrated legacy: %v", err)
+	}
 
 	clock.now = clock.now.Add(time.Minute)
 	saved, err := service.SaveDraft(context.Background(), legacy.ID, articles.DraftInput{
@@ -109,39 +117,64 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 	if err != nil || !strings.Contains(preview.Body.PlainText, "seconda versione") {
 		t.Fatalf("legacy preview after lifecycle = %#v, %v", preview, err)
 	}
-	if _, err = driver.Get(context.Background(), articlesPartition, legacy.ID); err != nil {
-		t.Fatalf("legacy row disappeared: %v", err)
+	if _, err = driver.Get(context.Background(), articlesPartition, legacy.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("legacy row remains after migration: %v", err)
 	}
-	if _, err = driver.Get(context.Background(), articlesPartition, rowKey); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("legacy lifecycle unexpectedly migrated row: %v", err)
+	if _, err = driver.Get(context.Background(), articlesPartition, rowKey); err != nil {
+		t.Fatalf("migrated lifecycle row missing: %v", err)
 	}
 
 	base := clock.now.Add(time.Hour)
-	for index := range 8 {
+	actions := make([]tableAction, 0, maxTransactionOperations)
+	legacyRows := 0
+	flush := func() {
+		t.Helper()
+		if len(actions) == 0 {
+			return
+		}
+		if err := submitTransaction(context.Background(), driver, actions); err != nil {
+			t.Fatalf("seed article transaction: %v", err)
+		}
+		actions = actions[:0]
+	}
+	for index := range 1004 {
 		item := legacy
-		item.ID = fmt.Sprintf("mixed-live-%02d", index)
+		item.ID = fmt.Sprintf("mixed-live-%04d", index)
 		item.Slug = item.ID
-		item.Title = fmt.Sprintf("Titolo misto %02d", index)
+		item.Title = fmt.Sprintf("Titolo misto %04d", index)
 		item.Status = articles.StatusDraft
 		item.PublishedBody, item.Published, item.FirstPublishedAt, item.LastPublishedAt = nil, nil, nil, nil
 		item.CreatedAt = base.Add(time.Duration(index) * time.Minute)
 		item.UpdatedAt = item.CreatedAt
 		item.ETag = ""
 		var encoded []byte
-		if index%2 == 0 {
+		if index%200 == 0 {
 			encoded = legacyArticleEntity(t, item)
+			legacyRows++
 		} else if encoded, err = marshalArticleEntity(item); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = driver.Add(context.Background(), encoded); err != nil {
-			t.Fatal(err)
+		_, seededRowKey, keyErr := entityKey(encoded)
+		if keyErr != nil {
+			t.Fatal(keyErr)
+		}
+		actions = append(actions, tableAction{Kind: tableAdd, PartitionKey: articlesPartition, RowKey: seededRowKey, Entity: encoded})
+		if len(actions) == maxTransactionOperations {
+			flush()
 		}
 	}
+	flush()
+	migration, err = MigrateArticleRowsFromConnectionString(context.Background(), connectionString, names)
+	if err != nil || migration.Migrated != legacyRows {
+		t.Fatalf("mixed migration = %#v, want %d: %v", migration, legacyRows, err)
+	}
+	counted := &integrationCountingTableDriver{tableDriver: driver}
+	repository := newArticleMetadataRepository(counted)
 	cursor := ""
 	seen := map[string]bool{}
 	var previous time.Time
 	for {
-		page, listErr := bundle.Articles.List(context.Background(), articles.ListOptions{Limit: 3, Cursor: cursor})
+		page, listErr := repository.List(context.Background(), articles.ListOptions{Limit: 100, Cursor: cursor})
 		if listErr != nil {
 			t.Fatal(listErr)
 		}
@@ -157,9 +190,23 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 		}
 		cursor = page.NextCursor
 	}
-	if len(seen) != 9 {
-		t.Fatalf("mixed paging saw %d articles, want 9", len(seen))
+	if len(seen) != 1005 || counted.pageCalls != 11 {
+		t.Fatalf("mixed paging saw %d articles in %d raw calls, want 1005 in 11", len(seen), counted.pageCalls)
 	}
+	migration, err = MigrateArticleRowsFromConnectionString(context.Background(), connectionString, names)
+	if err != nil || migration.Migrated != 0 {
+		t.Fatalf("idempotent real migration = %#v, %v", migration, err)
+	}
+}
+
+type integrationCountingTableDriver struct {
+	tableDriver
+	pageCalls int
+}
+
+func (driver *integrationCountingTableDriver) ListPage(ctx context.Context, filter string, top int32, continuation *tableContinuation) ([]tableEntity, *tableContinuation, error) {
+	driver.pageCalls++
+	return driver.tableDriver.ListPage(ctx, filter, top, continuation)
 }
 
 type integrationArticleClock struct{ now time.Time }
