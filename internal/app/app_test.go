@@ -56,6 +56,54 @@ func TestNewComposesProtectedAdminRoutes(t *testing.T) {
 	}
 }
 
+func TestNewWiresAuthenticatedContactAPIAndNestedAdminFallback(t *testing.T) {
+	password := "correct-password"
+	phc, err := auth.HashPassword([]byte(password), bytes.NewReader(bytes.Repeat([]byte{0x61}, 16)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := New(Options{
+		Config: config.Config{
+			Environment: "test", StorageMode: "memory", PublicBaseURL: "https://studio.example.test",
+			AdminUsername: "admin", AdminPasswordHash: phc, SessionKey: []byte("0123456789abcdef0123456789abcdef"),
+		},
+		Assets: webassets.Files,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginPage := httptest.NewRecorder()
+	handler.ServeHTTP(loginPage, httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin/login", nil))
+	token := regexp.MustCompile(`name="started" value="([^"]+)"`).FindStringSubmatch(loginPage.Body.String())
+	if len(token) != 2 {
+		t.Fatalf("login token missing: %q", loginPage.Body.String())
+	}
+	form := url.Values{"username": {"admin"}, "password": {password}, "started": {token[1]}}
+	loginRequest := httptest.NewRequest(http.MethodPost, "https://studio.example.test/admin/login", strings.NewReader(form.Encode()))
+	loginRequest.RemoteAddr = "192.0.2.1:1234"
+	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRequest.Header.Set("Origin", "https://studio.example.test")
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, loginRequest)
+	if login.Code != http.StatusSeeOther || len(login.Result().Cookies()) != 1 {
+		t.Fatalf("login = %d cookies=%#v body=%q", login.Code, login.Result().Cookies(), login.Body.String())
+	}
+	cookie := login.Result().Cookies()[0]
+
+	for target, wantType := range map[string]string{
+		"/api/admin/contacts":       "application/json; charset=utf-8",
+		"/admin/contatti/contact-1": "text/html; charset=utf-8",
+	} {
+		request := httptest.NewRequest(http.MethodGet, "https://studio.example.test"+target, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != wantType {
+			t.Fatalf("GET %s = %d type=%q body=%q", target, response.Code, response.Header().Get("Content-Type"), response.Body.String())
+		}
+	}
+}
+
 func TestNewRejectsPartialOrMalformedAdminCredentials(t *testing.T) {
 	t.Parallel()
 	for _, cfg := range []config.Config{

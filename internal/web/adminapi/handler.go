@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/auth"
+	"github.com/francescostumpo/legal-callegarin/internal/contacts"
 	webmiddleware "github.com/francescostumpo/legal-callegarin/internal/web/middleware"
 )
 
@@ -41,6 +42,7 @@ type Options struct {
 	Credentials        CredentialVerifier
 	ConfiguredUsername string
 	Sessions           SessionController
+	Contacts           contacts.ContactService
 	Assets             fs.FS
 	SessionKey         []byte
 	PublicBaseURL      string
@@ -53,6 +55,7 @@ type Options struct {
 type handler struct {
 	credentials    CredentialVerifier
 	sessions       SessionController
+	contacts       contacts.ContactService
 	adminFiles     http.Handler
 	index          []byte
 	sessionKey     []byte
@@ -102,6 +105,7 @@ func New(options Options) (http.Handler, error) {
 	instance := &handler{
 		credentials:    options.Credentials,
 		sessions:       options.Sessions,
+		contacts:       options.Contacts,
 		adminFiles:     http.FileServer(http.FS(adminFS)),
 		index:          index,
 		sessionKey:     append([]byte(nil), options.SessionKey...),
@@ -117,6 +121,12 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("POST /admin/login", instance.loginPOST)
 	mux.HandleFunc("GET /api/admin/session", instance.sessionGET)
 	mux.HandleFunc("DELETE /api/admin/session", instance.sessionDELETE)
+	mux.HandleFunc("GET /api/admin/dashboard", instance.dashboardGET)
+	mux.HandleFunc("GET /api/admin/contacts", instance.contactsGET)
+	mux.HandleFunc("GET /api/admin/contacts/{id}", instance.contactGET)
+	mux.HandleFunc("POST /api/admin/contacts/{id}/{action}", instance.contactPOST)
+	mux.HandleFunc("/api/admin", instance.apiNotFound)
+	mux.HandleFunc("/api/admin/", instance.apiNotFound)
 	mux.HandleFunc("GET /admin", instance.indexGET)
 	mux.HandleFunc("GET /admin/", instance.adminGET)
 	return mux, nil

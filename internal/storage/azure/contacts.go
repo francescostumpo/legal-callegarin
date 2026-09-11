@@ -11,8 +11,6 @@ import (
 	"github.com/francescostumpo/legal-callegarin/internal/contacts"
 )
 
-const maxContactScan = 1000
-
 type ContactRepository struct {
 	table tableDriver
 	now   func() time.Time
@@ -89,6 +87,9 @@ func (repository *ContactRepository) findByID(ctx context.Context, id string) (c
 }
 
 func (repository *ContactRepository) List(ctx context.Context, options contacts.ListOptions) (contacts.ContactPage, error) {
+	if err := options.Validate(); err != nil {
+		return contacts.ContactPage{}, err
+	}
 	limit, err := boundedLimit(options.Limit)
 	if err != nil {
 		return contacts.ContactPage{}, fmt.Errorf("%w: %v", contacts.ErrValidation, err)
@@ -96,12 +97,12 @@ func (repository *ContactRepository) List(ctx context.Context, options contacts.
 	if options.RetentionReview && repository.now == nil {
 		return contacts.ContactPage{}, fmt.Errorf("%w: clock is required for retention review", contacts.ErrValidation)
 	}
-	entities, err := repository.table.List(ctx, "PartitionKey eq 'contacts'", maxContactScan+1)
+	entities, err := repository.table.List(ctx, "PartitionKey eq 'contacts'", contacts.MaxAdminContactScan+1)
 	if err != nil {
 		return contacts.ContactPage{}, mapContactError(err)
 	}
-	if len(entities) > maxContactScan {
-		return contacts.ContactPage{}, fmt.Errorf("%w: active contact set exceeds %d", contacts.ErrValidation, maxContactScan)
+	if len(entities) > contacts.MaxAdminContactScan {
+		return contacts.ContactPage{}, fmt.Errorf("%w: active contact set exceeds %d", contacts.ErrValidation, contacts.MaxAdminContactScan)
 	}
 	query := strings.ToLower(strings.TrimSpace(options.Query))
 	items := make([]contacts.Contact, 0, len(entities))
@@ -121,6 +122,9 @@ func (repository *ContactRepository) List(ctx context.Context, options contacts.
 			continue
 		}
 		if options.RetentionReview && contact.ReviewDueAt.After(repository.now()) {
+			continue
+		}
+		if options.DeletionScheduled && contact.DeletionDueAt == nil {
 			continue
 		}
 		if query != "" && !contactMatches(contact, query) {
@@ -224,7 +228,7 @@ func (repository *ContactRepository) Delete(ctx context.Context, id, expectedETa
 	}
 }
 func contactMatches(contact contacts.Contact, query string) bool {
-	return strings.Contains(strings.ToLower(contact.Name), query) || strings.Contains(strings.ToLower(contact.Email), query) || strings.Contains(strings.ToLower(contact.Phone), query) || strings.Contains(strings.ToLower(contact.Message), query)
+	return strings.Contains(strings.ToLower(contact.Name), query) || strings.Contains(strings.ToLower(contact.Email), query)
 }
 func cursorStartContacts(items []contacts.Contact, value string) (int, error) {
 	if value == "" {

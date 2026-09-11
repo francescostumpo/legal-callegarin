@@ -111,6 +111,113 @@ func TestContactServiceRejectsInvalidTransitions(t *testing.T) {
 	}
 }
 
+func TestContactServiceAdminQueriesAndDashboardPurgeOnlyScheduledDue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	clock := &contactClock{now: now.AddDate(-2, 0, -1)}
+	repository := memory.NewContactRepository(clock.Now)
+	service := contacts.NewService(repository, clock, &contactIDs{values: []string{"retention-only", "purge-due", "current-new", "current-read", "current-archived"}})
+
+	retentionOnly, err := service.Submit(ctx, submissionFor("Retention Only", "retention@example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.now = now.AddDate(0, 0, -31)
+	purgeDue, err := service.Submit(ctx, submissionFor("Purge Due", "purge@example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	purgeDue, err = service.ScheduleDeletion(ctx, purgeDue.ID, purgeDue.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.now = now
+	currentNew, err := service.Submit(ctx, submissionFor("Current New", "new@example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentRead, err := service.Submit(ctx, submissionFor("Current Read", "read@example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentRead, err = service.Open(ctx, currentRead.ID, currentRead.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentArchived, err := service.Submit(ctx, submissionFor("Current Archived", "archived@example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentArchived, err = service.Open(ctx, currentArchived.ID, currentArchived.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Archive(ctx, currentArchived.ID, currentArchived.ETag); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := service.Get(ctx, currentNew.ID)
+	if err != nil || detail.ID != currentNew.ID {
+		t.Fatalf("Get() = %#v, %v", detail, err)
+	}
+	state := contacts.StateRead
+	page, err := service.List(ctx, contacts.ListOptions{State: &state, Query: "READ", Limit: 25})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != currentRead.ID {
+		t.Fatalf("List() = %#v, %v", page, err)
+	}
+
+	summary, err := service.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("Dashboard() error = %v", err)
+	}
+	if summary.New != 2 || summary.Read != 1 || summary.Archived != 1 || summary.DeletionScheduled != 0 || summary.RetentionReview != 1 || summary.Purged != 1 {
+		t.Fatalf("Dashboard() = %#v", summary)
+	}
+	if _, err := repository.Get(ctx, purgeDue.ID); !errors.Is(err, contacts.ErrNotFound) {
+		t.Fatalf("due scheduled contact still exists: %v", err)
+	}
+	if _, err := repository.Get(ctx, retentionOnly.ID); err != nil {
+		t.Fatalf("retention-only contact was purged: %v", err)
+	}
+}
+
+func TestContactServiceDeletionScheduleTransitionsAreExplicit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	clock := &contactClock{now: time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)}
+	repository := memory.NewContactRepository(clock.Now)
+	service := contacts.NewService(repository, clock, &contactIDs{values: []string{"contact-1"}})
+	contact, err := service.Submit(ctx, validSubmission())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CancelDeletion(ctx, contact.ID, contact.ETag); !errors.Is(err, contacts.ErrInvalidTransition) {
+		t.Fatalf("CancelDeletion(unscheduled) error = %v", err)
+	}
+	scheduled, err := service.ScheduleDeletion(ctx, contact.ID, contact.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ScheduleDeletion(ctx, scheduled.ID, scheduled.ETag); !errors.Is(err, contacts.ErrInvalidTransition) {
+		t.Fatalf("ScheduleDeletion(already scheduled) error = %v", err)
+	}
+	clock.now = clock.now.Add(time.Hour)
+	cancelled, err := service.CancelDeletion(ctx, scheduled.ID, scheduled.ETag)
+	if err != nil || cancelled.DeletionDueAt != nil || cancelled.State != contact.State {
+		t.Fatalf("CancelDeletion() = %#v, %v", cancelled, err)
+	}
+}
+
+func submissionFor(name, email string) contacts.Submission {
+	submission := validSubmission()
+	submission.Name = name
+	submission.Email = email
+	return submission
+}
+
 func validSubmission() contacts.Submission {
 	return contacts.Submission{
 		Name:           " Mario Rossi ",

@@ -133,6 +133,7 @@ func New(options Options) (http.Handler, error) {
 		Credentials:        credentials,
 		ConfiguredUsername: options.Config.AdminUsername,
 		Sessions:           sessions,
+		Contacts:           contactService,
 		Assets:             options.Assets,
 		SessionKey:         signingKey,
 		PublicBaseURL:      options.Config.PublicBaseURL,
@@ -145,8 +146,10 @@ func New(options Options) (http.Handler, error) {
 	mux.Handle("GET /admin", adminHandler)
 	mux.Handle("GET /admin/", adminHandler)
 	mux.Handle("POST /admin/login", adminHandler)
-	mux.Handle("GET /api/admin/session", adminHandler)
-	mux.Handle("DELETE /api/admin/session", adminHandler)
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions} {
+		mux.Handle(method+" /api/admin", adminHandler)
+		mux.Handle(method+" /api/admin/", adminHandler)
+	}
 	secured, err := webmiddleware.New(mux, webmiddleware.Options{
 		Authenticator: sessions,
 		SessionKey:    signingKey,

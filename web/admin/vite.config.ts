@@ -7,5 +7,6 @@ export default defineConfig({
   build: {
     outDir: "../../internal/webassets/admin/dist",
     emptyOutDir: true,
+    sourcemap: false,
   },
 })

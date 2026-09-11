@@ -130,6 +130,60 @@ func ContactRepository(t *testing.T, factory func() contacts.Repository) {
 		}
 	})
 
+	t.Run("search is limited to name and email", func(t *testing.T) {
+		repository := factory()
+		ctx := context.Background()
+		fixture := contactFixture("limited-search", "Mario Rossi", time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC))
+		fixture.Email = "mario@example.test"
+		fixture.Phone = "phone-search-marker"
+		fixture.Message = "Messaggio sufficientemente lungo con message-search-marker"
+		if _, err := repository.Create(ctx, fixture); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		for _, query := range []string{"MARIO", "EXAMPLE.TEST"} {
+			page, err := repository.List(ctx, contacts.ListOptions{Query: query})
+			if err != nil || len(page.Items) != 1 {
+				t.Fatalf("List(Query: %q) = %#v, %v", query, page, err)
+			}
+		}
+		for _, query := range []string{"phone-search-marker", "message-search-marker"} {
+			page, err := repository.List(ctx, contacts.ListOptions{Query: query})
+			if err != nil || len(page.Items) != 0 {
+				t.Fatalf("List(Query: %q) leaked non-searchable fields: %#v, %v", query, page, err)
+			}
+		}
+	})
+
+	t.Run("deletion scheduled filter is orthogonal to state", func(t *testing.T) {
+		repository := factory()
+		ctx := context.Background()
+		base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+		scheduledNew := contactFixture("scheduled-new", "Scheduled New", base)
+		due := base.AddDate(0, 0, 30)
+		scheduledNew.DeletionDueAt = &due
+		readAt := base.Add(time.Minute)
+		scheduledRead := contactFixture("scheduled-read", "Scheduled Read", base.Add(time.Minute))
+		scheduledRead.State = contacts.StateRead
+		scheduledRead.ReadAt = &readAt
+		scheduledRead.UpdatedAt = readAt
+		scheduledRead.DeletionDueAt = &due
+		unscheduled := contactFixture("unscheduled", "Unscheduled", base.Add(2*time.Minute))
+		for _, fixture := range []contacts.Contact{scheduledNew, scheduledRead, unscheduled} {
+			if _, err := repository.Create(ctx, fixture); err != nil {
+				t.Fatalf("Create(%q) error = %v", fixture.ID, err)
+			}
+		}
+		page, err := repository.List(ctx, contacts.ListOptions{DeletionScheduled: true})
+		if err != nil || len(page.Items) != 2 {
+			t.Fatalf("List(DeletionScheduled) = %#v, %v", page, err)
+		}
+		state := contacts.StateNew
+		page, err = repository.List(ctx, contacts.ListOptions{State: &state, DeletionScheduled: true})
+		if err != nil || len(page.Items) != 1 || page.Items[0].ID != scheduledNew.ID {
+			t.Fatalf("List(State, DeletionScheduled) = %#v, %v", page, err)
+		}
+	})
+
 	contactPaginationLimits(t, factory)
 }
 

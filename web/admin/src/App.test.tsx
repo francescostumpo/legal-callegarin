@@ -1,14 +1,418 @@
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import App from "./App"
 
-describe("App", () => {
-  it("renders the administration console heading", () => {
+type Contact = {
+  id: string
+  name: string
+  email: string
+  phone?: string
+  message: string
+  consentVersion: string
+  privacyAcceptedAt: string
+  state: "new" | "read" | "archived"
+  createdAt: string
+  updatedAt: string
+  readAt?: string
+  archivedAt?: string
+  reviewDueAt: string
+  deletionDueAt?: string
+}
+
+const now = "2026-09-11T12:00:00Z"
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  window.history.replaceState({}, "", "/admin")
+})
+
+describe("admin shell", () => {
+  it("bootstraps the session in memory and shows the dashboard badge only after opening it", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === "/api/admin/session") {
+          return jsonResponse({
+            username: "admin",
+            csrfToken: "csrf-memory-only",
+          })
+        }
+        if (path.startsWith("/api/admin/contacts")) {
+          return jsonResponse({ items: [], nextCursor: "" })
+        }
+        if (path === "/api/admin/dashboard") {
+          return jsonResponse({
+            new: 2,
+            read: 1,
+            archived: 0,
+            deletionScheduled: 0,
+            retentionReview: 1,
+            purged: 0,
+          })
+        }
+        throw new Error(`unexpected fetch ${path} ${init?.method ?? "GET"}`)
+      },
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<App />)
+
+    expect(screen.getByText("Caricamento sessione…")).toBeInTheDocument()
+    expect(
+      await screen.findByRole("heading", { name: "Contatti" }),
+    ).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/admin/dashboard",
+      expect.anything(),
+    )
+    expect(window.localStorage.length).toBe(0)
+    expect(window.sessionStorage.length).toBe(0)
+    const sessionCall = fetchMock.mock.calls.find(
+      ([path]) => path === "/api/admin/session",
+    )
+    expect(sessionCall?.[1]).toMatchObject({ credentials: "same-origin" })
+
+    await userEvent.click(screen.getByRole("link", { name: "Panoramica" }))
+    expect(await screen.findByText("2 nuovi contatti")).toBeInTheDocument()
+    expect(screen.getByLabelText("2 nuovi contatti")).toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.filter(([path]) => path === "/api/admin/dashboard"),
+    ).toHaveLength(1)
+    await userEvent.click(screen.getByRole("link", { name: "Apri la coda" }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path]) =>
+          String(path).includes("/api/admin/contacts?state=new"),
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it("performs one login transition after unauthorized responses", async () => {
+    const redirect = vi.fn()
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ error: "authentication required" }, 401),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { rerender } = render(<App onUnauthorized={redirect} />)
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Sessione scaduta",
+    )
+    rerender(<App onUnauthorized={redirect} />)
+    await waitFor(() => expect(redirect).toHaveBeenCalledTimes(1))
+  })
+
+  it("shows useful loading, empty, error, bounded debounced search, and filters", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    let resolveList: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return Promise.resolve(
+          jsonResponse({ username: "admin", csrfToken: "csrf" }),
+        )
+      }
+      if (path.startsWith("/api/admin/contacts")) {
+        if (path.includes("q=errore")) {
+          return Promise.resolve(
+            jsonResponse({ error: "contacts temporarily unavailable" }, 503),
+          )
+        }
+        if (
+          fetchMock.mock.calls.filter(([called]) =>
+            String(called).startsWith("/api/admin/contacts"),
+          ).length === 1
+        ) {
+          return new Promise<Response>((resolve) => {
+            resolveList = resolve
+          })
+        }
+        return Promise.resolve(jsonResponse({ items: [], nextCursor: "" }))
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+
+    expect(await screen.findByText("Caricamento contatti…")).toBeInTheDocument()
+    await waitFor(() => expect(resolveList).toBeTypeOf("function"))
+    resolveList!(jsonResponse({ items: [], nextCursor: "" }))
+    expect(
+      await screen.findByText(
+        "Nessun contatto corrisponde ai filtri selezionati.",
+      ),
+    ).toBeInTheDocument()
+
+    const search = screen.getByRole("searchbox", {
+      name: "Cerca per nome o email",
+    })
+    expect(search).toHaveAttribute("maxLength", "120")
+    fireEvent.change(search, { target: { value: "Maria" } })
+    expect(
+      fetchMock.mock.calls.some(([path]) => String(path).includes("q=Maria")),
+    ).toBe(false)
+    await waitFor(
+      () =>
+        expect(
+          fetchMock.mock.calls.some(([path]) =>
+            String(path).includes("q=Maria"),
+          ),
+        ).toBe(true),
+      { timeout: 1000 },
+    )
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Stato" }),
+      "archived",
+    )
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: "In eliminazione" }),
+    )
+    await waitFor(() => {
+      const paths = fetchMock.mock.calls.map(([path]) => String(path))
+      expect(
+        paths.some(
+          (path) =>
+            path.includes("state=archived") &&
+            path.includes("deletionScheduled=true"),
+        ),
+      ).toBe(true)
+    })
+
+    fireEvent.change(search, { target: { value: "errore" } })
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Impossibile caricare i contatti",
+    )
+  })
+
+  it("opens a new contact with an explicit read mutation and uses CSRF and If-Match", async () => {
+    window.history.replaceState({}, "", "/admin/contatti/contact-1")
+    const created = contactFixture({ state: "new" })
+    const read = contactFixture({ state: "read", readAt: now })
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf-token" })
+        if (path === "/api/admin/contacts/contact-1" && !init?.method)
+          return jsonResponse(created, 200, { ETag: '"etag-1"' })
+        if (path.endsWith("/read") && init?.method === "POST")
+          return jsonResponse(read, 200, { ETag: '"etag-2"' })
+        throw new Error(`unexpected fetch ${path}`)
+      },
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
     render(<App />)
 
     expect(
-      screen.getByRole("heading", { name: "Console di amministrazione" }),
+      await screen.findByRole("heading", { name: "Mario Rossi" }),
     ).toBeInTheDocument()
+    expect(screen.getByText("Letto")).toBeInTheDocument()
+    const readCall = fetchMock.mock.calls.find(([path]) =>
+      String(path).endsWith("/read"),
+    )
+    expect(readCall?.[1]).toMatchObject({
+      method: "POST",
+      credentials: "same-origin",
+      headers: expect.objectContaining({
+        "X-CSRF-Token": "csrf-token",
+        "If-Match": '"etag-1"',
+      }),
+    })
+  })
+
+  it("archives, restores, confirms deletion, and cancels scheduled deletion", async () => {
+    window.history.replaceState({}, "", "/admin/contatti/contact-1")
+    let current = contactFixture({ state: "read", readAt: now })
+    let etag = 1
+    const actions: string[] = []
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        if (path === "/api/admin/contacts/contact-1" && !init?.method)
+          return jsonResponse(current, 200, { ETag: `"etag-${etag}"` })
+        const action = path.split("/").at(-1) ?? ""
+        actions.push(action)
+        if (action === "archive")
+          current = { ...current, state: "archived", archivedAt: now }
+        if (action === "restore")
+          current = { ...current, state: "read", archivedAt: undefined }
+        if (action === "schedule-deletion")
+          current = { ...current, deletionDueAt: "2026-10-11T12:00:00Z" }
+        if (action === "cancel-deletion")
+          current = { ...current, deletionDueAt: undefined }
+        etag += 1
+        return jsonResponse(current, 200, { ETag: `"etag-${etag}"` })
+      },
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole("button", { name: "Archivia" }))
+    expect(await screen.findByText("Archiviato")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Ripristina" }))
+    expect(await screen.findByText("Letto")).toBeInTheDocument()
+
+    const schedule = screen.getByRole("button", {
+      name: "Programma eliminazione",
+    })
+    await user.click(schedule)
+    let dialog = screen.getByRole("dialog", {
+      name: "Conferma eliminazione programmata",
+    })
+    await user.click(within(dialog).getByRole("button", { name: "Annulla" }))
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(schedule).toHaveFocus()
+
+    await user.click(schedule)
+    dialog = screen.getByRole("dialog", {
+      name: "Conferma eliminazione programmata",
+    })
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Conferma, elimina tra 30 giorni",
+      }),
+    )
+    expect(
+      await screen.findByText(/Eliminazione programmata/),
+    ).toBeInTheDocument()
+    await user.click(
+      screen.getByRole("button", { name: "Annulla eliminazione programmata" }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/Recuperabile fino al/),
+      ).not.toBeInTheDocument(),
+    )
+    expect(actions).toEqual([
+      "archive",
+      "restore",
+      "schedule-deletion",
+      "cancel-deletion",
+    ])
+  })
+
+  it("offers a safe reload after a stale mutation conflict", async () => {
+    window.history.replaceState({}, "", "/admin/contatti/contact-1")
+    const contact = contactFixture({ state: "read", readAt: now })
+    let gets = 0
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        if (path === "/api/admin/contacts/contact-1" && !init?.method) {
+          gets += 1
+          return jsonResponse(contact, 200, { ETag: `"etag-${gets}"` })
+        }
+        return jsonResponse({ error: "contact changed; reload and retry" }, 409)
+      },
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole("button", { name: "Archivia" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Il contatto è stato modificato",
+    )
+    await user.click(screen.getByRole("button", { name: "Ricarica contatto" }))
+    await waitFor(() => expect(gets).toBe(2))
+  })
+
+  it("closes the mobile sidebar and deletion dialog with Escape and restores focus", async () => {
+    window.history.replaceState({}, "", "/admin/contatti/contact-1")
+    const contact = contactFixture({ state: "read", readAt: now })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input) === "/api/admin/session"
+          ? jsonResponse({ username: "admin", csrfToken: "csrf" })
+          : jsonResponse(contact, 200, { ETag: '"etag-1"' }),
+      ),
+    )
+    const user = userEvent.setup()
+    render(<App />)
+
+    const menu = await screen.findByRole("button", { name: "Apri navigazione" })
+    await user.click(menu)
+    expect(
+      screen.getByRole("navigation", { name: "Navigazione mobile" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Chiudi navigazione" }),
+    ).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(
+      within(
+        screen.getByRole("navigation", { name: "Navigazione mobile" }),
+      ).getByRole("link", { name: "Contatti" }),
+    ).toHaveFocus()
+    await user.keyboard("{Escape}")
+    expect(
+      screen.queryByRole("navigation", { name: "Navigazione mobile" }),
+    ).not.toBeInTheDocument()
+    expect(menu).toHaveFocus()
+
+    const schedule = screen.getByRole("button", {
+      name: "Programma eliminazione",
+    })
+    await user.click(schedule)
+    const dialog = screen.getByRole("dialog", {
+      name: "Conferma eliminazione programmata",
+    })
+    expect(
+      within(dialog).getByRole("button", { name: "Annulla" }),
+    ).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Conferma, elimina tra 30 giorni",
+      }),
+    ).toHaveFocus()
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(schedule).toHaveFocus()
   })
 })
+
+function contactFixture(overrides: Partial<Contact> = {}): Contact {
+  return {
+    id: "contact-1",
+    name: "Mario Rossi",
+    email: "mario@example.test",
+    phone: "+39 000 000000",
+    message: "Messaggio sufficientemente lungo",
+    consentVersion: "privacy-v1",
+    privacyAcceptedAt: now,
+    state: "new",
+    createdAt: now,
+    updatedAt: now,
+    reviewDueAt: "2028-09-11T12:00:00Z",
+    ...overrides,
+  }
+}
+
+function jsonResponse(
+  body: unknown,
+  status = 200,
+  headers: HeadersInit = {},
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", ...headers },
+  })
+}

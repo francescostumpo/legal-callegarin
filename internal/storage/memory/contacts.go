@@ -58,6 +58,9 @@ func (repository *ContactRepository) List(ctx context.Context, options contacts.
 	if err := ctx.Err(); err != nil {
 		return contacts.ContactPage{}, err
 	}
+	if err := options.Validate(); err != nil {
+		return contacts.ContactPage{}, err
+	}
 	limit, err := boundedLimit(options.Limit)
 	if err != nil {
 		return contacts.ContactPage{}, fmt.Errorf("%w: %v", contacts.ErrValidation, err)
@@ -74,6 +77,9 @@ func (repository *ContactRepository) List(ctx context.Context, options contacts.
 			continue
 		}
 		if options.RetentionReview && contact.ReviewDueAt.After(repository.now()) {
+			continue
+		}
+		if options.DeletionScheduled && contact.DeletionDueAt == nil {
 			continue
 		}
 		if query != "" && !contactMatches(contact, query) {
@@ -147,9 +153,7 @@ func (repository *ContactRepository) newETag() string {
 
 func contactMatches(contact contacts.Contact, query string) bool {
 	return strings.Contains(strings.ToLower(contact.Name), query) ||
-		strings.Contains(strings.ToLower(contact.Email), query) ||
-		strings.Contains(strings.ToLower(contact.Phone), query) ||
-		strings.Contains(strings.ToLower(contact.Message), query)
+		strings.Contains(strings.ToLower(contact.Email), query)
 }
 
 func contactCursorStart(items []contacts.Contact, encoded string) (int, error) {
