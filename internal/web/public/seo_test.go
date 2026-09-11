@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -71,29 +72,89 @@ func TestSEOArticleMetadataDatesDisclaimerAndAreaLink(t *testing.T) {
 func TestSEOPaginatedArticleIndexSelfReferencesValidCursor(t *testing.T) {
 	t.Parallel()
 
-	fixture := newPublicArticleFixture(t, 7)
-	for index := range 7 {
+	fixture := newPublicArticleFixture(t, 13)
+	for index := range 13 {
 		fixture.publish(t, fixture.create(t, fmt.Sprintf("seo-page-%d", index), fmt.Sprintf("Titolo SEO pagina %d", index), "corpo SEO pagina"))
 		fixture.tick()
 	}
 	handler := newArticleHandler(t, fixture.service)
 	first := serveRequest(handler, "/sentenze-e-riflessioni")
-	match := regexp.MustCompile(`href="(/sentenze-e-riflessioni\?cursor=[^"]+)"`).FindStringSubmatch(first.Body.String())
-	if len(match) != 2 {
-		t.Fatalf("first page lacks next cursor link: %q", first.Body.String())
+	secondPath := nextArticleIndexPath(t, first.Body.String())
+	second := serveRequest(handler, secondPath)
+	thirdPath := nextArticleIndexPath(t, second.Body.String())
+	third := serveRequest(handler, thirdPath)
+
+	got := []articleIndexSEO{
+		readArticleIndexSEO(t, first),
+		readArticleIndexSEO(t, second),
+		readArticleIndexSEO(t, third),
 	}
-	second := serveRequest(handler, match[1])
-	wantURL := canonicalBaseURL + match[1]
-	for _, fragment := range []string{
-		`<link rel="canonical" href="` + wantURL + `"`,
-		`<meta property="og:url" content="` + wantURL + `"`,
-		`<title>Sentenze e riflessioni — pagina successiva`,
-		`content="Approfondimenti su decisioni e temi di diritto. Pagina successiva della raccolta."`,
-	} {
-		if second.Code != http.StatusOK || !strings.Contains(second.Body.String(), fragment) {
-			t.Fatalf("second-page SEO lacks %q: status %d, body %q", fragment, second.Code, second.Body.String())
+	want := []articleIndexSEO{
+		{
+			Title:        "Sentenze e riflessioni",
+			Description:  "Approfondimenti su decisioni e temi di diritto.",
+			CanonicalURL: canonicalBaseURL + "/sentenze-e-riflessioni",
+			OpenGraphURL: canonicalBaseURL + "/sentenze-e-riflessioni",
+		},
+		{
+			Title:        "Sentenze e riflessioni — pagina 2",
+			Description:  "Approfondimenti su decisioni e temi di diritto. Pagina 2 della raccolta.",
+			CanonicalURL: canonicalBaseURL + secondPath,
+			OpenGraphURL: canonicalBaseURL + secondPath,
+		},
+		{
+			Title:        "Sentenze e riflessioni — pagina 3",
+			Description:  "Approfondimenti su decisioni e temi di diritto. Pagina 3 della raccolta.",
+			CanonicalURL: canonicalBaseURL + thirdPath,
+			OpenGraphURL: canonicalBaseURL + thirdPath,
+		},
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Errorf("page %d SEO = %#v, want %#v", index+1, got[index], want[index])
 		}
 	}
+	if got[1].Title == got[2].Title || got[1].Description == got[2].Description || got[1].CanonicalURL == got[2].CanonicalURL || got[1].OpenGraphURL == got[2].OpenGraphURL {
+		t.Fatal("second and third page metadata are not pairwise distinctive")
+	}
+}
+
+type articleIndexSEO struct {
+	Title        string
+	Description  string
+	CanonicalURL string
+	OpenGraphURL string
+}
+
+func nextArticleIndexPath(t *testing.T, body string) string {
+	t.Helper()
+	match := regexp.MustCompile(`href="(/sentenze-e-riflessioni\?cursor=[^"]+)"`).FindStringSubmatch(body)
+	if len(match) != 2 {
+		t.Fatalf("article index lacks next cursor link: %q", body)
+	}
+	return match[1]
+}
+
+func readArticleIndexSEO(t *testing.T, response *httptest.ResponseRecorder) articleIndexSEO {
+	t.Helper()
+	if response.Code != http.StatusOK {
+		t.Fatalf("article index status = %d, want 200", response.Code)
+	}
+	return articleIndexSEO{
+		Title:        extractHTMLValue(t, response.Body.String(), `(?s)<title>\s*([^|<]+)`),
+		Description:  extractHTMLValue(t, response.Body.String(), `<meta name="description" content="([^"]+)"`),
+		CanonicalURL: extractHTMLValue(t, response.Body.String(), `<link rel="canonical" href="([^"]+)"`),
+		OpenGraphURL: extractHTMLValue(t, response.Body.String(), `<meta property="og:url" content="([^"]+)"`),
+	}
+}
+
+func extractHTMLValue(t *testing.T, body, pattern string) string {
+	t.Helper()
+	match := regexp.MustCompile(pattern).FindStringSubmatch(body)
+	if len(match) != 2 {
+		t.Fatalf("HTML lacks metadata matching %q: %q", pattern, body)
+	}
+	return strings.TrimSpace(match[1])
 }
 
 func TestSEOSitemapRobotsAndRelatedArticleInvalidation(t *testing.T) {

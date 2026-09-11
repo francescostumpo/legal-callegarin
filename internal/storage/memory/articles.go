@@ -119,7 +119,7 @@ func (repository *ArticleMetadataRepository) List(ctx context.Context, options a
 		return articles.ArticlePage{}, fmt.Errorf("%w: invalid cursor", articles.ErrValidation)
 	}
 	end := min(start+limit, len(items))
-	page := articles.ArticlePage{Items: items[start:end]}
+	page := articles.ArticlePage{Items: items[start:end], PageNumber: start/limit + 1}
 	if end < len(items) {
 		last := page.Items[len(page.Items)-1]
 		page.NextCursor = encodeCursor(last.CreatedAt, last.ID)

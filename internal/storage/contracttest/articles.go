@@ -72,11 +72,11 @@ func ArticleMetadataRepository(t *testing.T, factory func() articles.MetadataRep
 		if err != nil {
 			t.Fatalf("first List() error = %v", err)
 		}
-		if len(first.Items) != 2 || first.Items[0].ID != "newer" || first.Items[1].ID != "middle" || first.NextCursor == "" {
+		if len(first.Items) != 2 || first.Items[0].ID != "newer" || first.Items[1].ID != "middle" || first.NextCursor == "" || first.PageNumber != 1 {
 			t.Fatalf("first List() = %#v", first)
 		}
 		second, err := repository.List(ctx, articles.ListOptions{Limit: 2, Cursor: first.NextCursor})
-		if err != nil || len(second.Items) != 1 || second.Items[0].ID != "older" || second.NextCursor != "" {
+		if err != nil || len(second.Items) != 1 || second.Items[0].ID != "older" || second.NextCursor != "" || second.PageNumber != 2 {
 			t.Fatalf("second List() = %#v, %v", second, err)
 		}
 		if _, err := repository.List(ctx, articles.ListOptions{Cursor: "not-a-cursor"}); !errors.Is(err, articles.ErrValidation) {
@@ -176,11 +176,11 @@ func articlePaginationLimits(t *testing.T, factory func() articles.MetadataRepos
 		if err != nil {
 			t.Fatalf("List(Limit: 0) error = %v", err)
 		}
-		if len(page.Items) != 25 || page.Items[0].ID != "limit-104" || page.Items[24].ID != "limit-080" || page.NextCursor == "" {
+		if len(page.Items) != 25 || page.Items[0].ID != "limit-104" || page.Items[24].ID != "limit-080" || page.NextCursor == "" || page.PageNumber != 1 {
 			t.Fatalf("List(Limit: 0) = %#v", page)
 		}
 		next, err := repository.List(ctx, articles.ListOptions{Limit: 0, Cursor: page.NextCursor})
-		if err != nil || len(next.Items) != 25 || next.Items[0].ID != "limit-079" {
+		if err != nil || len(next.Items) != 25 || next.Items[0].ID != "limit-079" || next.PageNumber != 2 {
 			t.Fatalf("List(default limit, next cursor) = %#v, %v", next, err)
 		}
 	})
@@ -192,11 +192,11 @@ func articlePaginationLimits(t *testing.T, factory func() articles.MetadataRepos
 		if err != nil {
 			t.Fatalf("List(Limit: 101) error = %v", err)
 		}
-		if len(page.Items) != 100 || page.Items[0].ID != "limit-104" || page.Items[99].ID != "limit-005" || page.NextCursor == "" {
+		if len(page.Items) != 100 || page.Items[0].ID != "limit-104" || page.Items[99].ID != "limit-005" || page.NextCursor == "" || page.PageNumber != 1 {
 			t.Fatalf("List(Limit: 101) = %#v", page)
 		}
 		next, err := repository.List(ctx, articles.ListOptions{Limit: 101, Cursor: page.NextCursor})
-		if err != nil || len(next.Items) != 5 || next.Items[0].ID != "limit-004" || next.Items[4].ID != "limit-000" || next.NextCursor != "" {
+		if err != nil || len(next.Items) != 5 || next.Items[0].ID != "limit-004" || next.Items[4].ID != "limit-000" || next.NextCursor != "" || next.PageNumber != 2 {
 			t.Fatalf("List(capped limit, next cursor) = %#v, %v", next, err)
 		}
 	})

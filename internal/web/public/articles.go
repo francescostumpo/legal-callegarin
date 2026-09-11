@@ -118,12 +118,15 @@ func (renderer *Renderer) renderArticleIndex(ctx context.Context, cursor string)
 	if err != nil {
 		return nil, err
 	}
+	if page.PageNumber < 1 || cursor == "" && page.PageNumber != 1 || cursor != "" && page.PageNumber < 2 {
+		return nil, fmt.Errorf("%w: article page number does not match cursor", articles.ErrValidation)
+	}
 	base := renderer.pages["/sentenze-e-riflessioni"]
 	base.CanonicalURL = renderer.baseURL + base.Path
-	if cursor != "" {
+	if page.PageNumber > 1 {
 		base.CanonicalURL += "?cursor=" + url.QueryEscape(cursor)
-		base.Title += " — pagina successiva"
-		base.Description += " Pagina successiva della raccolta."
+		base.Title += fmt.Sprintf(" — pagina %d", page.PageNumber)
+		base.Description += fmt.Sprintf(" Pagina %d della raccolta.", page.PageNumber)
 	}
 	base.Sections = nil
 	renderer.applyPageSEO(&base, "website", base.HeroImage, nil)
@@ -294,7 +297,7 @@ func formatItalianDate(value time.Time) string {
 type emptyArticleReader struct{}
 
 func (emptyArticleReader) ListPublished(context.Context, articles.ListOptions) (articles.ArticlePage, error) {
-	return articles.ArticlePage{}, nil
+	return articles.ArticlePage{PageNumber: 1}, nil
 }
 
 func (emptyArticleReader) GetPublished(context.Context, string) (articles.ArticleWithBody, error) {

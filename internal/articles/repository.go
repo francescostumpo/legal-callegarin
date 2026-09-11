@@ -20,6 +20,7 @@ type ListOptions struct {
 type ArticlePage struct {
 	Items      []Article
 	NextCursor string
+	PageNumber int
 }
 
 type BodyStore interface {
