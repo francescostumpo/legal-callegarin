@@ -2,6 +2,7 @@ package contacts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -89,12 +90,8 @@ func (service *service) List(ctx context.Context, options ListOptions) (ContactP
 
 func (service *service) Dashboard(ctx context.Context) (DashboardSummary, error) {
 	now := service.clock.Now()
-	purged, err := service.PurgeDue(ctx, now)
-	if err != nil {
-		return DashboardSummary{}, err
-	}
-	summary := DashboardSummary{Purged: purged}
-	err = service.scan(ctx, func(contact Contact) {
+	summary := DashboardSummary{}
+	err := service.scan(ctx, func(contact Contact) {
 		switch contact.State {
 		case StateNew:
 			summary.New++
@@ -192,45 +189,47 @@ func (service *service) PurgeDue(ctx context.Context, cutoff time.Time) (int, er
 	if cutoff.IsZero() {
 		return 0, fmt.Errorf("%w: purge cutoff is required", ErrValidation)
 	}
-	candidates := make([]Contact, 0)
-	if err := service.scan(ctx, func(contact Contact) {
-		if contact.DeletionDueAt != nil && !contact.DeletionDueAt.After(cutoff) {
-			candidates = append(candidates, contact)
-		}
-	}); err != nil {
-		return 0, err
-	}
-
 	deleted := 0
-	for _, contact := range candidates {
-		if err := service.repository.Delete(ctx, contact.ID, contact.ETag); err != nil {
+	cursor := ""
+	for {
+		page, err := service.repository.List(ctx, ListOptions{Cursor: cursor, Limit: 100, DeletionScheduled: true})
+		if err != nil {
 			return deleted, err
 		}
-		deleted++
+		for _, contact := range page.Items {
+			if contact.DeletionDueAt == nil || contact.DeletionDueAt.After(cutoff) {
+				continue
+			}
+			if err := service.repository.Delete(ctx, contact.ID, contact.ETag); err != nil {
+				return deleted, err
+			}
+			deleted++
+		}
+		if page.NextCursor == "" {
+			return deleted, nil
+		}
+		if page.NextCursor == cursor {
+			return deleted, errors.New("contact purge cursor did not advance")
+		}
+		cursor = page.NextCursor
 	}
-	return deleted, nil
 }
 
 func (service *service) scan(ctx context.Context, visit func(Contact)) error {
 	cursor := ""
-	scanned := 0
 	for {
 		page, err := service.repository.List(ctx, ListOptions{Cursor: cursor, Limit: 100})
 		if err != nil {
 			return err
 		}
-		if scanned+len(page.Items) > MaxAdminContactScan {
-			return fmt.Errorf("%w: contact scan exceeds %d entries", ErrValidation, MaxAdminContactScan)
-		}
 		for _, contact := range page.Items {
 			visit(contact)
 		}
-		scanned += len(page.Items)
 		if page.NextCursor == "" {
 			return nil
 		}
-		if scanned >= MaxAdminContactScan || page.NextCursor == cursor {
-			return fmt.Errorf("%w: contact scan exceeds its bounded cursor window", ErrValidation)
+		if page.NextCursor == cursor {
+			return errors.New("contact scan cursor did not advance")
 		}
 		cursor = page.NextCursor
 	}

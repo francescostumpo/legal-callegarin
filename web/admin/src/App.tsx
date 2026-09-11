@@ -27,6 +27,7 @@ import {
   type ContactState,
   type ContactSummaryDTO,
   type DashboardDTO,
+  type PurgeDTO,
   type SessionDTO,
 } from "./api"
 import "./admin.css"
@@ -241,17 +242,31 @@ function Dashboard({ client }: { client: AdminClient }) {
 
   useEffect(() => {
     let active = true
-    void client
-      .fetchJSON<DashboardDTO>("/api/admin/dashboard")
-      .then(({ data }) => active && setState({ loading: false, data }))
-      .catch(
-        () =>
-          active &&
+    const load = async () => {
+      try {
+        const purge = await client.fetchJSON<PurgeDTO>(
+          "/api/admin/contacts/purge-due",
+          { method: "POST" },
+        )
+        const dashboard = await client.fetchJSON<DashboardDTO>(
+          "/api/admin/dashboard",
+        )
+        if (active) {
+          setState({
+            loading: false,
+            data: { ...dashboard.data, purged: purge.data.purged },
+          })
+        }
+      } catch {
+        if (active) {
           setState({
             loading: false,
             error: "Impossibile caricare la panoramica",
-          }),
-      )
+          })
+        }
+      }
+    }
+    void load()
     return () => {
       active = false
     }
@@ -331,6 +346,8 @@ function ContactList({ client }: { client: AdminClient }) {
     items: [],
     nextCursor: "",
   })
+  const requestController = useRef<AbortController>(undefined)
+  const requestGeneration = useRef(0)
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 300)
@@ -339,6 +356,10 @@ function ContactList({ client }: { client: AdminClient }) {
 
   const load = useCallback(
     async (cursor = "", append = false) => {
+      const generation = ++requestGeneration.current
+      requestController.current?.abort()
+      const controller = new AbortController()
+      requestController.current = controller
       setList((current) => ({ ...current, loading: true, error: undefined }))
       const params = new URLSearchParams()
       if (debouncedQuery) params.set("q", debouncedQuery)
@@ -350,13 +371,26 @@ function ContactList({ client }: { client: AdminClient }) {
       try {
         const { data } = await client.fetchJSON<ContactPageDTO>(
           `/api/admin/contacts${suffix}`,
+          { signal: controller.signal },
         )
+        if (
+          controller.signal.aborted ||
+          generation !== requestGeneration.current
+        ) {
+          return
+        }
         setList((current) => ({
           loading: false,
           items: append ? [...current.items, ...data.items] : data.items,
           nextCursor: data.nextCursor,
         }))
       } catch {
+        if (
+          controller.signal.aborted ||
+          generation !== requestGeneration.current
+        ) {
+          return
+        }
         setList((current) => ({
           ...current,
           loading: false,
@@ -369,6 +403,10 @@ function ContactList({ client }: { client: AdminClient }) {
 
   useEffect(() => {
     void load()
+    return () => {
+      requestGeneration.current++
+      requestController.current?.abort()
+    }
   }, [load])
 
   return (

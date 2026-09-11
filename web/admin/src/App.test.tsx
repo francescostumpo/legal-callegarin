@@ -46,6 +46,12 @@ describe("admin shell", () => {
             csrfToken: "csrf-memory-only",
           })
         }
+        if (
+          path === "/api/admin/contacts/purge-due" &&
+          init?.method === "POST"
+        ) {
+          return jsonResponse({ purged: 1 })
+        }
         if (path.startsWith("/api/admin/contacts")) {
           return jsonResponse({ items: [], nextCursor: "" })
         }
@@ -83,10 +89,26 @@ describe("admin shell", () => {
 
     await userEvent.click(screen.getByRole("link", { name: "Panoramica" }))
     expect(await screen.findByText("2 nuovi contatti")).toBeInTheDocument()
+    expect(
+      screen.getByText("Eliminazioni scadute completate: 1."),
+    ).toBeInTheDocument()
     expect(screen.getByLabelText("2 nuovi contatti")).toBeInTheDocument()
     expect(
       fetchMock.mock.calls.filter(([path]) => path === "/api/admin/dashboard"),
     ).toHaveLength(1)
+    const purgeCallIndex = fetchMock.mock.calls.findIndex(
+      ([path]) => path === "/api/admin/contacts/purge-due",
+    )
+    const dashboardCallIndex = fetchMock.mock.calls.findIndex(
+      ([path]) => path === "/api/admin/dashboard",
+    )
+    expect(purgeCallIndex).toBeGreaterThan(-1)
+    expect(purgeCallIndex).toBeLessThan(dashboardCallIndex)
+    expect(fetchMock.mock.calls[purgeCallIndex]?.[1]).toMatchObject({
+      credentials: "same-origin",
+      headers: expect.objectContaining({ "X-CSRF-Token": "csrf-memory-only" }),
+      method: "POST",
+    })
     await userEvent.click(screen.getByRole("link", { name: "Apri la coda" }))
     await waitFor(() =>
       expect(
@@ -193,6 +215,82 @@ describe("admin shell", () => {
       "Impossibile caricare i contatti",
     )
   })
+
+  it.each([
+    [
+      "data",
+      () =>
+        jsonResponse({
+          items: [contactFixture({ id: "old", name: "Old Result" })],
+          nextCursor: "",
+        }),
+    ],
+    ["error", () => jsonResponse({ error: "old request failed" }, 503)],
+  ])(
+    "ignores out-of-order stale contact-list %s responses",
+    async (_kind, oldResponseFactory) => {
+      window.history.replaceState({}, "", "/admin/contatti")
+      let resolveOld: ((response: Response) => void) | undefined
+      let resolveCurrent: ((response: Response) => void) | undefined
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const path = String(input)
+        if (path === "/api/admin/session") {
+          return Promise.resolve(
+            jsonResponse({ username: "admin", csrfToken: "csrf" }),
+          )
+        }
+        if (path.includes("q=vecchia")) {
+          return new Promise<Response>((resolve) => {
+            resolveOld = resolve
+          })
+        }
+        if (path.includes("q=attuale")) {
+          return new Promise<Response>((resolve) => {
+            resolveCurrent = resolve
+          })
+        }
+        if (path.startsWith("/api/admin/contacts")) {
+          return Promise.resolve(jsonResponse({ items: [], nextCursor: "" }))
+        }
+        throw new Error(`unexpected fetch ${path}`)
+      })
+      vi.stubGlobal("fetch", fetchMock)
+      render(<App />)
+
+      expect(
+        await screen.findByText(
+          "Nessun contatto corrisponde ai filtri selezionati.",
+        ),
+      ).toBeInTheDocument()
+      const search = screen.getByRole("searchbox", {
+        name: "Cerca per nome o email",
+      })
+      fireEvent.change(search, { target: { value: "vecchia" } })
+      await waitFor(() => expect(resolveOld).toBeTypeOf("function"))
+      fireEvent.change(search, { target: { value: "attuale" } })
+      await waitFor(() => expect(resolveCurrent).toBeTypeOf("function"))
+
+      resolveCurrent!(
+        jsonResponse({
+          items: [contactFixture({ id: "current", name: "Current Result" })],
+          nextCursor: "",
+        }),
+      )
+      expect(await screen.findByText("Current Result")).toBeInTheDocument()
+
+      const oldResponse = oldResponseFactory()
+      resolveOld!(oldResponse)
+      await waitFor(() => {
+        expect(oldResponse.bodyUsed).toBe(true)
+        expect(screen.getByText("Current Result")).toBeInTheDocument()
+        expect(screen.queryByText("Old Result")).not.toBeInTheDocument()
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+        expect(
+          screen.queryByText("Caricamento contatti…"),
+        ).not.toBeInTheDocument()
+      })
+    },
+  )
 
   it("opens a new contact with an explicit read mutation and uses CSRF and If-Match", async () => {
     window.history.replaceState({}, "", "/admin/contatti/contact-1")

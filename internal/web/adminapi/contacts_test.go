@@ -29,6 +29,9 @@ type adminContactServiceStub struct {
 	getErr       error
 	mutation     contacts.Contact
 	mutationErr  error
+	purgeCount   int
+	purgeErr     error
+	purgeCutoff  time.Time
 	action       string
 	id           string
 	etag         string
@@ -64,6 +67,10 @@ func (stub *adminContactServiceStub) ScheduleDeletion(_ context.Context, id, eta
 func (stub *adminContactServiceStub) CancelDeletion(_ context.Context, id, etag string) (contacts.Contact, error) {
 	return stub.mutate("cancel-deletion", id, etag)
 }
+func (stub *adminContactServiceStub) PurgeDue(_ context.Context, cutoff time.Time) (int, error) {
+	stub.purgeCutoff = cutoff
+	return stub.purgeCount, stub.purgeErr
+}
 
 func TestDashboardAPIUsesStableCompleteCounts(t *testing.T) {
 	stub := &adminContactServiceStub{dashboard: contacts.DashboardSummary{
@@ -92,6 +99,66 @@ func TestDashboardAPIUsesStableCompleteCounts(t *testing.T) {
 	response = serveAdminAPI(t, handler, http.MethodGet, "/api/admin/dashboard", "", true, false)
 	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "private") || strings.Contains(response.Body.String(), `"new"`) {
 		t.Fatalf("failed dashboard = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestDashboardGETIsSideEffectFreeAndPurgePOSTRequiresCSRF(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	clock := &apiContactClock{now: now.AddDate(0, 0, -31)}
+	repository := memory.NewContactRepository(clock.Now)
+	service := contacts.NewService(repository, clock, &apiContactIDs{values: []string{"contact-due"}})
+	created, err := service.Submit(ctx, contacts.Submission{
+		Name: "Mario Rossi", Email: "mario@example.test", Message: "Messaggio sufficientemente lungo", ConsentVersion: "privacy-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduled, err := service.ScheduleDeletion(ctx, created.ID, created.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.now = now
+	handler := newContactAPIHandler(t, service)
+
+	dashboard := serveAdminAPI(t, handler, http.MethodGet, "/api/admin/dashboard", "", true, false)
+	if dashboard.Code != http.StatusOK || !strings.Contains(dashboard.Body.String(), `"deletionScheduled":1`) {
+		t.Fatalf("GET dashboard = %d %q", dashboard.Code, dashboard.Body.String())
+	}
+	if _, err := repository.Get(ctx, scheduled.ID); err != nil {
+		t.Fatalf("GET dashboard deleted contact: %v", err)
+	}
+	for name, response := range map[string]*httptest.ResponseRecorder{
+		"unauthenticated": serveAdminAPI(t, handler, http.MethodPost, "/api/admin/contacts/purge-due", "", false, false),
+		"missing csrf":    serveAdminAPI(t, handler, http.MethodPost, "/api/admin/contacts/purge-due", "", true, false),
+	} {
+		if name == "unauthenticated" && response.Code != http.StatusUnauthorized || name == "missing csrf" && response.Code != http.StatusForbidden {
+			t.Fatalf("%s purge = %d %q", name, response.Code, response.Body.String())
+		}
+	}
+	if _, err := repository.Get(ctx, scheduled.ID); err != nil {
+		t.Fatalf("rejected purge deleted contact: %v", err)
+	}
+
+	purged := serveAdminAPI(t, handler, http.MethodPost, "/api/admin/contacts/purge-due", "", true, true)
+	if purged.Code != http.StatusOK || !strings.Contains(purged.Body.String(), `"purged":1`) {
+		t.Fatalf("POST purge = %d %q", purged.Code, purged.Body.String())
+	}
+	if _, err := repository.Get(ctx, scheduled.ID); !errors.Is(err, contacts.ErrNotFound) {
+		t.Fatalf("due contact remains after purge: %v", err)
+	}
+	dashboard = serveAdminAPI(t, handler, http.MethodGet, "/api/admin/dashboard", "", true, false)
+	if dashboard.Code != http.StatusOK || !strings.Contains(dashboard.Body.String(), `"deletionScheduled":0`) || !strings.Contains(dashboard.Body.String(), `"new":0`) {
+		t.Fatalf("GET dashboard after purge = %d %q", dashboard.Code, dashboard.Body.String())
+	}
+}
+
+func TestPurgeAPIMapsStorageFailureWithoutPrivateDetail(t *testing.T) {
+	stub := &adminContactServiceStub{purgeErr: errors.New("storage private detail")}
+	handler := newContactAPIHandler(t, stub)
+	response := serveAdminAPI(t, handler, http.MethodPost, "/api/admin/contacts/purge-due", "", true, true)
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "private detail") {
+		t.Fatalf("purge error = %d %q", response.Code, response.Body.String())
 	}
 }
 

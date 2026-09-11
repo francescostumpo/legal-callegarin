@@ -3,6 +3,7 @@ package contacts_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -111,7 +112,7 @@ func TestContactServiceRejectsInvalidTransitions(t *testing.T) {
 	}
 }
 
-func TestContactServiceAdminQueriesAndDashboardPurgeOnlyScheduledDue(t *testing.T) {
+func TestContactServiceDashboardIsSideEffectFreeAndPurgeOnlyDeletesScheduledDue(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -172,11 +173,18 @@ func TestContactServiceAdminQueriesAndDashboardPurgeOnlyScheduledDue(t *testing.
 	if err != nil {
 		t.Fatalf("Dashboard() error = %v", err)
 	}
-	if summary.New != 2 || summary.Read != 1 || summary.Archived != 1 || summary.DeletionScheduled != 0 || summary.RetentionReview != 1 || summary.Purged != 1 {
+	if summary.New != 3 || summary.Read != 1 || summary.Archived != 1 || summary.DeletionScheduled != 1 || summary.RetentionReview != 1 || summary.Purged != 0 {
 		t.Fatalf("Dashboard() = %#v", summary)
 	}
+	if _, err := repository.Get(ctx, purgeDue.ID); err != nil {
+		t.Fatalf("Dashboard() deleted due scheduled contact: %v", err)
+	}
+	deleted, err := service.PurgeDue(ctx, now)
+	if err != nil || deleted != 1 {
+		t.Fatalf("PurgeDue() = %d, %v", deleted, err)
+	}
 	if _, err := repository.Get(ctx, purgeDue.ID); !errors.Is(err, contacts.ErrNotFound) {
-		t.Fatalf("due scheduled contact still exists: %v", err)
+		t.Fatalf("due scheduled contact still exists after explicit purge: %v", err)
 	}
 	if _, err := repository.Get(ctx, retentionOnly.ID); err != nil {
 		t.Fatalf("retention-only contact was purged: %v", err)
@@ -208,6 +216,50 @@ func TestContactServiceDeletionScheduleTransitionsAreExplicit(t *testing.T) {
 	cancelled, err := service.CancelDeletion(ctx, scheduled.ID, scheduled.ETag)
 	if err != nil || cancelled.DeletionDueAt != nil || cancelled.State != contact.State {
 		t.Fatalf("CancelDeletion() = %#v, %v", cancelled, err)
+	}
+}
+
+func TestContactServiceDashboardAndPurgeTraverseMoreThanOneThousandContacts(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	clock := &contactClock{now: base}
+	repository := memory.NewContactRepository(clock.Now)
+	ids := make([]string, 1001)
+	for index := range ids {
+		ids[index] = fmt.Sprintf("large-%04d", index)
+	}
+	service := contacts.NewService(repository, clock, &contactIDs{values: ids})
+	created := make([]contacts.Contact, 0, len(ids))
+	for index := range ids {
+		contact, err := service.Submit(ctx, submissionFor("Large Person "+fmt.Sprint(index), "large@example.test"))
+		if err != nil {
+			t.Fatalf("Submit(%d) error = %v", index, err)
+		}
+		created = append(created, contact)
+	}
+	for _, index := range []int{0, len(created) - 1} {
+		if _, err := service.ScheduleDeletion(ctx, created[index].ID, created[index].ETag); err != nil {
+			t.Fatalf("ScheduleDeletion(%d) error = %v", index, err)
+		}
+	}
+
+	summary, err := service.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("Dashboard() error = %v", err)
+	}
+	if summary.New != len(created) || summary.DeletionScheduled != 2 {
+		t.Fatalf("Dashboard() = %#v", summary)
+	}
+	clock.now = base.AddDate(0, 0, 31)
+	purged, err := service.PurgeDue(ctx, clock.now)
+	if err != nil || purged != 2 {
+		t.Fatalf("PurgeDue() = %d, %v; want 2, nil", purged, err)
+	}
+	summary, err = service.Dashboard(ctx)
+	if err != nil || summary.New != len(created)-2 || summary.DeletionScheduled != 0 {
+		t.Fatalf("Dashboard(after purge) = %#v, %v", summary, err)
 	}
 }
 

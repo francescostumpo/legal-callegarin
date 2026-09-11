@@ -12,6 +12,10 @@ export type DashboardDTO = {
   purged: number
 }
 
+export type PurgeDTO = {
+  purged: number
+}
+
 export type ContactState = "new" | "read" | "archived"
 
 export type ContactSummaryDTO = {
@@ -42,6 +46,7 @@ export type ContactPageDTO = {
 type RequestOptions = {
   method?: "POST" | "DELETE"
   ifMatch?: string
+  signal?: AbortSignal
 }
 
 export type APIResult<T> = {
@@ -87,6 +92,7 @@ export class AdminClient {
       method: options.method,
       credentials: "same-origin",
       headers,
+      signal: options.signal,
     })
     if (response.status === 401 && !this.#transitionedToLogin) {
       this.#transitionedToLogin = true

@@ -68,41 +68,33 @@ func (repository *ContactRepository) List(ctx context.Context, options contacts.
 	if options.RetentionReview && repository.now == nil {
 		return contacts.ContactPage{}, fmt.Errorf("%w: clock is required for retention review", contacts.ErrValidation)
 	}
-	query := strings.ToLower(strings.TrimSpace(options.Query))
-
 	repository.mu.RLock()
 	items := make([]contacts.Contact, 0, len(repository.contacts))
 	for _, contact := range repository.contacts {
-		if options.State != nil && contact.State != *options.State {
-			continue
-		}
-		if options.RetentionReview && contact.ReviewDueAt.After(repository.now()) {
-			continue
-		}
-		if options.DeletionScheduled && contact.DeletionDueAt == nil {
-			continue
-		}
-		if query != "" && !contactMatches(contact, query) {
-			continue
-		}
 		items = append(items, cloneContact(contact))
 	}
 	repository.mu.RUnlock()
 	sort.Slice(items, func(left, right int) bool {
 		if items[left].CreatedAt.Equal(items[right].CreatedAt) {
-			return items[left].ID > items[right].ID
+			return items[left].ID < items[right].ID
 		}
 		return items[left].CreatedAt.After(items[right].CreatedAt)
 	})
 
-	start, err := contactCursorStart(items, options.Cursor)
+	start, err := contactKeysetStart(items, options.Cursor)
 	if err != nil {
 		return contacts.ContactPage{}, fmt.Errorf("%w: invalid cursor", contacts.ErrValidation)
 	}
 	end := min(start+limit, len(items))
-	page := contacts.ContactPage{Items: items[start:end]}
+	query := strings.ToLower(strings.TrimSpace(options.Query))
+	page := contacts.ContactPage{Items: make([]contacts.Contact, 0, end-start)}
+	for _, contact := range items[start:end] {
+		if contactMatchesOptions(contact, options, query, repository.now) {
+			page.Items = append(page.Items, contact)
+		}
+	}
 	if end < len(items) {
-		last := page.Items[len(page.Items)-1]
+		last := items[end-1]
 		page.NextCursor = encodeCursor(last.CreatedAt, last.ID)
 	}
 	return page, nil
@@ -156,7 +148,7 @@ func contactMatches(contact contacts.Contact, query string) bool {
 		strings.Contains(strings.ToLower(contact.Email), query)
 }
 
-func contactCursorStart(items []contacts.Contact, encoded string) (int, error) {
+func contactKeysetStart(items []contacts.Contact, encoded string) (int, error) {
 	if encoded == "" {
 		return 0, nil
 	}
@@ -165,11 +157,28 @@ func contactCursorStart(items []contacts.Contact, encoded string) (int, error) {
 		return 0, err
 	}
 	for index, item := range items {
-		if item.ID == cursor.ID && item.CreatedAt.Equal(cursor.CreatedAt) {
-			return index + 1, nil
+		if contactStrictlyAfter(item, cursor.CreatedAt, cursor.ID) {
+			return index, nil
 		}
 	}
-	return 0, contacts.ErrValidation
+	return len(items), nil
+}
+
+func contactStrictlyAfter(contact contacts.Contact, createdAt time.Time, id string) bool {
+	return contact.CreatedAt.Before(createdAt) || contact.CreatedAt.Equal(createdAt) && contact.ID > id
+}
+
+func contactMatchesOptions(contact contacts.Contact, options contacts.ListOptions, query string, now func() time.Time) bool {
+	if options.State != nil && contact.State != *options.State {
+		return false
+	}
+	if options.RetentionReview && contact.ReviewDueAt.After(now()) {
+		return false
+	}
+	if options.DeletionScheduled && contact.DeletionDueAt == nil {
+		return false
+	}
+	return query == "" || contactMatches(contact, query)
 }
 
 func cloneContact(contact contacts.Contact) contacts.Contact {

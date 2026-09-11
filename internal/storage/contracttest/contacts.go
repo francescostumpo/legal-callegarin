@@ -184,6 +184,94 @@ func ContactRepository(t *testing.T, factory func() contacts.Repository) {
 		}
 	})
 
+	t.Run("keyset cursor survives a boundary row leaving the filtered set", func(t *testing.T) {
+		repository := factory()
+		ctx := context.Background()
+		base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+		for index := range 5 {
+			id := fmt.Sprintf("keyset-%d", index)
+			fixture := contactFixture(id, "Keyset Person "+strconv.Itoa(index), base.Add(time.Duration(index)*time.Minute))
+			if _, err := repository.Create(ctx, fixture); err != nil {
+				t.Fatalf("Create(%q) error = %v", id, err)
+			}
+		}
+		state := contacts.StateNew
+		first, err := repository.List(ctx, contacts.ListOptions{State: &state, Limit: 2})
+		if err != nil || len(first.Items) != 2 || first.Items[0].ID != "keyset-4" || first.Items[1].ID != "keyset-3" || first.NextCursor == "" {
+			t.Fatalf("first List() = %#v, %v", first, err)
+		}
+		boundary := first.Items[1]
+		readAt := boundary.CreatedAt.Add(time.Second)
+		boundary.State = contacts.StateRead
+		boundary.ReadAt = &readAt
+		boundary.UpdatedAt = readAt
+		if _, err := repository.Update(ctx, boundary, boundary.ETag); err != nil {
+			t.Fatalf("Update(boundary) error = %v", err)
+		}
+
+		var ids []string
+		cursor := first.NextCursor
+		for cursor != "" {
+			page, err := repository.List(ctx, contacts.ListOptions{State: &state, Limit: 2, Cursor: cursor})
+			if err != nil {
+				t.Fatalf("List(cursor after boundary mutation) error = %v", err)
+			}
+			for _, item := range page.Items {
+				ids = append(ids, item.ID)
+			}
+			if page.NextCursor == cursor {
+				t.Fatalf("cursor did not progress: %q", cursor)
+			}
+			cursor = page.NextCursor
+		}
+		want := []string{"keyset-2", "keyset-1", "keyset-0"}
+		if fmt.Sprint(ids) != fmt.Sprint(want) {
+			t.Fatalf("continued IDs = %v, want %v", ids, want)
+		}
+	})
+
+	t.Run("pagination continues beyond one thousand contacts", func(t *testing.T) {
+		repository := factory()
+		ctx := context.Background()
+		base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+		const total = 1001
+		for index := range total {
+			id := fmt.Sprintf("large-%04d", index)
+			fixture := contactFixture(id, "Large Person "+strconv.Itoa(index), base.Add(time.Duration(index)*time.Second))
+			if _, err := repository.Create(ctx, fixture); err != nil {
+				t.Fatalf("Create(%q) error = %v", id, err)
+			}
+		}
+
+		seen := make(map[string]bool, total)
+		cursor := ""
+		for {
+			page, err := repository.List(ctx, contacts.ListOptions{Limit: 100, Cursor: cursor})
+			if err != nil {
+				t.Fatalf("List(cursor=%q) error = %v", cursor, err)
+			}
+			if len(page.Items) > 100 {
+				t.Fatalf("page contains %d items, want at most 100", len(page.Items))
+			}
+			for _, item := range page.Items {
+				if seen[item.ID] {
+					t.Fatalf("duplicate contact %q", item.ID)
+				}
+				seen[item.ID] = true
+			}
+			if page.NextCursor == "" {
+				break
+			}
+			if page.NextCursor == cursor {
+				t.Fatalf("cursor did not progress: %q", cursor)
+			}
+			cursor = page.NextCursor
+		}
+		if len(seen) != total {
+			t.Fatalf("listed %d contacts, want %d", len(seen), total)
+		}
+	})
+
 	contactPaginationLimits(t, factory)
 }
 

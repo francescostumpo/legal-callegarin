@@ -10,7 +10,6 @@ import (
 const (
 	MaxAdminSearchRunes = 120
 	MaxAdminCursorBytes = 1024
-	MaxAdminContactScan = 1000
 )
 
 type ListOptions struct {

@@ -21,6 +21,10 @@ type dashboardDTO struct {
 	Purged            int `json:"purged"`
 }
 
+type purgeDTO struct {
+	Purged int `json:"purged"`
+}
+
 type contactSummaryDTO struct {
 	ID            string         `json:"id"`
 	Name          string         `json:"name"`
@@ -68,6 +72,19 @@ func (handler *handler) dashboardGET(response http.ResponseWriter, request *http
 		New: summary.New, Read: summary.Read, Archived: summary.Archived,
 		DeletionScheduled: summary.DeletionScheduled, RetentionReview: summary.RetentionReview, Purged: summary.Purged,
 	})
+}
+
+func (handler *handler) purgeDuePOST(response http.ResponseWriter, request *http.Request) {
+	if handler.contacts == nil {
+		writeJSONError(response, http.StatusServiceUnavailable, "contacts temporarily unavailable")
+		return
+	}
+	purged, err := handler.contacts.PurgeDue(request.Context(), handler.now().UTC())
+	if err != nil {
+		writeContactServiceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, purgeDTO{Purged: purged})
 }
 
 func (handler *handler) contactsGET(response http.ResponseWriter, request *http.Request) {

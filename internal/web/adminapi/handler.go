@@ -123,6 +123,7 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("DELETE /api/admin/session", instance.sessionDELETE)
 	mux.HandleFunc("GET /api/admin/dashboard", instance.dashboardGET)
 	mux.HandleFunc("GET /api/admin/contacts", instance.contactsGET)
+	mux.HandleFunc("POST /api/admin/contacts/purge-due", instance.purgeDuePOST)
 	mux.HandleFunc("GET /api/admin/contacts/{id}", instance.contactGET)
 	mux.HandleFunc("POST /api/admin/contacts/{id}/{action}", instance.contactPOST)
 	mux.HandleFunc("/api/admin", instance.apiNotFound)

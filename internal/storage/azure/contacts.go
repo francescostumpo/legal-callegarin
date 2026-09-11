@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -97,15 +96,25 @@ func (repository *ContactRepository) List(ctx context.Context, options contacts.
 	if options.RetentionReview && repository.now == nil {
 		return contacts.ContactPage{}, fmt.Errorf("%w: clock is required for retention review", contacts.ErrValidation)
 	}
-	entities, err := repository.table.List(ctx, "PartitionKey eq 'contacts'", contacts.MaxAdminContactScan+1)
+	var cursor contactPageCursor
+	var continuation *tableContinuation
+	if options.Cursor != "" {
+		cursor, err = decodeContactPageCursor(options.Cursor)
+		if err != nil {
+			return contacts.ContactPage{}, fmt.Errorf("%w: invalid cursor", contacts.ErrValidation)
+		}
+		continuation = &tableContinuation{PartitionKey: cursor.NextPartitionKey, RowKey: cursor.NextRowKey}
+	}
+	entities, next, err := repository.table.ListPage(ctx, "PartitionKey eq 'contacts'", int32(limit), continuation)
 	if err != nil {
 		return contacts.ContactPage{}, mapContactError(err)
 	}
-	if len(entities) > contacts.MaxAdminContactScan {
-		return contacts.ContactPage{}, fmt.Errorf("%w: active contact set exceeds %d", contacts.ErrValidation, contacts.MaxAdminContactScan)
+	if next != nil && continuation != nil && *next == *continuation {
+		return contacts.ContactPage{}, errors.New("contact storage continuation did not advance")
 	}
 	query := strings.ToLower(strings.TrimSpace(options.Query))
-	items := make([]contacts.Contact, 0, len(entities))
+	page := contacts.ContactPage{Items: make([]contacts.Contact, 0, len(entities))}
+	boundary := cursor
 	for _, entity := range entities {
 		var header entityHeader
 		if err := decodeHeader(entity.Value, &header); err != nil {
@@ -118,35 +127,20 @@ func (repository *ContactRepository) List(ctx context.Context, options contacts.
 		if err != nil {
 			return contacts.ContactPage{}, err
 		}
-		if options.State != nil && contact.State != *options.State {
+		if options.Cursor != "" && !contactStrictlyAfter(contact, cursor.CreatedAt, cursor.ID) {
 			continue
 		}
-		if options.RetentionReview && contact.ReviewDueAt.After(repository.now()) {
-			continue
+		boundary.CreatedAt = contact.CreatedAt
+		boundary.ID = contact.ID
+		if contactMatchesOptions(contact, options, query, repository.now) {
+			page.Items = append(page.Items, contact)
 		}
-		if options.DeletionScheduled && contact.DeletionDueAt == nil {
-			continue
-		}
-		if query != "" && !contactMatches(contact, query) {
-			continue
-		}
-		items = append(items, contact)
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
-			return items[i].ID > items[j].ID
+	if next != nil {
+		if boundary.CreatedAt.IsZero() || boundary.ID == "" {
+			return contacts.ContactPage{}, errors.New("contact storage page did not provide a keyset boundary")
 		}
-		return items[i].CreatedAt.After(items[j].CreatedAt)
-	})
-	start, err := cursorStartContacts(items, options.Cursor)
-	if err != nil {
-		return contacts.ContactPage{}, fmt.Errorf("%w: invalid cursor", contacts.ErrValidation)
-	}
-	end := min(start+limit, len(items))
-	page := contacts.ContactPage{Items: items[start:end]}
-	if end < len(items) {
-		last := page.Items[len(page.Items)-1]
-		page.NextCursor = encodeCursor(last.CreatedAt, last.ID)
+		page.NextCursor = encodeContactPageCursor(boundary, *next)
 	}
 	return page, nil
 }
@@ -230,20 +224,22 @@ func (repository *ContactRepository) Delete(ctx context.Context, id, expectedETa
 func contactMatches(contact contacts.Contact, query string) bool {
 	return strings.Contains(strings.ToLower(contact.Name), query) || strings.Contains(strings.ToLower(contact.Email), query)
 }
-func cursorStartContacts(items []contacts.Contact, value string) (int, error) {
-	if value == "" {
-		return 0, nil
+
+func contactStrictlyAfter(contact contacts.Contact, createdAt time.Time, id string) bool {
+	return contact.CreatedAt.Before(createdAt) || contact.CreatedAt.Equal(createdAt) && contact.ID > id
+}
+
+func contactMatchesOptions(contact contacts.Contact, options contacts.ListOptions, query string, now func() time.Time) bool {
+	if options.State != nil && contact.State != *options.State {
+		return false
 	}
-	cursor, err := decodeCursor(value)
-	if err != nil {
-		return 0, err
+	if options.RetentionReview && contact.ReviewDueAt.After(now()) {
+		return false
 	}
-	for index, item := range items {
-		if item.ID == cursor.ID && item.CreatedAt.Equal(cursor.CreatedAt) {
-			return index + 1, nil
-		}
+	if options.DeletionScheduled && contact.DeletionDueAt == nil {
+		return false
 	}
-	return 0, contacts.ErrValidation
+	return query == "" || contactMatches(contact, query)
 }
 func mapContactError(err error) error {
 	switch {
