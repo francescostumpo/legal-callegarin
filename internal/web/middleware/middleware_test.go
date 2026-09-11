@@ -3,6 +3,7 @@ package middleware
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -179,23 +180,143 @@ func TestPublicResponseIsNotBufferedAndRecorderPreservesSemantics(t *testing.T) 
 	}
 }
 
+func TestPublicRecorderPreservesExactOptionalInterfaceSet(t *testing.T) {
+	tests := map[string]struct {
+		writer   func() http.ResponseWriter
+		flusher  bool
+		hijacker bool
+		pusher   bool
+		reader   bool
+	}{
+		"minimal": {
+			writer: func() http.ResponseWriter { return newMinimalResponseWriter() },
+		},
+		"flusher only": {
+			writer: func() http.ResponseWriter {
+				return &flushOnlyResponseWriter{minimalResponseWriter: newMinimalResponseWriter()}
+			},
+			flusher: true,
+		},
+		"hijacker and pusher": {
+			writer: func() http.ResponseWriter {
+				return &hijackPushResponseWriter{minimalResponseWriter: newMinimalResponseWriter()}
+			},
+			hijacker: true,
+			pusher:   true,
+		},
+		"reader-from only": {
+			writer: func() http.ResponseWriter {
+				return &readerFromOnlyResponseWriter{minimalResponseWriter: newMinimalResponseWriter()}
+			},
+			reader: true,
+		},
+	}
+	for name, testCase := range tests {
+		t.Run(name, func(t *testing.T) {
+			underlying := testCase.writer()
+			base := baseResponseWriter(underlying)
+			handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				unwrapper, ok := response.(interface{ Unwrap() http.ResponseWriter })
+				if !ok || unwrapper.Unwrap() != underlying {
+					t.Fatal("public recorder does not unwrap to the underlying writer")
+				}
+				if !testCase.flusher {
+					if err := http.NewResponseController(response).Flush(); !errors.Is(err, http.ErrNotSupported) {
+						t.Fatalf("unsupported ResponseController.Flush error = %v", err)
+					}
+					if base.status != 0 {
+						t.Fatalf("unsupported flush committed status %d", base.status)
+					}
+				}
+				assertOptionalInterfaces(t, response, testCase.flusher, testCase.hijacker, testCase.pusher, testCase.reader)
+
+				response.WriteHeader(http.StatusCreated)
+				response.WriteHeader(http.StatusTeapot)
+				_, _ = response.Write([]byte("visible"))
+				if testCase.flusher {
+					response.(http.Flusher).Flush()
+				}
+				if testCase.hijacker {
+					connection, _, err := response.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Fatalf("Hijack: %v", err)
+					}
+					_ = connection.Close()
+				}
+				if testCase.pusher {
+					if err := response.(http.Pusher).Push("/asset", nil); err != nil {
+						t.Fatalf("Push: %v", err)
+					}
+				}
+				if testCase.reader {
+					if _, err := response.(io.ReaderFrom).ReadFrom(&onlyReader{data: []byte("-read-from")}); err != nil {
+						t.Fatalf("ReadFrom: %v", err)
+					}
+				}
+			}), Options{SessionKey: []byte("0123456789abcdef0123456789abcdef"), PublicBaseURL: "https://studio.example.test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			handler.ServeHTTP(underlying, httptest.NewRequest(http.MethodGet, "https://studio.example.test/health/live", nil))
+			wantBody := "visible"
+			if testCase.reader {
+				wantBody += "-read-from"
+			}
+			if base.status != http.StatusCreated || base.body.String() != wantBody {
+				t.Fatalf("response = status %d body %q", base.status, base.body.String())
+			}
+			switch writer := underlying.(type) {
+			case *flushOnlyResponseWriter:
+				if !writer.flushed {
+					t.Fatal("supported Flush was not forwarded")
+				}
+			case *hijackPushResponseWriter:
+				if !writer.hijacked || !writer.pushed {
+					t.Fatalf("supported calls forwarded: hijack=%t push=%t", writer.hijacked, writer.pushed)
+				}
+			case *readerFromOnlyResponseWriter:
+				if !writer.readFrom {
+					t.Fatal("supported ReadFrom was not forwarded")
+				}
+			}
+		})
+	}
+}
+
+func assertOptionalInterfaces(t *testing.T, response http.ResponseWriter, flusher, hijacker, pusher, reader bool) {
+	t.Helper()
+	if _, ok := response.(http.Flusher); ok != flusher {
+		t.Errorf("Flusher exposed = %t, want %t", ok, flusher)
+	}
+	if _, ok := response.(http.Hijacker); ok != hijacker {
+		t.Errorf("Hijacker exposed = %t, want %t", ok, hijacker)
+	}
+	if _, ok := response.(http.Pusher); ok != pusher {
+		t.Errorf("Pusher exposed = %t, want %t", ok, pusher)
+	}
+	if _, ok := response.(io.ReaderFrom); ok != reader {
+		t.Errorf("ReaderFrom exposed = %t, want %t", ok, reader)
+	}
+}
+
 func TestResponseRecordersHonorImplicitStatusRepeatedHeaderAndAdminNoStreaming(t *testing.T) {
 	underlying := newInterfaceResponseWriter()
-	recorder := &captureResponseWriter{ResponseWriter: underlying}
+	recorder, capture := newCaptureResponseWriter(underlying)
 	if _, err := recorder.Write([]byte("implicit")); err != nil {
 		t.Fatal(err)
 	}
 	recorder.WriteHeader(http.StatusCreated)
-	if recorder.responseStatus() != http.StatusOK || underlying.status != http.StatusOK {
-		t.Fatalf("implicit status = recorder %d underlying %d", recorder.responseStatus(), underlying.status)
+	if capture.responseStatus() != http.StatusOK || underlying.status != http.StatusOK {
+		t.Fatalf("implicit status = recorder %d underlying %d", capture.responseStatus(), underlying.status)
 	}
 
 	underlying = newInterfaceResponseWriter()
-	recorder = &captureResponseWriter{ResponseWriter: underlying}
+	recorder, capture = newCaptureResponseWriter(underlying)
 	recorder.WriteHeader(http.StatusCreated)
 	recorder.WriteHeader(http.StatusTeapot)
-	if recorder.responseStatus() != http.StatusCreated || underlying.status != http.StatusCreated {
-		t.Fatalf("repeated WriteHeader changed status: recorder %d underlying %d", recorder.responseStatus(), underlying.status)
+	if capture.responseStatus() != http.StatusCreated || underlying.status != http.StatusCreated {
+		t.Fatalf("repeated WriteHeader changed status: recorder %d underlying %d", capture.responseStatus(), underlying.status)
 	}
 
 	buffered := newBoundedAdminResponse(make(http.Header), 128)
@@ -245,6 +366,87 @@ type interfaceResponseWriter struct {
 	body                                strings.Builder
 	status                              int
 	flushed, hijacked, pushed, readFrom bool
+}
+
+type minimalResponseWriter struct {
+	header http.Header
+	body   strings.Builder
+	status int
+}
+
+func newMinimalResponseWriter() *minimalResponseWriter {
+	return &minimalResponseWriter{header: make(http.Header)}
+}
+func (writer *minimalResponseWriter) Header() http.Header { return writer.header }
+func (writer *minimalResponseWriter) WriteHeader(status int) {
+	if writer.status == 0 {
+		writer.status = status
+	}
+}
+func (writer *minimalResponseWriter) Write(value []byte) (int, error) {
+	if writer.status == 0 {
+		writer.status = http.StatusOK
+	}
+	return writer.body.Write(value)
+}
+
+type flushOnlyResponseWriter struct {
+	*minimalResponseWriter
+	flushed bool
+}
+
+func (writer *flushOnlyResponseWriter) Flush() {
+	if writer.status == 0 {
+		writer.status = http.StatusOK
+	}
+	writer.flushed = true
+}
+
+type hijackPushResponseWriter struct {
+	*minimalResponseWriter
+	hijacked bool
+	pushed   bool
+}
+
+func (writer *hijackPushResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	writer.hijacked = true
+	left, right := net.Pipe()
+	_ = right.Close()
+	return left, bufio.NewReadWriter(bufio.NewReader(left), bufio.NewWriter(left)), nil
+}
+func (writer *hijackPushResponseWriter) Push(string, *http.PushOptions) error {
+	writer.pushed = true
+	return nil
+}
+
+type readerFromOnlyResponseWriter struct {
+	*minimalResponseWriter
+	readFrom bool
+}
+
+func (writer *readerFromOnlyResponseWriter) ReadFrom(reader io.Reader) (int64, error) {
+	writer.readFrom = true
+	value, err := io.ReadAll(reader)
+	if err != nil {
+		return 0, err
+	}
+	written, err := writer.Write(value)
+	return int64(written), err
+}
+
+func baseResponseWriter(writer http.ResponseWriter) *minimalResponseWriter {
+	switch writer := writer.(type) {
+	case *minimalResponseWriter:
+		return writer
+	case *flushOnlyResponseWriter:
+		return writer.minimalResponseWriter
+	case *hijackPushResponseWriter:
+		return writer.minimalResponseWriter
+	case *readerFromOnlyResponseWriter:
+		return writer.minimalResponseWriter
+	default:
+		panic("unsupported test response writer")
+	}
 }
 
 func newInterfaceResponseWriter() *interfaceResponseWriter {

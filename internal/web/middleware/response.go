@@ -1,15 +1,16 @@
 package middleware
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/felixge/httpsnoop"
 )
 
 const defaultAdminResponseLimit = int64(2 << 20)
@@ -117,8 +118,8 @@ func accessLog(next http.Handler, logger *slog.Logger, now func() time.Time) htt
 		started := now()
 		metrics, ok := response.(responseMetrics)
 		if !ok {
-			captured := &captureResponseWriter{ResponseWriter: response}
-			response = captured
+			var captured *responseCapture
+			response, captured = newCaptureResponseWriter(response)
 			metrics = captured
 		}
 		defer func() {
@@ -149,74 +150,66 @@ func accessLog(next http.Handler, logger *slog.Logger, now func() time.Time) htt
 	})
 }
 
-// captureResponseWriter records status without buffering public responses. It
-// exposes Unwrap for ResponseController and forwards the optional interfaces
-// used by the standard HTTP stack when the underlying writer supports them.
-type captureResponseWriter struct {
-	http.ResponseWriter
+// responseCapture records public response status without buffering. httpsnoop
+// preserves the underlying writer's exact optional-interface set and exposes
+// Unwrap for ResponseController.
+type responseCapture struct {
+	mu     sync.Mutex
 	status int
 }
 
-func (writer *captureResponseWriter) Unwrap() http.ResponseWriter { return writer.ResponseWriter }
-
-func (writer *captureResponseWriter) WriteHeader(status int) {
-	if writer.status != 0 {
-		return
-	}
-	writer.status = status
-	writer.ResponseWriter.WriteHeader(status)
+func newCaptureResponseWriter(response http.ResponseWriter) (http.ResponseWriter, *responseCapture) {
+	capture := &responseCapture{}
+	wrapped := httpsnoop.Wrap(response, httpsnoop.Hooks{
+		WriteHeader: func(next httpsnoop.WriteHeaderFunc) httpsnoop.WriteHeaderFunc {
+			return func(status int) {
+				if capture.recordStatus(status) {
+					next(status)
+				}
+			}
+		},
+		Write: func(next httpsnoop.WriteFunc) httpsnoop.WriteFunc {
+			return func(value []byte) (int, error) {
+				capture.recordStatus(http.StatusOK)
+				return next(value)
+			}
+		},
+		Flush: func(next httpsnoop.FlushFunc) httpsnoop.FlushFunc {
+			return func() {
+				capture.recordStatus(http.StatusOK)
+				next()
+			}
+		},
+		ReadFrom: func(next httpsnoop.ReadFromFunc) httpsnoop.ReadFromFunc {
+			return func(reader io.Reader) (int64, error) {
+				capture.recordStatus(http.StatusOK)
+				return next(reader)
+			}
+		},
+	})
+	return wrapped, capture
 }
 
-func (writer *captureResponseWriter) Write(value []byte) (int, error) {
-	if writer.status == 0 {
-		writer.WriteHeader(http.StatusOK)
+func (capture *responseCapture) recordStatus(status int) bool {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.status != 0 {
+		return false
 	}
-	return writer.ResponseWriter.Write(value)
+	capture.status = status
+	return true
 }
 
-func (writer *captureResponseWriter) responseStatus() int {
-	if writer.status == 0 {
+func (capture *responseCapture) responseStatus() int {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.status == 0 {
 		return http.StatusOK
 	}
-	return writer.status
+	return capture.status
 }
 
-func (*captureResponseWriter) responseOverflowed() bool { return false }
-
-func (writer *captureResponseWriter) Flush() {
-	if writer.status == 0 {
-		writer.WriteHeader(http.StatusOK)
-	}
-	_ = http.NewResponseController(writer.ResponseWriter).Flush()
-}
-
-func (writer *captureResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return http.NewResponseController(writer.ResponseWriter).Hijack()
-}
-
-func (writer *captureResponseWriter) Push(target string, options *http.PushOptions) error {
-	current := writer.ResponseWriter
-	for {
-		if pusher, ok := current.(http.Pusher); ok {
-			return pusher.Push(target, options)
-		}
-		unwrapper, ok := current.(interface{ Unwrap() http.ResponseWriter })
-		if !ok {
-			return http.ErrNotSupported
-		}
-		current = unwrapper.Unwrap()
-	}
-}
-
-func (writer *captureResponseWriter) ReadFrom(reader io.Reader) (int64, error) {
-	if writer.status == 0 {
-		writer.WriteHeader(http.StatusOK)
-	}
-	if readerFrom, ok := writer.ResponseWriter.(io.ReaderFrom); ok {
-		return readerFrom.ReadFrom(reader)
-	}
-	return io.Copy(writer.ResponseWriter, reader)
-}
+func (*responseCapture) responseOverflowed() bool { return false }
 
 func applySecurityHeaders(header http.Header, path string) {
 	header.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'")
