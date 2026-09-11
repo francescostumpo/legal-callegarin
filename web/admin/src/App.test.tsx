@@ -166,7 +166,9 @@ describe("admin shell", () => {
     vi.stubGlobal("fetch", fetchMock)
     render(<App />)
 
-    expect(await screen.findByText("Caricamento contatti…")).toBeInTheDocument()
+    expect(
+      await screen.findByText("Ricerca dei contatti in corso…"),
+    ).toBeInTheDocument()
     await waitFor(() => expect(resolveList).toBeTypeOf("function"))
     resolveList!(jsonResponse({ items: [], nextCursor: "" }))
     expect(
@@ -286,11 +288,226 @@ describe("admin shell", () => {
         expect(screen.queryByText("Old Result")).not.toBeInTheDocument()
         expect(screen.queryByRole("alert")).not.toBeInTheDocument()
         expect(
-          screen.queryByText("Caricamento contatti…"),
+          screen.queryByText("Ricerca dei contatti in corso…"),
         ).not.toBeInTheDocument()
       })
     },
   )
+
+  it("automatically advances a sparse initial page without showing a definitive empty state", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    let resolveMatch: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return Promise.resolve(
+          jsonResponse({ username: "admin", csrfToken: "csrf" }),
+        )
+      }
+      if (path === "/api/admin/contacts") {
+        return Promise.resolve(
+          jsonResponse({ items: [], nextCursor: "sparse-1" }),
+        )
+      }
+      if (path === "/api/admin/contacts?cursor=sparse-1") {
+        return new Promise<Response>((resolve) => {
+          resolveMatch = resolve
+        })
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+
+    await waitFor(() => expect(resolveMatch).toBeTypeOf("function"))
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Ricerca dei contatti in corso…",
+    )
+    expect(
+      screen.queryByText("Nessun contatto corrisponde ai filtri selezionati."),
+    ).not.toBeInTheDocument()
+
+    resolveMatch!(
+      jsonResponse({
+        items: [contactFixture({ id: "match", name: "Sparse Match" })],
+        nextCursor: "",
+      }),
+    )
+    expect(await screen.findByText("Sparse Match")).toBeInTheDocument()
+    expect(
+      screen.queryByText("Nessun contatto corrisponde ai filtri selezionati."),
+    ).not.toBeInTheDocument()
+  })
+
+  it("advances through multiple sparse pages before showing the exhausted empty state", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return jsonResponse({ username: "admin", csrfToken: "csrf" })
+      }
+      if (path === "/api/admin/contacts") {
+        return jsonResponse({ items: [], nextCursor: "empty-1" })
+      }
+      if (path === "/api/admin/contacts?cursor=empty-1") {
+        return jsonResponse({ items: [], nextCursor: "empty-2" })
+      }
+      if (path === "/api/admin/contacts?cursor=empty-2") {
+        return jsonResponse({ items: [], nextCursor: "" })
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+
+    expect(
+      await screen.findByText(
+        "Nessun contatto corrisponde ai filtri selezionati.",
+      ),
+    ).toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.filter(([path]) =>
+        String(path).startsWith("/api/admin/contacts"),
+      ),
+    ).toHaveLength(3)
+    expect(screen.queryByRole("status")).not.toBeInTheDocument()
+  })
+
+  it("stops a non-progressing sparse cursor with an honest error", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return jsonResponse({ username: "admin", csrfToken: "csrf" })
+      }
+      if (path === "/api/admin/contacts") {
+        return jsonResponse({ items: [], nextCursor: "repeat" })
+      }
+      if (path === "/api/admin/contacts?cursor=repeat") {
+        return jsonResponse({ items: [], nextCursor: "repeat" })
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Impossibile continuare: paginazione non valida",
+    )
+    expect(
+      fetchMock.mock.calls.filter(([path]) =>
+        String(path).startsWith("/api/admin/contacts"),
+      ),
+    ).toHaveLength(2)
+    expect(
+      screen.queryByText("Nessun contatto corrisponde ai filtri selezionati."),
+    ).not.toBeInTheDocument()
+  })
+
+  it("aborts and ignores an old sparse chain after the query changes", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    let resolveOld: ((response: Response) => void) | undefined
+    let oldSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return Promise.resolve(
+          jsonResponse({ username: "admin", csrfToken: "csrf" }),
+        )
+      }
+      if (path === "/api/admin/contacts") {
+        return Promise.resolve(jsonResponse({ items: [], nextCursor: "" }))
+      }
+      if (path === "/api/admin/contacts?q=vecchia") {
+        return Promise.resolve(jsonResponse({ items: [], nextCursor: "old-1" }))
+      }
+      if (path === "/api/admin/contacts?q=vecchia&cursor=old-1") {
+        oldSignal = init?.signal ?? undefined
+        return new Promise<Response>((resolve) => {
+          resolveOld = resolve
+        })
+      }
+      if (path === "/api/admin/contacts?q=attuale") {
+        return Promise.resolve(
+          jsonResponse({
+            items: [contactFixture({ id: "current", name: "Current Sparse" })],
+            nextCursor: "",
+          }),
+        )
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+
+    expect(
+      await screen.findByText(
+        "Nessun contatto corrisponde ai filtri selezionati.",
+      ),
+    ).toBeInTheDocument()
+    const search = screen.getByRole("searchbox", {
+      name: "Cerca per nome o email",
+    })
+    fireEvent.change(search, { target: { value: "vecchia" } })
+    await waitFor(() => expect(resolveOld).toBeTypeOf("function"))
+    fireEvent.change(search, { target: { value: "attuale" } })
+
+    expect(await screen.findByText("Current Sparse")).toBeInTheDocument()
+    expect(oldSignal?.aborted).toBe(true)
+    resolveOld!(
+      jsonResponse({
+        items: [contactFixture({ id: "old", name: "Old Sparse" })],
+        nextCursor: "",
+      }),
+    )
+    await waitFor(() => {
+      expect(screen.getByText("Current Sparse")).toBeInTheDocument()
+      expect(screen.queryByText("Old Sparse")).not.toBeInTheDocument()
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    })
+  })
+
+  it("skips sparse load-more pages and appends only unique contacts", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    const existing = contactFixture({ id: "existing", name: "Existing" })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return jsonResponse({ username: "admin", csrfToken: "csrf" })
+      }
+      if (path === "/api/admin/contacts") {
+        return jsonResponse({ items: [existing], nextCursor: "more-1" })
+      }
+      if (path === "/api/admin/contacts?cursor=more-1") {
+        return jsonResponse({ items: [], nextCursor: "more-2" })
+      }
+      if (path === "/api/admin/contacts?cursor=more-2") {
+        return jsonResponse({
+          items: [
+            existing,
+            contactFixture({ id: "additional", name: "Additional" }),
+          ],
+          nextCursor: "",
+        })
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+
+    expect(await screen.findByText("Existing")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Carica altri" }))
+    expect(await screen.findByText("Additional")).toBeInTheDocument()
+    expect(screen.getAllByText("Existing")).toHaveLength(1)
+    expect(
+      screen.queryByRole("button", { name: "Carica altri" }),
+    ).not.toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.filter(([path]) =>
+        String(path).startsWith("/api/admin/contacts"),
+      ),
+    ).toHaveLength(3)
+  })
 
   it("opens a new contact with an explicit read mutation and uses CSRF and If-Match", async () => {
     window.history.replaceState({}, "", "/admin/contatti/contact-1")

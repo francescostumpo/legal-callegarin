@@ -329,6 +329,21 @@ type ListState = {
   error?: string
 }
 
+function appendUniqueContacts(
+  current: ContactSummaryDTO[],
+  incoming: ContactSummaryDTO[],
+): ContactSummaryDTO[] {
+  const ids = new Set(current.map((contact) => contact.id))
+  return [
+    ...current,
+    ...incoming.filter((contact) => {
+      if (ids.has(contact.id)) return false
+      ids.add(contact.id)
+      return true
+    }),
+  ]
+}
+
 function ContactList({ client }: { client: AdminClient }) {
   const [searchParams] = useSearchParams()
   const [query, setQuery] = useState("")
@@ -348,6 +363,7 @@ function ContactList({ client }: { client: AdminClient }) {
   })
   const requestController = useRef<AbortController>(undefined)
   const requestGeneration = useRef(0)
+  const consumedCursors = useRef(new Set<string>())
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 300)
@@ -361,29 +377,53 @@ function ContactList({ client }: { client: AdminClient }) {
       const controller = new AbortController()
       requestController.current = controller
       setList((current) => ({ ...current, loading: true, error: undefined }))
-      const params = new URLSearchParams()
-      if (debouncedQuery) params.set("q", debouncedQuery)
-      if (stateFilter) params.set("state", stateFilter)
-      if (cursor) params.set("cursor", cursor)
-      if (retentionReview) params.set("retentionReview", "true")
-      if (deletionScheduled) params.set("deletionScheduled", "true")
-      const suffix = params.size > 0 ? `?${params.toString()}` : ""
+      const seenCursors = append
+        ? new Set(consumedCursors.current)
+        : new Set<string>()
+      let pageCursor = cursor
       try {
-        const { data } = await client.fetchJSON<ContactPageDTO>(
-          `/api/admin/contacts${suffix}`,
-          { signal: controller.signal },
-        )
-        if (
-          controller.signal.aborted ||
-          generation !== requestGeneration.current
-        ) {
-          return
+        for (;;) {
+          if (pageCursor) seenCursors.add(pageCursor)
+          const params = new URLSearchParams()
+          if (debouncedQuery) params.set("q", debouncedQuery)
+          if (stateFilter) params.set("state", stateFilter)
+          if (pageCursor) params.set("cursor", pageCursor)
+          if (retentionReview) params.set("retentionReview", "true")
+          if (deletionScheduled) params.set("deletionScheduled", "true")
+          const suffix = params.size > 0 ? `?${params.toString()}` : ""
+          const { data } = await client.fetchJSON<ContactPageDTO>(
+            `/api/admin/contacts${suffix}`,
+            { signal: controller.signal },
+          )
+          if (
+            controller.signal.aborted ||
+            generation !== requestGeneration.current
+          ) {
+            return
+          }
+          if (data.nextCursor && seenCursors.has(data.nextCursor)) {
+            consumedCursors.current = seenCursors
+            setList((current) => ({
+              ...current,
+              loading: false,
+              nextCursor: "",
+              error: "Impossibile continuare: paginazione non valida",
+            }))
+            return
+          }
+          if (data.items.length > 0 || data.nextCursor === "") {
+            consumedCursors.current = seenCursors
+            setList((current) => ({
+              loading: false,
+              items: append
+                ? appendUniqueContacts(current.items, data.items)
+                : data.items,
+              nextCursor: data.nextCursor,
+            }))
+            return
+          }
+          pageCursor = data.nextCursor
         }
-        setList((current) => ({
-          loading: false,
-          items: append ? [...current.items, ...data.items] : data.items,
-          nextCursor: data.nextCursor,
-        }))
       } catch {
         if (
           controller.signal.aborted ||
@@ -455,9 +495,16 @@ function ContactList({ client }: { client: AdminClient }) {
           Revisione conservazione
         </label>
       </div>
-      {list.loading ? <p>Caricamento contatti…</p> : null}
+      {list.loading ? (
+        <p aria-live="polite" role="status">
+          Ricerca dei contatti in corso…
+        </p>
+      ) : null}
       {list.error ? <p role="alert">{list.error}</p> : null}
-      {!list.loading && !list.error && list.items.length === 0 ? (
+      {!list.loading &&
+      !list.error &&
+      list.items.length === 0 &&
+      !list.nextCursor ? (
         <div className="empty-card">
           <h2>Nessun risultato</h2>
           <p>Nessun contatto corrisponde ai filtri selezionati.</p>
