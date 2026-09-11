@@ -2,7 +2,8 @@
 .superpowers/
 node_modules/
 internal/webassets/admin/dist/
-/bin/
+/bin/*
+!/bin/.keep
 coverage/
 *.log
 .env

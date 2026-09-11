@@ -1,9 +1,12 @@
 {{define "base"}}<!doctype html>
 <html lang="it">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{.Title}}</title>
   </head>
-  <body>{{block "content" .}}{{end}}</body>
-</html>{{end}}
+  <body>
+    {{block "content" .}}{{end}}
+  </body>
+</html>
+{{end}}

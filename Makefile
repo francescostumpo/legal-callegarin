@@ -15,7 +15,10 @@ check:
 	go vet ./...
 	go tool staticcheck ./...
 	go test ./...
+	node --test scripts/foundation-config.test.mjs
+	./scripts/check-clean-build.sh
 	npm ci
+	npm run format:check
 	npm run typecheck
 	npm test -- --run
 	npm run build

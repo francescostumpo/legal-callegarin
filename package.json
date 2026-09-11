@@ -8,10 +8,13 @@
     "web/admin"
   ],
   "devDependencies": {
-    "jsdom": "27.4.0"
+    "jsdom": "27.4.0",
+    "prettier": "3.9.6"
   },
   "scripts": {
     "build": "npm run build --workspace=@legal-callegarin/admin",
+    "format": "prettier --write \"*.{json,md}\" \"scripts/**/*.mjs\" \"web/admin/**/*.{ts,tsx,html,css,json,md}\" \"internal/webassets/**/*.{html,css}\"",
+    "format:check": "prettier --check \"*.{json,md}\" \"scripts/**/*.mjs\" \"web/admin/**/*.{ts,tsx,html,css,json,md}\" \"internal/webassets/**/*.{html,css}\"",
     "test": "npm run test --workspace=@legal-callegarin/admin --",
     "typecheck": "npm run typecheck --workspace=@legal-callegarin/admin"
   }

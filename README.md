@@ -23,8 +23,10 @@ make check
 ```
 
 `make check` runs the fail-on-difference Go formatting check, `go vet`,
-Staticcheck, all Go tests, a clean npm install, TypeScript checks, frontend
-tests, and the production frontend build in that order.
+Staticcheck, all Go tests, the foundation configuration and clean-build checks,
+a clean npm install, the fail-on-difference frontend formatting check,
+TypeScript checks, frontend tests, and the production frontend build in that
+order.
 
 Build the React bundle first and then the single Go executable:
 
