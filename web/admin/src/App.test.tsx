@@ -850,6 +850,92 @@ describe("admin shell", () => {
 })
 
 describe("article console", () => {
+  it("blocks dirty link navigation with an accessible choice and beforeunload", async () => {
+    window.history.replaceState({}, "", "/admin/articoli/nuovo")
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session")
+        return jsonResponse({ username: "admin", csrfToken: "csrf" })
+      if (path === "/api/admin/covers") return jsonResponse([])
+      if (path === "/api/admin/contacts")
+        return jsonResponse({ items: [], nextCursor: "" })
+      throw new Error(`unexpected ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    render(<App />)
+
+    await screen.findByRole("heading", { name: "Nuovo articolo" })
+    fireEvent.change(screen.getByLabelText("Titolo"), {
+      target: { value: "Modifica locale" },
+    })
+    const unload = new Event("beforeunload", { cancelable: true })
+    window.dispatchEvent(unload)
+    expect(unload.defaultPrevented).toBe(true)
+
+    const contacts = screen.getByRole("link", { name: "Contatti" })
+    await user.click(contacts)
+    let dialog = screen.getByRole("dialog", {
+      name: "Modifiche non salvate",
+    })
+    expect(within(dialog).getByRole("button", { name: "Resta" })).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(within(dialog).getByRole("button", { name: "Esci" })).toHaveFocus()
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(contacts).toHaveFocus()
+    expect(
+      screen.getByRole("heading", { name: "Nuovo articolo" }),
+    ).toBeInTheDocument()
+
+    await user.click(contacts)
+    dialog = screen.getByRole("dialog", { name: "Modifiche non salvate" })
+    await user.click(within(dialog).getByRole("button", { name: "Resta" }))
+    expect(contacts).toHaveFocus()
+    await user.click(contacts)
+    dialog = screen.getByRole("dialog", { name: "Modifiche non salvate" })
+    await user.click(within(dialog).getByRole("button", { name: "Esci" }))
+    expect(
+      await screen.findByRole("heading", { name: "Contatti" }),
+    ).toBeInTheDocument()
+  })
+
+  it("blocks dirty browser-history navigation", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        if (path === "/api/admin/contacts" || path === "/api/admin/articles")
+          return jsonResponse({ items: [], nextCursor: "" })
+        if (path === "/api/admin/covers") return jsonResponse([])
+        throw new Error(`unexpected ${path}`)
+      }),
+    )
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole("link", { name: "Articoli" }))
+    await user.click(screen.getByRole("link", { name: "Nuovo articolo" }))
+    await screen.findByRole("heading", { name: "Nuovo articolo" })
+    fireEvent.change(screen.getByLabelText("Titolo"), {
+      target: { value: "Modifica locale" },
+    })
+
+    window.history.back()
+    const dialog = await screen.findByRole("dialog", {
+      name: "Modifiche non salvate",
+    })
+    expect(
+      screen.getByRole("heading", { name: "Nuovo articolo" }),
+    ).toBeInTheDocument()
+    await user.click(within(dialog).getByRole("button", { name: "Esci" }))
+    expect(
+      await screen.findByRole("heading", { name: "Articoli" }),
+    ).toBeInTheDocument()
+  })
+
   it("keeps a new draft local until explicit create and exposes only the restricted editor", async () => {
     window.history.replaceState({}, "", "/admin/articoli/nuovo")
     const fetchMock = vi.fn(
@@ -953,8 +1039,338 @@ describe("article console", () => {
         path === "/api/admin/articles" && init?.method === "POST",
     )
     expect(String(create?.[1]?.body)).not.toContain('"html"')
+    expect(
+      await screen.findByRole("heading", { name: "Modifica articolo" }),
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe("/admin/articoli/article-1")
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     expect(window.localStorage.length).toBe(0)
     expect(window.sessionStorage.length).toBe(0)
+  })
+
+  it("shows list loading, error, retry, and honest empty states", async () => {
+    window.history.replaceState({}, "", "/admin/articoli")
+    let attempts = 0
+    const pending = deferred<Response>()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session")
+        return jsonResponse({ username: "admin", csrfToken: "csrf" })
+      if (path === "/api/admin/covers") return jsonResponse([])
+      if (path === "/api/admin/articles") {
+        attempts++
+        if (attempts === 1) return pending.promise
+        return jsonResponse({ items: [], nextCursor: "" })
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+    expect(await screen.findByText("Caricamento articoli…")).toBeInTheDocument()
+    pending.reject(new Error("offline"))
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Impossibile caricare gli articoli",
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Riprova" }))
+    expect(await screen.findByText("Nessun articolo")).toBeInTheDocument()
+  })
+
+  it("auto-chains sparse pages and deduplicates explicit load-more results", async () => {
+    window.history.replaceState({}, "", "/admin/articoli")
+    const calls: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session")
+        return jsonResponse({ username: "admin", csrfToken: "csrf" })
+      calls.push(path)
+      if (path === "/api/admin/articles")
+        return jsonResponse({ items: [], nextCursor: "sparse" })
+      if (path === "/api/admin/articles?cursor=sparse")
+        return jsonResponse({
+          items: [articleSummary("a", "Articolo A")],
+          nextCursor: "more",
+        })
+      if (path === "/api/admin/articles?cursor=more")
+        return jsonResponse({
+          items: [
+            articleSummary("a", "Articolo A"),
+            articleSummary("b", "Articolo B"),
+          ],
+          nextCursor: "",
+        })
+      throw new Error(`unexpected ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+    expect(
+      await screen.findByRole("heading", { name: "Articolo A" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Nessun articolo")).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Carica altri" }))
+    expect(
+      await screen.findByRole("heading", { name: "Articolo B" }),
+    ).toBeInTheDocument()
+    expect(screen.getAllByRole("heading", { name: "Articolo A" })).toHaveLength(
+      1,
+    )
+    expect(calls).toEqual([
+      "/api/admin/articles",
+      "/api/admin/articles?cursor=sparse",
+      "/api/admin/articles?cursor=more",
+    ])
+  })
+
+  it("aborts stale article-list requests when the status filter changes", async () => {
+    window.history.replaceState({}, "", "/admin/articoli")
+    const all = deferred<Response>()
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        if (path === "/api/admin/articles") return all.promise
+        if (path === "/api/admin/articles?status=draft")
+          return jsonResponse({
+            items: [articleSummary("draft", "Solo bozza")],
+            nextCursor: "",
+          })
+        throw new Error(`unexpected ${path}`)
+      },
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+    await screen.findByText("Caricamento articoli…")
+    await userEvent.selectOptions(screen.getByLabelText("Stato"), "draft")
+    expect(
+      await screen.findByRole("heading", { name: "Solo bozza" }),
+    ).toBeInTheDocument()
+    all.resolve(
+      jsonResponse({
+        items: [articleSummary("stale", "Risposta vecchia")],
+        nextCursor: "",
+      }),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.queryByText("Risposta vecchia")).not.toBeInTheDocument()
+  })
+
+  it("stops sparse-page cursor cycles with a retryable error", async () => {
+    window.history.replaceState({}, "", "/admin/articoli")
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session")
+        return jsonResponse({ username: "admin", csrfToken: "csrf" })
+      if (path === "/api/admin/articles")
+        return jsonResponse({ items: [], nextCursor: "loop" })
+      if (path === "/api/admin/articles?cursor=loop")
+        return jsonResponse({
+          items: [articleSummary("repeated", "Risultato ciclico")],
+          nextCursor: "loop",
+        })
+      throw new Error(`unexpected ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Impossibile caricare gli articoli",
+    )
+    expect(screen.getByRole("button", { name: "Riprova" })).toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.filter(([path]) =>
+        String(path).startsWith("/api/admin/articles"),
+      ),
+    ).toHaveLength(2)
+  })
+
+  it("locks uncertain transitions for reconciliation while preserving local state", async () => {
+    window.history.replaceState({}, "", "/admin/articoli/article-1")
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        if (path === "/api/admin/covers") return jsonResponse([])
+        if (path === "/api/admin/articles/article-1" && !init?.method)
+          return jsonResponse(articleDetail(), 200, { ETag: '"etag-1"' })
+        if (
+          path === "/api/admin/articles/article-1/publish" &&
+          init?.method === "POST"
+        )
+          return jsonResponse(
+            { error: "outcome unknown", code: "commit_unknown" },
+            503,
+          )
+        throw new Error(`unexpected ${path}`)
+      },
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(
+      await screen.findByDisplayValue("Titolo articolo"),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Pubblica" }))
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Esito dell’operazione incerto",
+    )
+    expect(screen.getByDisplayValue("Titolo articolo")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Ricarica per riconciliare" }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Salva bozza" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Pubblica" })).toBeDisabled()
+  })
+
+  it("keeps ordinary transition failures retryable", async () => {
+    window.history.replaceState({}, "", "/admin/articoli/article-1")
+    let attempts = 0
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        if (path === "/api/admin/covers") return jsonResponse([])
+        if (path === "/api/admin/articles/article-1" && !init?.method)
+          return jsonResponse(articleDetail(), 200, { ETag: '"etag-1"' })
+        if (path.endsWith("/publish") && init?.method === "POST") {
+          attempts++
+          if (attempts === 1)
+            return jsonResponse(
+              {
+                error: "temporaneamente non disponibile",
+                code: "articles_unavailable",
+              },
+              503,
+            )
+          return jsonResponse(
+            {
+              ...articleSummary("article-1", "Titolo articolo"),
+              status: "published",
+            },
+            200,
+            { ETag: '"etag-2"' },
+          )
+        }
+        throw new Error(`unexpected ${path}`)
+      },
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    render(<App />)
+
+    await screen.findByDisplayValue("Titolo articolo")
+    const publish = screen.getByRole("button", { name: "Pubblica" })
+    await user.click(publish)
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "temporaneamente non disponibile",
+    )
+    expect(publish).toBeEnabled()
+    expect(
+      screen.queryByRole("button", { name: "Ricarica per riconciliare" }),
+    ).not.toBeInTheDocument()
+    await user.click(publish)
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Articolo pubblicato",
+    )
+    expect(attempts).toBe(2)
+  })
+
+  it("refreshes the saved preview only after a successful save and supports widths", async () => {
+    window.history.replaceState({}, "", "/admin/articoli/article-1")
+    let saves = 0
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        if (path === "/api/admin/covers") return jsonResponse([])
+        if (path === "/api/admin/articles/article-1" && !init?.method)
+          return jsonResponse(articleDetail(), 200, { ETag: '"etag-1"' })
+        if (path.endsWith("/draft") && init?.method === "PUT") {
+          saves++
+          if (saves === 2)
+            return jsonResponse(
+              { error: "temporaneamente non disponibile" },
+              503,
+            )
+          return jsonResponse(
+            articleSummary("article-1", "Titolo salvato"),
+            200,
+            {
+              ETag: '"etag-2"',
+            },
+          )
+        }
+        throw new Error(`unexpected ${path}`)
+      },
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    render(<App />)
+
+    await screen.findByDisplayValue("Titolo articolo")
+    const frame = screen.getByTitle("Anteprima articolo salvato")
+    const initialSource = frame.getAttribute("src")
+    await user.click(screen.getByRole("button", { name: "360" }))
+    expect(frame).toHaveStyle({ width: "360px" })
+    await user.click(screen.getByRole("button", { name: "768" }))
+    expect(frame).toHaveStyle({ width: "768px" })
+    await user.click(screen.getByRole("button", { name: "Desktop" }))
+    expect(frame).toHaveStyle({ width: "100%" })
+
+    await user.clear(screen.getByLabelText("Titolo"))
+    await user.type(screen.getByLabelText("Titolo"), "Titolo salvato")
+    await user.click(screen.getByRole("button", { name: "Salva bozza" }))
+    expect(await screen.findByRole("status")).toHaveTextContent("Bozza salvata")
+    const savedSource = frame.getAttribute("src")
+    expect(savedSource).not.toBe(initialSource)
+
+    await user.type(screen.getByLabelText("Titolo"), " locale")
+    await user.click(screen.getByRole("button", { name: "Salva bozza" }))
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "temporaneamente non disponibile",
+    )
+    expect(frame.getAttribute("src")).toBe(savedSource)
+  })
+
+  it("shows the published snapshot lifecycle and unpublished-change fact", async () => {
+    window.history.replaceState({}, "", "/admin/articoli/article-1")
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        if (path === "/api/admin/covers") return jsonResponse([])
+        return jsonResponse(
+          articleDetail({
+            status: "withdrawn",
+            firstPublishedAt: "2026-09-01T12:00:00Z",
+            lastPublishedAt: "2026-09-02T12:00:00Z",
+            hasUnpublishedChanges: true,
+            published: {
+              title: "Titolo pubblicato",
+              summary: "Sommario pubblicato sufficientemente lungo",
+              publishedAt: "2026-09-02T12:00:00Z",
+            },
+          }),
+          200,
+          { ETag: '"etag-1"' },
+        )
+      }),
+    )
+    render(<App />)
+
+    expect(
+      await screen.findByText("Modifiche non pubblicate"),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Prima pubblicazione/)).toBeInTheDocument()
+    expect(screen.getByText(/Titolo pubblicato/)).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Ripubblica" }),
+    ).toBeInTheDocument()
   })
 })
 
@@ -973,6 +1389,41 @@ function contactFixture(overrides: Partial<Contact> = {}): Contact {
     reviewDueAt: "2028-09-11T12:00:00Z",
     ...overrides,
   }
+}
+
+function articleSummary(id: string, title: string) {
+  return {
+    id,
+    slug: id,
+    title,
+    summary: "Sommario sufficientemente lungo",
+    area: "diritti-reali",
+    coverId: "",
+    status: "draft",
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+function articleDetail(overrides: Record<string, unknown> = {}) {
+  return {
+    ...articleSummary("article-1", "Titolo articolo"),
+    body: {
+      schemaVersion: 1,
+      document: { type: "doc", content: [{ type: "paragraph" }] },
+    },
+    hasUnpublishedChanges: false,
+    ...overrides,
+  }
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  return { promise, resolve, reject }
 }
 
 function jsonResponse(

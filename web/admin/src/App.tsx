@@ -8,13 +8,13 @@ import {
   useState,
 } from "react"
 import {
-  BrowserRouter,
+  createBrowserRouter,
   Link,
   Navigate,
   NavLink,
   Outlet,
-  Route,
-  Routes,
+  RouterProvider,
+  useBlocker,
   useParams,
   useSearchParams,
   useNavigate,
@@ -34,6 +34,8 @@ import {
   type PurgeDTO,
   type SessionDTO,
   type ArticleDetailDTO,
+  type ArticleLifecycleDTO,
+  type ArticleMutationDTO,
   type ArticlePageDTO,
   type ArticleStatus,
   type CoverDTO,
@@ -90,34 +92,54 @@ export default function App({ onUnauthorized = redirectToLogin }: AppProps) {
       </StatusPage>
     )
   }
-  return (
-    <BrowserRouter basename="/admin">
-      <Routes>
-        <Route
-          element={
-            <AdminShell client={client} username={state.session.username} />
-          }
-        >
-          <Route index element={<Dashboard client={client} />} />
-          <Route path="contatti" element={<ContactList client={client} />} />
-          <Route
-            path="contatti/:id"
-            element={<ContactDetail client={client} />}
-          />
-          <Route path="articoli" element={<ArticleList client={client} />} />
-          <Route
-            path="articoli/nuovo"
-            element={<ArticleEditor client={client} />}
-          />
-          <Route
-            path="articoli/:id"
-            element={<ArticleEditor client={client} />}
-          />
-          <Route path="*" element={<Navigate replace to="/" />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+  return <ReadyApp client={client} username={state.session.username} />
+}
+
+function ReadyApp({
+  client,
+  username,
+}: {
+  client: AdminClient
+  username: string
+}) {
+  const router = useMemo(
+    () =>
+      createBrowserRouter(
+        [
+          {
+            path: "/",
+            element: <AdminShell client={client} username={username} />,
+            children: [
+              { index: true, element: <Dashboard client={client} /> },
+              {
+                path: "contatti",
+                element: <ContactList client={client} />,
+              },
+              {
+                path: "contatti/:id",
+                element: <ContactDetail client={client} />,
+              },
+              {
+                path: "articoli",
+                element: <ArticleList client={client} />,
+              },
+              {
+                path: "articoli/nuovo",
+                element: <ArticleEditor client={client} />,
+              },
+              {
+                path: "articoli/:id",
+                element: <ArticleEditor client={client} />,
+              },
+              { path: "*", element: <Navigate replace to="/" /> },
+            ],
+          },
+        ],
+        { basename: "/admin" },
+      ),
+    [client, username],
   )
+  return <RouterProvider router={router} />
 }
 
 function StatusPage({ children }: { children: ReactNode }) {
@@ -864,21 +886,93 @@ function ArticleList({ client }: { client: AdminClient }) {
     items: [],
     nextCursor: "",
   })
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState("")
+  const [retry, setRetry] = useState(0)
+  const generation = useRef(0)
+  const activeRequest = useRef<AbortController | null>(null)
+
+  const load = useCallback(
+    async (cursor: string, append: boolean, requestGeneration: number) => {
+      activeRequest.current?.abort()
+      const controller = new AbortController()
+      activeRequest.current = controller
+      append ? setLoadingMore(true) : setLoading(true)
+      setError("")
+
+      const seenCursors = new Set<string>()
+      let currentCursor = cursor
+      try {
+        while (true) {
+          if (seenCursors.has(currentCursor)) {
+            throw new Error("article cursor cycle")
+          }
+          seenCursors.add(currentCursor)
+          const query = new URLSearchParams()
+          if (status) query.set("status", status)
+          if (currentCursor) query.set("cursor", currentCursor)
+          const suffix = query.size > 0 ? `?${query.toString()}` : ""
+          const { data } = await client.fetchJSON<ArticlePageDTO>(
+            `/api/admin/articles${suffix}`,
+            { signal: controller.signal },
+          )
+          if (
+            controller.signal.aborted ||
+            generation.current !== requestGeneration
+          ) {
+            return
+          }
+          if (data.nextCursor !== "" && seenCursors.has(data.nextCursor)) {
+            throw new Error("article cursor cycle")
+          }
+
+          if (data.items.length > 0 || data.nextCursor === "") {
+            setPage((previous) => {
+              const merged = append
+                ? [...previous.items, ...data.items]
+                : data.items
+              return {
+                items: Array.from(
+                  new Map(
+                    merged.map((article) => [article.id, article]),
+                  ).values(),
+                ),
+                nextCursor: data.nextCursor,
+              }
+            })
+            return
+          }
+          currentCursor = data.nextCursor
+        }
+      } catch (reason: unknown) {
+        if (
+          controller.signal.aborted ||
+          generation.current !== requestGeneration ||
+          (reason instanceof DOMException && reason.name === "AbortError")
+        ) {
+          return
+        }
+        setError("Impossibile caricare gli articoli")
+      } finally {
+        if (
+          !controller.signal.aborted &&
+          generation.current === requestGeneration
+        ) {
+          append ? setLoadingMore(false) : setLoading(false)
+        }
+      }
+    },
+    [client, status],
+  )
+
   useEffect(() => {
-    const controller = new AbortController()
-    const query = status ? `?status=${status}` : ""
-    void client
-      .fetchJSON<ArticlePageDTO>(`/api/admin/articles${query}`, {
-        signal: controller.signal,
-      })
-      .then(({ data }) => setPage(data))
-      .catch((reason: unknown) => {
-        if (!(reason instanceof DOMException && reason.name === "AbortError"))
-          setError("Impossibile caricare gli articoli")
-      })
-    return () => controller.abort()
-  }, [client, status])
+    const requestGeneration = ++generation.current
+    setPage({ items: [], nextCursor: "" })
+    void load("", false, requestGeneration)
+    return () => activeRequest.current?.abort()
+  }, [load, retry])
+
   return (
     <section>
       <PageHeading eyebrow="Pubblicazione" title="Articoli" />
@@ -901,7 +995,18 @@ function ArticleList({ client }: { client: AdminClient }) {
           </select>
         </label>
       </div>
-      {error ? <p role="alert">{error}</p> : null}
+      {loading ? <p>Caricamento articoli…</p> : null}
+      {error ? (
+        <div role="alert">
+          <p>{error}</p>
+          <button onClick={() => setRetry((value) => value + 1)} type="button">
+            Riprova
+          </button>
+        </div>
+      ) : null}
+      {!loading && !error && page.items.length === 0 ? (
+        <p>Nessun articolo</p>
+      ) : null}
       <div className="article-cards">
         {page.items.map((article) => (
           <article className="article-admin-card" key={article.id}>
@@ -914,7 +1019,80 @@ function ArticleList({ client }: { client: AdminClient }) {
           </article>
         ))}
       </div>
+      {!loading && !error && page.nextCursor ? (
+        <button
+          disabled={loadingMore}
+          onClick={() => void load(page.nextCursor, true, generation.current)}
+          type="button"
+        >
+          {loadingMore ? "Caricamento…" : "Carica altri"}
+        </button>
+      ) : null}
     </section>
+  )
+}
+
+function UnsavedChangesDialog({
+  onLeave,
+  onStay,
+  returnFocus,
+}: {
+  onLeave: () => void
+  onStay: () => void
+  returnFocus: HTMLElement | null
+}) {
+  const stayButton = useRef<HTMLButtonElement>(null)
+  const leaveButton = useRef<HTMLButtonElement>(null)
+  const focusTarget = useRef(returnFocus)
+
+  useEffect(() => {
+    stayButton.current?.focus()
+  }, [])
+
+  const stay = () => {
+    onStay()
+    focusTarget.current?.focus()
+  }
+  const trapFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault()
+      stay()
+      return
+    }
+    if (event.key !== "Tab") return
+    if (event.shiftKey && document.activeElement === stayButton.current) {
+      event.preventDefault()
+      leaveButton.current?.focus()
+    } else if (
+      !event.shiftKey &&
+      document.activeElement === leaveButton.current
+    ) {
+      event.preventDefault()
+      stayButton.current?.focus()
+    }
+  }
+
+  return (
+    <div className="dialog-backdrop">
+      <div
+        aria-labelledby="unsaved-dialog-title"
+        aria-modal="true"
+        className="dialog"
+        onKeyDown={trapFocus}
+        role="dialog"
+      >
+        <h2 id="unsaved-dialog-title">Modifiche non salvate</h2>
+        <p>Se esci adesso, le modifiche locali andranno perse.</p>
+        <div className="dialog-actions">
+          <button onClick={stay} ref={stayButton} type="button">
+            Resta
+          </button>
+          <button onClick={onLeave} ref={leaveButton} type="button">
+            Esci
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -931,10 +1109,18 @@ function ArticleEditor({ client }: { client: AdminClient }) {
   const [covers, setCovers] = useState<CoverDTO[]>([])
   const [etag, setETag] = useState<string | null>(null)
   const [status, setStatus] = useState<ArticleStatus>("draft")
+  const [lifecycle, setLifecycle] = useState<ArticleLifecycleDTO>({
+    hasUnpublishedChanges: false,
+  })
   const [dirty, setDirty] = useState(false)
   const [reloadRequired, setReloadRequired] = useState(false)
   const [previewWidth, setPreviewWidth] = useState("100%")
+  const [previewVersion, setPreviewVersion] = useState(0)
   const [message, setMessage] = useState("")
+  const allowNavigation = useRef(false)
+  const blocker = useBlocker(
+    useCallback(() => dirty && !allowNavigation.current, [dirty]),
+  )
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -973,6 +1159,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
           coverId: data.coverId,
         })
         setStatus(data.status)
+        setLifecycle(data)
         setETag(freshETag)
         editor.commands.setContent(data.body.document as never)
         setDirty(false)
@@ -984,22 +1171,11 @@ function ArticleEditor({ client }: { client: AdminClient }) {
     if (!dirty) return
     const unload = (event: BeforeUnloadEvent) => {
       event.preventDefault()
-    }
-    const links = (event: MouseEvent) => {
-      const anchor = (event.target as Element | null)?.closest("a[href]")
-      if (
-        anchor &&
-        !window.confirm("Le modifiche non salvate andranno perse. Continuare?")
-      ) {
-        event.preventDefault()
-        event.stopPropagation()
-      }
+      event.returnValue = ""
     }
     window.addEventListener("beforeunload", unload)
-    document.addEventListener("click", links, true)
     return () => {
       window.removeEventListener("beforeunload", unload)
-      document.removeEventListener("click", links, true)
     }
   }, [dirty])
   const change = (field: keyof typeof form, value: string) => {
@@ -1022,16 +1198,19 @@ function ArticleEditor({ client }: { client: AdminClient }) {
           "/api/admin/articles",
           { method: "POST", body: payload() },
         )
+        allowNavigation.current = true
         setDirty(false)
         navigate(`/articoli/${result.data.id}`, { replace: true })
       } else {
-        const result = await client.fetchJSON<ArticleDetailDTO>(
+        const result = await client.fetchJSON<ArticleMutationDTO>(
           `/api/admin/articles/${id}/draft`,
           { method: "PUT", ifMatch: etag ?? undefined, body: payload() },
         )
         setETag(result.etag)
         setStatus(result.data.status)
+        setLifecycle(result.data)
         setDirty(false)
+        setPreviewVersion((version) => version + 1)
         setMessage("Bozza salvata")
       }
     } catch (reason) {
@@ -1056,19 +1235,34 @@ function ArticleEditor({ client }: { client: AdminClient }) {
   const transition = async (action: "publish" | "withdraw") => {
     if (!id || !etag || dirty) return
     try {
-      const result = await client.fetchJSON<ArticleDetailDTO>(
+      const result = await client.fetchJSON<ArticleMutationDTO>(
         `/api/admin/articles/${id}/${action}`,
         { method: "POST", ifMatch: etag },
       )
       setETag(result.etag)
       setStatus(result.data.status)
+      setLifecycle(result.data)
       setMessage(
         action === "publish" ? "Articolo pubblicato" : "Articolo ritirato",
       )
     } catch (reason) {
-      setMessage(
-        reason instanceof APIError ? reason.message : "Operazione non riuscita",
-      )
+      if (
+        reason instanceof APIError &&
+        (reason.code === "commit_unknown" || reason.code === "article_conflict")
+      ) {
+        setReloadRequired(true)
+        setMessage(
+          reason.code === "commit_unknown"
+            ? "Esito dell’operazione incerto: ricarica prima di riprovare. Lo stato locale è preservato."
+            : "Conflitto con una versione più recente: lo stato locale è preservato. Ricarica per riconciliare.",
+        )
+      } else {
+        setMessage(
+          reason instanceof APIError
+            ? reason.message
+            : "Operazione non riuscita",
+        )
+      }
     }
   }
   return (
@@ -1078,11 +1272,35 @@ function ArticleEditor({ client }: { client: AdminClient }) {
         title={id ? "Modifica articolo" : "Nuovo articolo"}
       />
       {dirty ? <p className="dirty-indicator">Modifiche non salvate</p> : null}
+      {blocker.state === "blocked" ? (
+        <UnsavedChangesDialog
+          onLeave={() => {
+            allowNavigation.current = true
+            blocker.proceed()
+          }}
+          onStay={() => blocker.reset()}
+          returnFocus={document.activeElement as HTMLElement | null}
+        />
+      ) : null}
       {message ? <p role="status">{message}</p> : null}
       {reloadRequired ? (
         <button type="button" onClick={() => window.location.reload()}>
           Ricarica per riconciliare
         </button>
+      ) : null}
+      {id && lifecycle.firstPublishedAt ? (
+        <div className="article-lifecycle">
+          {lifecycle.hasUnpublishedChanges ? (
+            <p>Modifiche non pubblicate</p>
+          ) : null}
+          <p>Prima pubblicazione {formatDate(lifecycle.firstPublishedAt)}</p>
+          {lifecycle.lastPublishedAt ? (
+            <p>Ultima pubblicazione {formatDate(lifecycle.lastPublishedAt)}</p>
+          ) : null}
+          {lifecycle.published ? (
+            <p>Versione pubblicata: {lifecycle.published.title}</p>
+          ) : null}
+        </div>
       ) : null}
       <div className="article-fields">
         <label>
@@ -1206,7 +1424,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
               type="button"
               onClick={() => void transition("publish")}
             >
-              Pubblica
+              {lifecycle.published ? "Ripubblica" : "Pubblica"}
             </button>
             {status === "published" ? (
               <button
@@ -1244,7 +1462,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
           <iframe
             style={{ width: previewWidth }}
             title="Anteprima articolo salvato"
-            src={`/admin/preview/articles/${id}`}
+            src={`/admin/preview/articles/${id}?saved=${previewVersion}`}
           />
         </div>
       ) : null}

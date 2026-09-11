@@ -46,7 +46,7 @@ func CompileDocument(schemaVersion int, raw json.RawMessage) (Body, error) {
 	if schemaVersion != 1 {
 		return Body{}, validationError("body schema version must be 1")
 	}
-	if len(raw) == 0 || len(raw) > maxDocumentBytes || !json.Valid(raw) {
+	if len(raw) == 0 || len(raw) > maxDocumentBytes || !utf8.Valid(raw) || !json.Valid(raw) {
 		return Body{}, validationError("body document must be valid JSON of at most 512 KiB")
 	}
 	var root documentNode
@@ -110,7 +110,7 @@ func compileNode(node documentNode, depth int, parent string, state *compileStat
 	}
 	switch node.Type {
 	case "doc":
-		if parent != "" || node.Attrs != nil || node.Text != "" || len(node.Marks) > 0 {
+		if parent != "" || node.Attrs != nil || node.Text != "" || len(node.Marks) > 0 || len(node.Content) == 0 {
 			return "", validationError("invalid doc node")
 		}
 		return children("block")
@@ -133,7 +133,7 @@ func compileNode(node documentNode, depth int, parent string, state *compileStat
 		tag := fmt.Sprintf("h%d", node.Attrs.Level)
 		return "<" + tag + ">" + c + "</" + tag + ">", e
 	case "bulletList", "orderedList":
-		if parent != "block" && parent != "listItem" || node.Attrs != nil || node.Text != "" || len(node.Marks) > 0 {
+		if parent != "block" && parent != "listItem" || node.Attrs != nil || node.Text != "" || len(node.Marks) > 0 || len(node.Content) == 0 {
 			return "", validationError("invalid list")
 		}
 		c, e := children("list")
@@ -151,7 +151,7 @@ func compileNode(node documentNode, depth int, parent string, state *compileStat
 		state.plain.WriteString("\n")
 		return "<li>" + c + "</li>", e
 	case "blockquote":
-		if parent != "block" || node.Attrs != nil || node.Text != "" || len(node.Marks) > 0 {
+		if parent != "block" || node.Attrs != nil || node.Text != "" || len(node.Marks) > 0 || len(node.Content) == 0 {
 			return "", validationError("invalid blockquote")
 		}
 		c, e := children("block")

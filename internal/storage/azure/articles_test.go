@@ -2,7 +2,9 @@ package azure
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +18,154 @@ func TestArticleMetadataRepositoryContract(t *testing.T) {
 	})
 }
 
+func TestLegacyArticleRowCanBeUpdatedWithItsStoredETag(t *testing.T) {
+	driver := newMemoryTableDriver()
+	repository := newArticleMetadataRepository(driver)
+	article := outcomeArticle("legacy-1", "legacy-one")
+	legacy := legacyArticleEntity(t, article)
+	etag, err := driver.Add(context.Background(), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repository.Get(context.Background(), article.ID)
+	if err != nil || loaded.ETag != etag {
+		t.Fatalf("Get legacy=%#v %v", loaded, err)
+	}
+	computedRow, _ := articleRowKey(article.ID, article.CreatedAt)
+	if _, err = driver.Get(context.Background(), articlesPartition, computedRow); err != ErrNotFound {
+		t.Fatalf("read-only Get created current row: %v", err)
+	}
+	stored, err := driver.Get(context.Background(), articlesPartition, article.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var properties map[string]any
+	if err = json.Unmarshal(stored.Value, &properties); err != nil {
+		t.Fatal(err)
+	}
+	if _, mutated := properties["id"]; mutated {
+		t.Fatal("read-only Get mutated legacy entity")
+	}
+	loaded.Title = "Titolo legacy aggiornato"
+	loaded.UpdatedAt = loaded.UpdatedAt.Add(time.Minute)
+	updated, err := repository.Update(context.Background(), loaded, etag)
+	if err != nil || updated.Title != loaded.Title {
+		t.Fatalf("Update legacy=%#v %v", updated, err)
+	}
+	if _, err = driver.Get(context.Background(), articlesPartition, article.ID); err != nil {
+		t.Fatalf("legacy row moved or disappeared: %v", err)
+	}
+}
+
+func TestMixedLegacyAndCurrentRowsPageInGlobalNewestFirstOrder(t *testing.T) {
+	driver := newMemoryTableDriver()
+	base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	for index := range 36 {
+		article := outcomeArticle(fmt.Sprintf("mixed-%03d", index), fmt.Sprintf("mixed-%03d", index))
+		article.CreatedAt = base.Add(time.Duration(index) * time.Minute)
+		article.UpdatedAt = article.CreatedAt
+		article.DraftBody.SavedAt = article.CreatedAt
+		var encoded []byte
+		var err error
+		if index%4 == 0 {
+			encoded = legacyArticleEntity(t, article)
+		} else {
+			encoded, err = marshalArticleEntity(article)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err = driver.Add(context.Background(), encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repository := newArticleMetadataRepository(driver)
+	cursor := ""
+	seen := map[string]bool{}
+	var prior time.Time
+	for {
+		page, err := repository.List(context.Background(), articles.ListOptions{Limit: 7, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range page.Items {
+			if seen[item.ID] {
+				t.Fatalf("duplicate %s", item.ID)
+			}
+			seen[item.ID] = true
+			if !prior.IsZero() && !item.CreatedAt.Before(prior) {
+				t.Fatalf("out of order %v after %v", item.CreatedAt, prior)
+			}
+			prior = item.CreatedAt
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if len(seen) != 36 {
+		t.Fatalf("seen=%d", len(seen))
+	}
+}
+
+func TestStatusFilterFillsPageAcrossSparseStoragePages(t *testing.T) {
+	driver := &articlePagingTableDriver{memoryTableDriver: newMemoryTableDriver()}
+	base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	for index := range 1251 {
+		article := outcomeArticle(fmt.Sprintf("sparse-%03d", index), fmt.Sprintf("sparse-%03d", index))
+		article.CreatedAt = base.Add(time.Duration(index) * time.Minute)
+		article.UpdatedAt = article.CreatedAt
+		article.DraftBody.SavedAt = article.CreatedAt
+		if index%250 != 0 {
+			publishedAt := article.CreatedAt
+			article.Status = articles.StatusPublished
+			article.PublishedBody = article.DraftBody
+			article.Published = &articles.PublishedMetadata{Slug: article.Slug, Title: article.Title, Summary: article.Summary, Area: article.Area, CoverID: article.CoverID}
+			article.FirstPublishedAt = &publishedAt
+			article.LastPublishedAt = &publishedAt
+		}
+		encoded, err := marshalArticleEntity(article)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = driver.Add(context.Background(), encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := articles.StatusDraft
+	page, err := newArticleMetadataRepository(driver).List(context.Background(), articles.ListOptions{Status: &status, Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 5 || page.NextCursor == "" || driver.pageCalls < 13 {
+		t.Fatalf("items=%d cursor=%q calls=%d", len(page.Items), page.NextCursor, driver.pageCalls)
+	}
+	if len(driver.filters) == 0 || !strings.Contains(driver.filters[0], "status eq 'draft'") {
+		t.Fatalf("status was not pushed into Azure query: %v", driver.filters)
+	}
+}
+
+func legacyArticleEntity(t *testing.T, article articles.Article) []byte {
+	t.Helper()
+	encoded, err := marshalArticleEntity(article)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err = json.Unmarshal(encoded, &value); err != nil {
+		t.Fatal(err)
+	}
+	value["RowKey"] = article.ID
+	delete(value, "id")
+	encoded, err = json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
 func TestArticleRepositoryPagesBeyondOneThousandWithBoundedRequests(t *testing.T) {
-	driver := &pagingTableDriver{memoryTableDriver: newMemoryTableDriver()}
+	driver := &articlePagingTableDriver{memoryTableDriver: newMemoryTableDriver()}
 	base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	for index := range 1205 {
 		article := outcomeArticle(fmt.Sprintf("article-%04d", index), fmt.Sprintf("article-%04d", index))
@@ -49,7 +197,98 @@ func TestArticleRepositoryPagesBeyondOneThousandWithBoundedRequests(t *testing.T
 		}
 		cursor = page.NextCursor
 	}
-	if seen != 1205 || driver.pageCalls != 13 || driver.maxTop != 100 {
+	if seen != 1205 || driver.pageCalls < 13 || driver.maxTop != 100 {
 		t.Fatalf("seen=%d calls=%d maxTop=%d", seen, driver.pageCalls, driver.maxTop)
+	}
+}
+
+// articlePagingTableDriver snapshots immutable article fixtures once so the
+// repository's many bounded raw-page requests do not make the fake itself
+// rescan and decode the complete table for every continuation.
+type articlePagingTableDriver struct {
+	*memoryTableDriver
+	ordered   []tableEntity
+	pageCalls int
+	maxTop    int32
+	filters   []string
+}
+
+func (driver *articlePagingTableDriver) ListPage(ctx context.Context, filter string, top int32, continuation *tableContinuation) ([]tableEntity, *tableContinuation, error) {
+	driver.pageCalls++
+	driver.filters = append(driver.filters, filter)
+	if top > driver.maxTop {
+		driver.maxTop = top
+	}
+	if driver.ordered == nil {
+		ordered, _, err := driver.memoryTableDriver.ListPage(ctx, filter, 1<<30, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		driver.ordered = ordered
+	}
+	start := 0
+	if continuation != nil {
+		for start < len(driver.ordered) {
+			partition, row, _ := entityKey(driver.ordered[start].Value)
+			if partition > continuation.PartitionKey || partition == continuation.PartitionKey && row > continuation.RowKey {
+				break
+			}
+			start++
+		}
+	}
+	end := min(start+int(top), len(driver.ordered))
+	page := append([]tableEntity(nil), driver.ordered[start:end]...)
+	if end == len(driver.ordered) {
+		return page, nil, nil
+	}
+	partition, row, _ := entityKey(page[len(page)-1].Value)
+	return page, &tableContinuation{PartitionKey: partition, RowKey: row}, nil
+}
+
+func TestArticleKeysetCursorRemainsStableAcrossBoundaryInsertions(t *testing.T) {
+	driver := newMemoryTableDriver()
+	repository := newArticleMetadataRepository(driver)
+	base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	add := func(id string, createdAt time.Time) {
+		t.Helper()
+		article := outcomeArticle(id, id)
+		article.CreatedAt, article.UpdatedAt, article.DraftBody.SavedAt = createdAt, createdAt, createdAt
+		encoded, err := marshalArticleEntity(article)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = driver.Add(context.Background(), encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := range 20 {
+		add(fmt.Sprintf("boundary-%02d", index), base.Add(time.Duration(index)*time.Minute))
+	}
+	first, err := repository.List(context.Background(), articles.ListOptions{Limit: 5})
+	if err != nil || first.NextCursor == "" {
+		t.Fatalf("first page = %#v, %v", first, err)
+	}
+	add("inserted-newer", base.Add(2*time.Hour))
+	add("inserted-older", base.Add(-time.Hour))
+	seen := map[string]bool{}
+	for _, item := range first.Items {
+		seen[item.ID] = true
+	}
+	cursor := first.NextCursor
+	for cursor != "" {
+		page, listErr := repository.List(context.Background(), articles.ListOptions{Limit: 5, Cursor: cursor})
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		for _, item := range page.Items {
+			if seen[item.ID] {
+				t.Fatalf("duplicate %s across cursor boundary", item.ID)
+			}
+			seen[item.ID] = true
+		}
+		cursor = page.NextCursor
+	}
+	if len(seen) != 21 || seen["inserted-newer"] || !seen["inserted-older"] {
+		t.Fatalf("seen=%d newer=%v older=%v", len(seen), seen["inserted-newer"], seen["inserted-older"])
 	}
 }

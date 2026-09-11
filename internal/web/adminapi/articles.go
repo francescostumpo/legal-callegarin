@@ -39,7 +39,25 @@ type articleSummaryDTO struct {
 }
 type articleDetailDTO struct {
 	articleSummaryDTO
-	Body articleBodyInput `json:"body"`
+	Body                  articleBodyInput      `json:"body"`
+	Published             *publishedSnapshotDTO `json:"published,omitempty"`
+	FirstPublishedAt      *time.Time            `json:"firstPublishedAt,omitempty"`
+	LastPublishedAt       *time.Time            `json:"lastPublishedAt,omitempty"`
+	HasUnpublishedChanges bool                  `json:"hasUnpublishedChanges"`
+}
+type articleMutationDTO struct {
+	articleSummaryDTO
+	Published             *publishedSnapshotDTO `json:"published,omitempty"`
+	FirstPublishedAt      *time.Time            `json:"firstPublishedAt,omitempty"`
+	LastPublishedAt       *time.Time            `json:"lastPublishedAt,omitempty"`
+	HasUnpublishedChanges bool                  `json:"hasUnpublishedChanges"`
+}
+type publishedSnapshotDTO struct {
+	Slug    string `json:"slug"`
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+	Area    string `json:"area"`
+	CoverID string `json:"coverId"`
 }
 type articlePageDTO struct {
 	Items      []articleSummaryDTO `json:"items"`
@@ -167,12 +185,7 @@ func (handler *handler) articleTransition(w http.ResponseWriter, r *http.Request
 		writeArticleError(w, err)
 		return
 	}
-	preview, err := handler.articles.GetPreview(r.Context(), a.ID)
-	if err != nil {
-		writeArticleError(w, err)
-		return
-	}
-	writeArticle(w, 200, a, articleBodyInput{preview.Body.SchemaVersion, preview.Body.Document})
+	writeArticleMutation(w, 200, a)
 }
 func (handler *handler) coversGET(w http.ResponseWriter, _ *http.Request) {
 	covers, err := webassets.CoverCatalog()
@@ -218,11 +231,21 @@ func decodeArticleInput(w http.ResponseWriter, r *http.Request) (articleInput, b
 	decoder.DisallowUnknownFields()
 	var input articleInput
 	if err := decoder.Decode(&input); err != nil {
+		var maximum *http.MaxBytesError
+		if errors.As(err, &maximum) {
+			writeJSONCode(w, 413, "request_too_large", "article request body is too large")
+			return articleInput{}, false
+		}
 		writeJSONCode(w, 400, "invalid_json", "invalid JSON body")
 		return articleInput{}, false
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
+		var maximum *http.MaxBytesError
+		if errors.As(err, &maximum) {
+			writeJSONCode(w, 413, "request_too_large", "article request body is too large")
+			return articleInput{}, false
+		}
 		writeJSONCode(w, 400, "invalid_json", "one JSON value required")
 		return articleInput{}, false
 	}
@@ -248,7 +271,28 @@ func writeArticle(w http.ResponseWriter, status int, a articles.Article, b artic
 		return
 	}
 	w.Header().Set("ETag", formatETag(a.ETag))
-	writeJSON(w, status, articleDetailDTO{articleSummary(a), b})
+	published, changed := articleLifecycle(a)
+	writeJSON(w, status, articleDetailDTO{articleSummaryDTO: articleSummary(a), Body: b, Published: published, FirstPublishedAt: a.FirstPublishedAt, LastPublishedAt: a.LastPublishedAt, HasUnpublishedChanges: changed})
+}
+
+func writeArticleMutation(w http.ResponseWriter, status int, a articles.Article) {
+	if a.ETag == "" {
+		writeJSONCode(w, 503, "article_unavailable", "article temporarily unavailable")
+		return
+	}
+	published, changed := articleLifecycle(a)
+	w.Header().Set("ETag", formatETag(a.ETag))
+	writeJSON(w, status, articleMutationDTO{articleSummaryDTO: articleSummary(a), Published: published, FirstPublishedAt: a.FirstPublishedAt, LastPublishedAt: a.LastPublishedAt, HasUnpublishedChanges: changed})
+}
+
+func articleLifecycle(a articles.Article) (*publishedSnapshotDTO, bool) {
+	if a.Published == nil {
+		return nil, false
+	}
+	p := &publishedSnapshotDTO{Slug: a.Published.Slug, Title: a.Published.Title, Summary: a.Published.Summary, Area: a.Published.Area, CoverID: a.Published.CoverID}
+	bodyChanged := a.DraftBody == nil || a.PublishedBody == nil || *a.DraftBody != *a.PublishedBody
+	metadataChanged := a.Slug != a.Published.Slug || a.Title != a.Published.Title || a.Summary != a.Published.Summary || a.Area != a.Published.Area || a.CoverID != a.Published.CoverID
+	return p, bodyChanged || metadataChanged
 }
 func writeArticleError(w http.ResponseWriter, err error) {
 	switch {

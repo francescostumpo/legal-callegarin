@@ -3,6 +3,9 @@ package webassets_test
 import (
 	"encoding/json"
 	"io/fs"
+	"math"
+	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +14,41 @@ import (
 )
 
 const maximumDerivativeSize = 300 * 1024
+
+func TestAdminLightSurfacesPinAccessibleDarkText(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile("../../web/admin/src/admin.css")
+	if err != nil {
+		t.Fatalf("read admin stylesheet: %v", err)
+	}
+	for _, selector := range []string{"article-admin-card", "tiptap-surface"} {
+		pattern := regexp.MustCompile(`(?s)\.` + selector + `\s*\{[^}]*background:\s*#fff;[^}]*color:\s*#1d1b19;`)
+		if !pattern.Match(content) {
+			t.Errorf(".%s must pin #1d1b19 text on its white surface", selector)
+		}
+	}
+	if ratio := contrastRatio([3]float64{29, 27, 25}, [3]float64{255, 255, 255}); ratio < 4.5 {
+		t.Fatalf("light-surface contrast ratio = %.2f, want at least 4.5", ratio)
+	}
+}
+
+func contrastRatio(foreground, background [3]float64) float64 {
+	luminance := func(rgb [3]float64) float64 {
+		for i, value := range rgb {
+			value /= 255
+			if value <= 0.04045 {
+				rgb[i] = value / 12.92
+			} else {
+				rgb[i] = math.Pow((value+0.055)/1.055, 2.4)
+			}
+		}
+		return rgb[0]*0.2126 + rgb[1]*0.7152 + rgb[2]*0.0722
+	}
+	lighter := luminance(background)
+	darker := luminance(foreground)
+	return (lighter + 0.05) / (darker + 0.05)
+}
 
 type assetManifest struct {
 	Version int              `json:"version"`

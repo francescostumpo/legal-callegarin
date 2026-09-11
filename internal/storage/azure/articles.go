@@ -8,11 +8,14 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
 )
 
 type ArticleMetadataRepository struct{ table tableDriver }
+
+const articleRawPageSize = 100
 
 func newArticleMetadataRepository(table tableDriver) *ArticleMetadataRepository {
 	return &ArticleMetadataRepository{table: table}
@@ -26,9 +29,9 @@ func (repository *ArticleMetadataRepository) Create(ctx context.Context, article
 	if err != nil {
 		return articles.Article{}, err
 	}
-	if _, err = repository.table.Get(ctx, articlesPartition, article.ID); err == nil {
+	if _, err = repository.Get(ctx, article.ID); err == nil {
 		return articles.Article{}, articles.ErrConflict
-	} else if !errors.Is(err, ErrNotFound) {
+	} else if !errors.Is(err, articles.ErrNotFound) {
 		return articles.Article{}, mapArticleError(err, false)
 	}
 	rowKey, _ := articleRowKey(article.ID, article.CreatedAt)
@@ -42,7 +45,7 @@ func (repository *ArticleMetadataRepository) Create(ctx context.Context, article
 	}
 	if err = submitTransaction(ctx, repository.table, actions); err != nil {
 		if errors.Is(err, ErrConflict) {
-			if _, getErr := repository.table.Get(ctx, articlesPartition, article.ID); getErr == nil {
+			if _, getErr := repository.Get(ctx, article.ID); getErr == nil {
 				return articles.Article{}, articles.ErrConflict
 			}
 			return articles.Article{}, articles.ErrSlugTaken
@@ -56,26 +59,33 @@ func (repository *ArticleMetadataRepository) Create(ctx context.Context, article
 }
 
 func (repository *ArticleMetadataRepository) Get(ctx context.Context, id string) (articles.Article, error) {
+	article, _, err := repository.getWithRowKey(ctx, id)
+	return article, err
+}
+
+func (repository *ArticleMetadataRepository) getWithRowKey(ctx context.Context, id string) (articles.Article, string, error) {
 	if !safeStorageSegment(id) {
-		return articles.Article{}, articles.ErrNotFound
+		return articles.Article{}, "", articles.ErrNotFound
 	}
 	filter := "PartitionKey eq 'articles' and id eq '" + strings.ReplaceAll(id, "'", "''") + "'"
 	entities, err := repository.table.List(ctx, filter, 2)
 	if err != nil {
-		return articles.Article{}, mapArticleError(err, false)
+		return articles.Article{}, "", mapArticleError(err, false)
 	}
 	for _, entity := range entities {
 		var header entityHeader
 		if decodeHeader(entity.Value, &header) == nil && header.EntityType == articleEntityType {
-			return unmarshalArticleEntity(entity.Value, entity.ETag)
+			article, decodeErr := unmarshalArticleEntity(entity.Value, entity.ETag)
+			return article, header.RowKey, decodeErr
 		}
 	}
 	// Read legacy v1 rows while deployments roll forward.
 	entity, err := repository.table.Get(ctx, articlesPartition, id)
 	if err != nil {
-		return articles.Article{}, mapArticleError(err, false)
+		return articles.Article{}, "", mapArticleError(err, false)
 	}
-	return unmarshalArticleEntity(entity.Value, entity.ETag)
+	article, decodeErr := unmarshalArticleEntity(entity.Value, entity.ETag)
+	return article, id, decodeErr
 }
 
 func (repository *ArticleMetadataRepository) GetBySlug(ctx context.Context, slug string) (articles.Article, error) {
@@ -122,41 +132,56 @@ func (repository *ArticleMetadataRepository) List(ctx context.Context, options a
 		return articles.ArticlePage{}, fmt.Errorf("%w: %v", articles.ErrValidation, err)
 	}
 	var cursor articlePageCursor
-	var continuation *tableContinuation
 	if options.Cursor != "" {
 		cursor, err = decodeArticlePageCursor(options.Cursor)
 		if err != nil {
 			return articles.ArticlePage{}, fmt.Errorf("%w: invalid cursor", articles.ErrValidation)
 		}
-		continuation = &tableContinuation{PartitionKey: cursor.NextPartitionKey, RowKey: cursor.NextRowKey}
 	}
-	entities, next, err := repository.table.ListPage(ctx, "PartitionKey eq 'articles' and entityType eq 'article'", int32(limit), continuation)
-	if err != nil {
-		return articles.ArticlePage{}, mapArticleError(err, false)
+	items := make([]articles.Article, 0, limit+1)
+	filter := "PartitionKey eq 'articles' and entityType eq 'article'"
+	if options.Status != nil {
+		filter += " and status eq '" + string(*options.Status) + "'"
 	}
-	if next != nil && continuation != nil && *next == *continuation {
-		return articles.ArticlePage{}, errors.New("article storage continuation did not advance")
-	}
-	items := make([]articles.Article, 0, len(entities))
-	for _, entity := range entities {
-		var header entityHeader
-		if err := decodeHeader(entity.Value, &header); err != nil {
-			return articles.ArticlePage{}, err
+	var continuation *tableContinuation
+	for {
+		entities, next, listErr := repository.table.ListPage(ctx, filter, articleRawPageSize, continuation)
+		if listErr != nil {
+			return articles.ArticlePage{}, mapArticleError(listErr, false)
 		}
-		if header.EntityType != articleEntityType {
-			continue
+		if next != nil && continuation != nil && *next == *continuation {
+			return articles.ArticlePage{}, errors.New("article storage continuation did not advance")
 		}
-		article, err := unmarshalArticleEntity(entity.Value, entity.ETag)
-		if err != nil {
-			return articles.ArticlePage{}, err
+		for _, entity := range entities {
+			var header entityHeader
+			if err := decodeHeader(entity.Value, &header); err != nil {
+				return articles.ArticlePage{}, err
+			}
+			if header.EntityType != articleEntityType {
+				continue
+			}
+			article, err := unmarshalArticleEntity(entity.Value, entity.ETag)
+			if err != nil {
+				return articles.ArticlePage{}, err
+			}
+			if (options.Cursor == "" || articleStrictlyAfter(article, cursor.CreatedAt, cursor.ID)) && (options.Status == nil || article.Status == *options.Status) {
+				items = append(items, article)
+				sort.Slice(items, func(i, j int) bool { return articleBefore(items[i], items[j]) })
+				if len(items) > limit+1 {
+					items = items[:limit+1]
+				}
+			}
 		}
-		if options.Status == nil || article.Status == *options.Status {
-			items = append(items, article)
+		if next == nil {
+			break
 		}
+		continuation = next
 	}
 	page := articles.ArticlePage{Items: items, PageNumber: cursor.Page + 1}
-	if next != nil {
-		page.NextCursor = encodeArticlePageCursor(articlePageCursor{Page: cursor.Page + 1}, *next)
+	if len(items) > limit {
+		page.Items = items[:limit]
+		last := page.Items[len(page.Items)-1]
+		page.NextCursor = encodeArticlePageCursor(articlePageCursor{Page: cursor.Page + 1, CreatedAt: last.CreatedAt, ID: last.ID})
 	}
 	return page, nil
 }
@@ -165,7 +190,7 @@ func (repository *ArticleMetadataRepository) Update(ctx context.Context, article
 	if err := article.Validate(); err != nil {
 		return articles.Article{}, err
 	}
-	stored, err := repository.Get(ctx, article.ID)
+	stored, storedRowKey, err := repository.getWithRowKey(ctx, article.ID)
 	if err != nil {
 		return articles.Article{}, err
 	}
@@ -175,12 +200,11 @@ func (repository *ArticleMetadataRepository) Update(ctx context.Context, article
 	if err := validatePermanentPublishedSlugs(stored, article); err != nil {
 		return articles.Article{}, err
 	}
-	encoded, err := marshalArticleEntity(article)
+	encoded, err := marshalArticleEntityAtRow(article, storedRowKey)
 	if err != nil {
 		return articles.Article{}, err
 	}
-	rowKey, _ := articleRowKey(article.ID, article.CreatedAt)
-	actions := []tableAction{{Kind: tableReplace, PartitionKey: articlesPartition, RowKey: rowKey, Entity: encoded, ETag: expectedETag}}
+	actions := []tableAction{{Kind: tableReplace, PartitionKey: articlesPartition, RowKey: storedRowKey, Entity: encoded, ETag: expectedETag}}
 	desired := slugRecordMap(article)
 	old := slugRecordMap(stored)
 	for slug, record := range desired {
@@ -359,6 +383,12 @@ func validatePermanentPublishedSlugs(stored, updated articles.Article) error {
 		return fmt.Errorf("%w: replaced canonical slug must remain a historical alias", articles.ErrValidation)
 	}
 	return nil
+}
+func articleBefore(left, right articles.Article) bool {
+	return left.CreatedAt.After(right.CreatedAt) || left.CreatedAt.Equal(right.CreatedAt) && left.ID > right.ID
+}
+func articleStrictlyAfter(article articles.Article, createdAt time.Time, id string) bool {
+	return article.CreatedAt.Before(createdAt) || article.CreatedAt.Equal(createdAt) && article.ID < id
 }
 func decodeHeader(value []byte, header *entityHeader) error { return json.Unmarshal(value, header) }
 func mapArticleError(err error, slug bool) error {

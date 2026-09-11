@@ -56,7 +56,21 @@ export type ArticleSummaryDTO = {
   createdAt: string
   updatedAt: string
 }
-export type ArticleDetailDTO = ArticleSummaryDTO & {
+export type PublishedArticleSnapshotDTO = {
+  slug: string
+  title: string
+  summary: string
+  area: string
+  coverId: string
+}
+export type ArticleLifecycleDTO = {
+  published?: PublishedArticleSnapshotDTO
+  firstPublishedAt?: string
+  lastPublishedAt?: string
+  hasUnpublishedChanges: boolean
+}
+export type ArticleMutationDTO = ArticleSummaryDTO & ArticleLifecycleDTO
+export type ArticleDetailDTO = ArticleMutationDTO & {
   body: { schemaVersion: 1; document: ArticleDocument }
 }
 export type ArticlePageDTO = { items: ArticleSummaryDTO[]; nextCursor: string }

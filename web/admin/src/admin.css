@@ -34,6 +34,7 @@
   border: 1px solid var(--line, #d9d5ce);
   padding: 1rem;
   background: #fff;
+  color: #1d1b19;
 }
 .article-fields {
   display: grid;
@@ -51,6 +52,7 @@
   min-height: 20rem;
   border: 1px solid var(--line, #d9d5ce);
   background: #fff;
+  color: #1d1b19;
   padding: 1rem;
 }
 .tiptap-surface .ProseMirror {

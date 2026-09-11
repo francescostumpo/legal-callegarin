@@ -6,17 +6,17 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"time"
 )
 
 type articlePageCursor struct {
-	Page             int    `json:"page"`
-	NextPartitionKey string `json:"nextPartitionKey"`
-	NextRowKey       string `json:"nextRowKey"`
+	Page      int       `json:"page"`
+	CreatedAt time.Time `json:"createdAt"`
+	ID        string    `json:"id"`
 }
 
-func encodeArticlePageCursor(cursor articlePageCursor, next tableContinuation) string {
-	cursor.NextPartitionKey = next.PartitionKey
-	cursor.NextRowKey = next.RowKey
+func encodeArticlePageCursor(cursor articlePageCursor) string {
+	cursor.CreatedAt = cursor.CreatedAt.UTC()
 	raw, _ := json.Marshal(cursor)
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
@@ -28,7 +28,7 @@ func decodeArticlePageCursor(value string) (articlePageCursor, error) {
 	d := json.NewDecoder(strings.NewReader(string(raw)))
 	d.DisallowUnknownFields()
 	var c articlePageCursor
-	if d.Decode(&c) != nil || c.Page < 1 || c.NextPartitionKey == "" && c.NextRowKey == "" {
+	if d.Decode(&c) != nil || c.Page < 1 || c.CreatedAt.IsZero() || !safeStorageSegment(c.ID) {
 		return articlePageCursor{}, errors.New("incomplete cursor")
 	}
 	if err = d.Decode(&struct{}{}); !errors.Is(err, io.EOF) {

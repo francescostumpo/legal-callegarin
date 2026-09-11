@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,6 +62,25 @@ func TestArticleServicePublishedBodySurvivesLaterDraft(t *testing.T) {
 	}
 	if republished.PublishedBody == nil || *republished.PublishedBody != *saved.DraftBody || !republished.FirstPublishedAt.Equal(*published.FirstPublishedAt) || !republished.LastPublishedAt.Equal(clock.now) {
 		t.Fatalf("replacement Publish() = %#v", republished)
+	}
+}
+
+func TestArticleServiceIgnoresCallerDerivedBodyFields(t *testing.T) {
+	clock := &articleClock{now: time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)}
+	service := articles.NewService(memory.NewArticleMetadataRepository(), memory.NewArticleBodyStore(clock.Now), clock, &articleIDs{values: []string{"article-compiled"}})
+	input := articleDraft("server-compiled", "contenuto")
+	input.Body.HTML = `<script>alert(1)</script>`
+	input.Body.PlainText = "caller controlled"
+	created, err := service.CreateDraft(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := service.GetPreview(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(preview.Body.HTML, "script") || preview.Body.PlainText == input.Body.PlainText {
+		t.Fatalf("caller derived fields persisted: %#v", preview.Body)
 	}
 }
 

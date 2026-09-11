@@ -121,6 +121,20 @@ func marshalArticleEntity(article articles.Article) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return marshalArticleEntityAtRow(article, rowKey)
+}
+
+func marshalArticleEntityAtRow(article articles.Article, rowKey string) ([]byte, error) {
+	if err := article.Validate(); err != nil {
+		return nil, err
+	}
+	wanted, err := articleRowKey(article.ID, article.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if rowKey != wanted && rowKey != article.ID {
+		return nil, fmt.Errorf("%w: article storage row is invalid", articles.ErrValidation)
+	}
 	entity := articleEntity{
 		entityHeader: entityHeader{PartitionKey: articlesPartition, RowKey: rowKey, EntityType: articleEntityType, SchemaVersion: storageSchemaVersion}, ID: article.ID,
 		Slug: article.Slug, Title: article.Title, Summary: article.Summary, Area: article.Area, CoverID: article.CoverID, Status: article.Status,
@@ -187,6 +201,10 @@ func unmarshalArticleEntity(encoded []byte, etag string) (articles.Article, erro
 	}
 	if err := article.Validate(); err != nil {
 		return articles.Article{}, err
+	}
+	wanted, err := articleRowKey(article.ID, article.CreatedAt)
+	if err != nil || entity.RowKey != wanted && entity.RowKey != article.ID {
+		return articles.Article{}, fmt.Errorf("%w: article entity key is invalid", articles.ErrValidation)
 	}
 	return article, nil
 }
