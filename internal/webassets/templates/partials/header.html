@@ -1,0 +1,58 @@
+{{define "site-header"}}
+<header class="site-header">
+  <div class="site-header__inner shell">
+    <a class="brand" href="/" aria-label="{{.SiteName}}, pagina iniziale">
+      <span class="brand__name">Alessandro Callegarin</span>
+      <span class="brand__role">Studio legale</span>
+    </a>
+
+    <details class="mobile-navigation" data-navigation>
+      <summary class="navigation-toggle">
+        <span class="navigation-toggle__open">Menu</span>
+        <span class="navigation-toggle__close">Chiudi</span>
+      </summary>
+      <nav
+        class="mobile-navigation__panel"
+        aria-label="Navigazione principale mobile"
+      >
+        <button
+          class="mobile-navigation__close"
+          type="button"
+          data-navigation-close
+        >
+          Chiudi menu <span aria-hidden="true">×</span>
+        </button>
+        <ul class="navigation-list">
+          {{range .Navigation}}
+          <li>
+            <a href="{{.Href}}" {{if .Current}} aria-current="page" {{end}}
+              >{{.Label}}</a
+            >
+          </li>
+          {{end}}
+        </ul>
+        <a
+          class="button button--primary navigation-consultation"
+          href="/contatti"
+          >Richiedi una consulenza</a
+        >
+      </nav>
+    </details>
+
+    <nav class="desktop-navigation" aria-label="Navigazione principale">
+      <ul class="navigation-list navigation-list--desktop">
+        {{range .Navigation}}
+        <li>
+          <a href="{{.Href}}" {{if .Current}} aria-current="page" {{end}}
+            >{{.Label}}</a
+          >
+        </li>
+        {{end}}
+      </ul>
+      <a class="button button--outline" href="/contatti"
+        >Richiedi una consulenza</a
+      >
+    </nav>
+  </div>
+</header>
+{{end}}

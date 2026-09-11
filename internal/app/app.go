@@ -1,11 +1,13 @@
 package app
 
 import (
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
 
 	"github.com/francescostumpo/legal-callegarin/internal/config"
+	publicweb "github.com/francescostumpo/legal-callegarin/internal/web/public"
 )
 
 type Options struct {
@@ -14,16 +16,20 @@ type Options struct {
 	Logger *slog.Logger
 }
 
-func New(_ Options) http.Handler {
+func New(options Options) (http.Handler, error) {
+	renderer, err := publicweb.NewRenderer(options.Assets, options.Config.PublicBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("initialize public renderer: %w", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		response.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/", func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		http.Error(response, "application not initialized", http.StatusServiceUnavailable)
-	})
+	if err := publicweb.RegisterRoutes(mux, renderer, options.Assets); err != nil {
+		return nil, fmt.Errorf("register public routes: %w", err)
+	}
 
-	return mux
+	return mux, nil
 }

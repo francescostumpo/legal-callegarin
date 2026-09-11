@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -31,9 +32,14 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	handler, err := app.New(app.Options{Config: cfg, Assets: webassets.Files, Logger: logger})
+	if err != nil {
+		return fmt.Errorf("initialize application: %w", err)
+	}
+
 	server := &http.Server{
 		Addr:              cfg.HTTPAddress,
-		Handler:           app.New(app.Options{Config: cfg, Assets: webassets.Files, Logger: logger}),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

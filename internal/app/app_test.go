@@ -4,6 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/fstest"
+
+	"github.com/francescostumpo/legal-callegarin/internal/config"
+	"github.com/francescostumpo/legal-callegarin/internal/webassets"
 )
 
 func TestHandler(t *testing.T) {
@@ -22,11 +26,18 @@ func TestHandler(t *testing.T) {
 			wantType:   "text/plain; charset=utf-8",
 		},
 		{
-			name:       "uninitialized root",
+			name:       "public home",
 			path:       "/",
-			wantStatus: http.StatusServiceUnavailable,
-			wantType:   "text/plain; charset=utf-8",
+			wantStatus: http.StatusOK,
+			wantType:   "text/html; charset=utf-8",
 		},
+	}
+	handler, err := New(Options{
+		Config: config.Config{PublicBaseURL: "https://studio.example.test"},
+		Assets: webassets.Files,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
 	}
 
 	for _, tt := range tests {
@@ -36,7 +47,7 @@ func TestHandler(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			response := httptest.NewRecorder()
 
-			New(Options{}).ServeHTTP(response, request)
+			handler.ServeHTTP(response, request)
 
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", response.Code, tt.wantStatus)
@@ -45,5 +56,14 @@ func TestHandler(t *testing.T) {
 				t.Fatalf("Content-Type = %q, want %q", got, tt.wantType)
 			}
 		})
+	}
+}
+
+func TestNewRejectsInvalidPublicAssets(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Options{Config: config.Config{PublicBaseURL: "https://studio.example.test"}, Assets: fstest.MapFS{}})
+	if err == nil {
+		t.Fatal("New() error = nil, want template initialization error")
 	}
 }

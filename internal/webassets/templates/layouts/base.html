@@ -3,10 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{.Title}}</title>
+    <meta name="description" content="{{.Description}}" />
+    <title>{{.Title}} | {{.SiteName}}</title>
+    <link rel="canonical" href="{{.CanonicalURL}}" />
+    <link rel="stylesheet" href="/assets/site.css" />
+    <script src="/assets/nav.js" defer></script>
   </head>
-  <body>
-    {{block "content" .}}{{end}}
+  <body class="page page--{{.Kind}}">
+    <a class="skip-link" href="#main-content">Vai al contenuto</a>
+    {{template "site-header" .}}
+    <main id="main-content" tabindex="-1">{{template "content" .}}</main>
+    {{template "site-footer" .}}
   </body>
 </html>
 {{end}}

@@ -8,11 +8,16 @@
     "web/admin"
   ],
   "devDependencies": {
+    "@fontsource-variable/fraunces": "5.3.0",
+    "@fontsource-variable/source-sans-3": "5.3.0",
     "jsdom": "27.4.0",
-    "prettier": "3.9.6"
+    "prettier": "3.9.6",
+    "sharp": "0.35.4"
   },
   "scripts": {
-    "build": "npm run build --workspace=@legal-callegarin/admin",
+    "assets:verify": "node scripts/verify-assets.mjs",
+    "build": "npm run assets:verify && npm run build:admin",
+    "build:admin": "npm run build --workspace=@legal-callegarin/admin",
     "format": "prettier --write \"*.{json,md}\" \"scripts/**/*.mjs\" \"web/admin/**/*.{ts,tsx,html,css,json,md}\" \"internal/webassets/**/*.{html,css}\"",
     "format:check": "prettier --check \"*.{json,md}\" \"scripts/**/*.mjs\" \"web/admin/**/*.{ts,tsx,html,css,json,md}\" \"internal/webassets/**/*.{html,css}\"",
     "test": "npm run test --workspace=@legal-callegarin/admin --",
