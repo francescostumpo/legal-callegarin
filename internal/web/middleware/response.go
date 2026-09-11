@@ -212,11 +212,16 @@ func (capture *responseCapture) responseStatus() int {
 func (*responseCapture) responseOverflowed() bool { return false }
 
 func applySecurityHeaders(header http.Header, path string) {
-	header.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'")
+	if strings.HasPrefix(path, "/admin/preview/articles/") {
+		header.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'; object-src 'none'")
+		header.Set("X-Frame-Options", "SAMEORIGIN")
+	} else {
+		header.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'")
+		header.Set("X-Frame-Options", "DENY")
+	}
 	header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 	header.Set("Referrer-Policy", "no-referrer")
 	header.Set("X-Content-Type-Options", "nosniff")
-	header.Set("X-Frame-Options", "DENY")
 	header.Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
 	if adminPath(path) {
 		header.Set("Cache-Control", "no-store")

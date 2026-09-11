@@ -849,6 +849,115 @@ describe("admin shell", () => {
   })
 })
 
+describe("article console", () => {
+  it("keeps a new draft local until explicit create and exposes only the restricted editor", async () => {
+    window.history.replaceState({}, "", "/admin/articoli/nuovo")
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === "/api/admin/session")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        if (path === "/api/admin/covers")
+          return jsonResponse([
+            {
+              id: "contracts-pen",
+              alt: "Penna",
+              cardAvif: "/card.avif",
+              cardWebp: "/card.webp",
+              landscapeAvif: "/wide.avif",
+              landscapeWebp: "/wide.webp",
+            },
+          ])
+        if (path === "/api/admin/articles" && init?.method === "POST")
+          return jsonResponse(
+            {
+              id: "article-1",
+              slug: "prova",
+              title: "Titolo valido",
+              summary: "Sommario sufficientemente lungo",
+              area: "diritti-reali",
+              coverId: "",
+              status: "draft",
+              createdAt: now,
+              updatedAt: now,
+              body: {
+                schemaVersion: 1,
+                document: { type: "doc", content: [{ type: "paragraph" }] },
+              },
+            },
+            201,
+            { ETag: '"MQ"' },
+          )
+        if (path === "/api/admin/articles/article-1")
+          return jsonResponse(
+            {
+              id: "article-1",
+              slug: "prova",
+              title: "Titolo valido",
+              summary: "Sommario sufficientemente lungo",
+              area: "diritti-reali",
+              coverId: "",
+              status: "draft",
+              createdAt: now,
+              updatedAt: now,
+              body: {
+                schemaVersion: 1,
+                document: { type: "doc", content: [{ type: "paragraph" }] },
+              },
+            },
+            200,
+            { ETag: '"MQ"' },
+          )
+        throw new Error(`unexpected fetch ${path}`)
+      },
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+    expect(
+      await screen.findByRole("heading", { name: "Nuovo articolo" }),
+    ).toBeInTheDocument()
+    for (const control of [
+      "Grassetto",
+      "Corsivo",
+      "Titolo 2",
+      "Titolo 3",
+      "Elenco",
+      "Numerato",
+      "Citazione",
+      "Collegamento",
+    ])
+      expect(screen.getByRole("button", { name: control })).toBeInTheDocument()
+    expect(screen.queryByText(/HTML/i)).not.toBeInTheDocument()
+    expect(document.querySelector('input[type="file"]')).toBeNull()
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) =>
+          path === "/api/admin/articles" && init?.method === "POST",
+      ),
+    ).toBe(false)
+    fireEvent.change(screen.getByLabelText("Titolo"), {
+      target: { value: "Titolo valido" },
+    })
+    expect(screen.getByText("Modifiche non salvate")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Crea bozza" }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([path, init]) =>
+            path === "/api/admin/articles" && init?.method === "POST",
+        ),
+      ).toBe(true),
+    )
+    const create = fetchMock.mock.calls.find(
+      ([path, init]) =>
+        path === "/api/admin/articles" && init?.method === "POST",
+    )
+    expect(String(create?.[1]?.body)).not.toContain('"html"')
+    expect(window.localStorage.length).toBe(0)
+    expect(window.sessionStorage.length).toBe(0)
+  })
+})
+
 function contactFixture(overrides: Partial<Contact> = {}): Contact {
   return {
     id: "contact-1",

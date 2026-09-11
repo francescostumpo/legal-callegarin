@@ -3,6 +3,7 @@ package azure
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
@@ -30,6 +31,7 @@ type entityHeader struct {
 
 type articleEntity struct {
 	entityHeader
+	ID        string          `json:"id,omitempty"`
 	Slug      string          `json:"slug"`
 	Title     string          `json:"title"`
 	Summary   string          `json:"summary"`
@@ -115,9 +117,13 @@ func marshalArticleEntity(article articles.Article) ([]byte, error) {
 	if !safeStorageSegment(article.ID) {
 		return nil, fmt.Errorf("%w: article ID is not storage-safe", articles.ErrValidation)
 	}
+	rowKey, err := articleRowKey(article.ID, article.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
 	entity := articleEntity{
-		entityHeader: entityHeader{PartitionKey: articlesPartition, RowKey: article.ID, EntityType: articleEntityType, SchemaVersion: storageSchemaVersion},
-		Slug:         article.Slug, Title: article.Title, Summary: article.Summary, Area: article.Area, CoverID: article.CoverID, Status: article.Status,
+		entityHeader: entityHeader{PartitionKey: articlesPartition, RowKey: rowKey, EntityType: articleEntityType, SchemaVersion: storageSchemaVersion}, ID: article.ID,
+		Slug: article.Slug, Title: article.Title, Summary: article.Summary, Area: article.Area, CoverID: article.CoverID, Status: article.Status,
 		CreatedAt: article.CreatedAt.UTC(), UpdatedAt: article.UpdatedAt.UTC(), DeletedAt: utcTimePointer(article.DeletedAt),
 		FirstPublishedAt: utcTimePointer(article.FirstPublishedAt), LastPublishedAt: utcTimePointer(article.LastPublishedAt),
 	}
@@ -154,8 +160,12 @@ func unmarshalArticleEntity(encoded []byte, etag string) (articles.Article, erro
 	if err := validateEntityHeader(entity.entityHeader, articlesPartition, articleEntityType); err != nil {
 		return articles.Article{}, err
 	}
+	id := entity.ID
+	if id == "" {
+		id = entity.RowKey
+	}
 	article := articles.Article{
-		ID: entity.RowKey, Slug: entity.Slug, Title: entity.Title, Summary: entity.Summary, Area: entity.Area, CoverID: entity.CoverID,
+		ID: id, Slug: entity.Slug, Title: entity.Title, Summary: entity.Summary, Area: entity.Area, CoverID: entity.CoverID,
 		Status: entity.Status, CreatedAt: entity.CreatedAt.UTC(), UpdatedAt: entity.UpdatedAt.UTC(), DeletedAt: utcTimePointer(entity.DeletedAt),
 		FirstPublishedAt: utcTimePointer(entity.FirstPublishedAt), LastPublishedAt: utcTimePointer(entity.LastPublishedAt), ETag: etag,
 	}
@@ -179,6 +189,18 @@ func unmarshalArticleEntity(encoded []byte, etag string) (articles.Article, erro
 		return articles.Article{}, err
 	}
 	return article, nil
+}
+
+func articleRowKey(id string, createdAt time.Time) (string, error) {
+	if !safeStorageSegment(id) || createdAt.IsZero() || createdAt.UnixNano() < 0 {
+		return "", fmt.Errorf("%w: article storage key is invalid", articles.ErrValidation)
+	}
+	reverse := ^uint64(0) - uint64(createdAt.UTC().UnixNano())
+	var tie strings.Builder
+	for i := 0; i < len(id); i++ {
+		fmt.Fprintf(&tie, "%02x", ^id[i])
+	}
+	return fmt.Sprintf("%020d:%sz", reverse, tie.String()), nil
 }
 
 func marshalSlugEntity(record slugRecord) ([]byte, error) {

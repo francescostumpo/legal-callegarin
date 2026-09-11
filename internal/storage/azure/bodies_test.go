@@ -22,7 +22,10 @@ func TestArticleBodyStoreContract(t *testing.T) {
 
 func TestArticleBodyStoreRejectsAnExistingVersion(t *testing.T) {
 	store := newArticleBodyStore(newMemoryBlobDriver(), time.Now, func() string { return "fixed-version" })
-	body := articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc"}`), HTML: "<p>body</p>", PlainText: "body"}
+	body, compileErr := articles.CompileDocument(1, []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"body"}]}]}`))
+	if compileErr != nil {
+		t.Fatal(compileErr)
+	}
 	first, err := store.Put(context.Background(), "article-1", body)
 	if err != nil || first.BlobName != "articles/article-1/fixed-version.json" {
 		t.Fatalf("first Put() = %#v, %v", first, err)
@@ -65,7 +68,11 @@ func TestBodyStoreRequestsLimitPlusOneForOversizeStreamDetection(t *testing.T) {
 }
 
 func TestMaximumDomainBodyFitsStorageEnvelope(t *testing.T) {
-	body := articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc"}`), HTML: strings.Repeat("\x01", 512*1024), PlainText: strings.Repeat("\x01", 512*1024)}
+	text := strings.Repeat("x", 500*1024)
+	body, compileErr := articles.CompileDocument(1, []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"`+text+`"}]}]}`))
+	if compileErr != nil {
+		t.Fatal(compileErr)
+	}
 	encoded, err := marshalBodyEnvelope(body)
 	if err != nil || len(encoded) > maxBodyEnvelopeBytes {
 		t.Fatalf("marshalBodyEnvelope() size = %d, error = %v", len(encoded), err)
@@ -75,7 +82,10 @@ func TestMaximumDomainBodyFitsStorageEnvelope(t *testing.T) {
 func TestBodyMutationsReconcileCommittedResults(t *testing.T) {
 	driver := &commitThenErrorBlob{memoryBlobDriver: newMemoryBlobDriver(), err: ErrTransient}
 	store := newArticleBodyStore(driver, func() time.Time { return time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC) }, func() string { return "version-1" })
-	body := articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc"}`), HTML: "<p>body</p>", PlainText: "body"}
+	body, compileErr := articles.CompileDocument(1, []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"body"}]}]}`))
+	if compileErr != nil {
+		t.Fatal(compileErr)
+	}
 	ref, err := store.Put(context.Background(), "article-1", body)
 	if err != nil || ref.BlobName == "" {
 		t.Fatalf("Put() = %#v, %v", ref, err)

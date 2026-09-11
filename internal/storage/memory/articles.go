@@ -220,11 +220,11 @@ func articleCursorStart(items []articles.Article, encoded string) (int, error) {
 		return 0, err
 	}
 	for index, item := range items {
-		if item.ID == cursor.ID && item.CreatedAt.Equal(cursor.CreatedAt) {
-			return index + 1, nil
+		if item.CreatedAt.Before(cursor.CreatedAt) || item.CreatedAt.Equal(cursor.CreatedAt) && item.ID < cursor.ID {
+			return index, nil
 		}
 	}
-	return 0, articles.ErrValidation
+	return len(items), nil
 }
 
 func cloneArticle(article articles.Article) articles.Article {

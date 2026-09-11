@@ -131,7 +131,7 @@ func TestArticleMissingCoverUsesEditorialFallback(t *testing.T) {
 
 	fixture := newPublicArticleFixture(t, 1)
 	input := publicArticleDraft("cover-mancante", "Titolo senza cover", "corpo senza cover")
-	input.CoverID = "cover-non-presente"
+	input.CoverID = ""
 	article, err := fixture.service.CreateDraft(context.Background(), input)
 	if err != nil {
 		t.Fatalf("CreateDraft() error = %v", err)
@@ -286,7 +286,7 @@ func (fixture *publicArticleFixture) tick() { fixture.clock.now = fixture.clock.
 func publicArticleDraft(slug, title, body string) articles.DraftInput {
 	return articles.DraftInput{
 		Slug: slug, Title: title, Summary: "Sommario pubblico sufficientemente descrittivo", Area: "obbligazioni-e-contratti", CoverID: "contracts-pen",
-		Body: articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc"}`), HTML: "<p>" + body + "</p>", PlainText: body},
+		Body: articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"` + body + `"}]}]}`)},
 	}
 }
 

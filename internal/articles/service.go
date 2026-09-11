@@ -39,6 +39,8 @@ type ArticleService interface {
 	GetPreview(context.Context, string) (ArticleWithBody, error)
 	GetPublished(context.Context, string) (ArticleWithBody, error)
 	ListPublished(context.Context, ListOptions) (ArticlePage, error)
+	Get(context.Context, string) (Article, error)
+	List(context.Context, ListOptions) (ArticlePage, error)
 }
 
 type ArticleEvents interface {
@@ -237,6 +239,13 @@ func (service *service) ListPublished(ctx context.Context, options ListOptions) 
 	return page, nil
 }
 
+func (service *service) Get(ctx context.Context, id string) (Article, error) {
+	return service.repository.Get(ctx, id)
+}
+func (service *service) List(ctx context.Context, options ListOptions) (ArticlePage, error) {
+	return service.repository.List(ctx, options)
+}
+
 func normalizeDraftInput(input DraftInput) (DraftInput, error) {
 	slug, err := NormalizeSlug(input.Slug)
 	if err != nil {
@@ -247,9 +256,11 @@ func normalizeDraftInput(input DraftInput) (DraftInput, error) {
 	input.Summary = strings.TrimSpace(input.Summary)
 	input.Area = strings.TrimSpace(input.Area)
 	input.CoverID = strings.TrimSpace(input.CoverID)
-	if err := input.Body.Validate(); err != nil {
+	compiled, err := CompileDocument(input.Body.SchemaVersion, input.Body.Document)
+	if err != nil {
 		return DraftInput{}, err
 	}
+	input.Body = compiled
 	return input, nil
 }
 

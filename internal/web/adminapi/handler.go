@@ -16,9 +16,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/francescostumpo/legal-callegarin/internal/articles"
 	"github.com/francescostumpo/legal-callegarin/internal/auth"
 	"github.com/francescostumpo/legal-callegarin/internal/contacts"
 	webmiddleware "github.com/francescostumpo/legal-callegarin/internal/web/middleware"
+	publicweb "github.com/francescostumpo/legal-callegarin/internal/web/public"
 )
 
 const (
@@ -43,6 +45,8 @@ type Options struct {
 	ConfiguredUsername string
 	Sessions           SessionController
 	Contacts           contacts.ContactService
+	Articles           articles.ArticleService
+	Renderer           *publicweb.Renderer
 	Assets             fs.FS
 	SessionKey         []byte
 	PublicBaseURL      string
@@ -56,6 +60,8 @@ type handler struct {
 	credentials    CredentialVerifier
 	sessions       SessionController
 	contacts       contacts.ContactService
+	articles       articles.ArticleService
+	renderer       *publicweb.Renderer
 	adminFiles     http.Handler
 	index          []byte
 	sessionKey     []byte
@@ -106,6 +112,8 @@ func New(options Options) (http.Handler, error) {
 		credentials:    options.Credentials,
 		sessions:       options.Sessions,
 		contacts:       options.Contacts,
+		articles:       options.Articles,
+		renderer:       options.Renderer,
 		adminFiles:     http.FileServer(http.FS(adminFS)),
 		index:          index,
 		sessionKey:     append([]byte(nil), options.SessionKey...),
@@ -126,6 +134,14 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("POST /api/admin/contacts/purge-due", instance.purgeDuePOST)
 	mux.HandleFunc("GET /api/admin/contacts/{id}", instance.contactGET)
 	mux.HandleFunc("POST /api/admin/contacts/{id}/{action}", instance.contactPOST)
+	mux.HandleFunc("GET /api/admin/articles", instance.articlesGET)
+	mux.HandleFunc("POST /api/admin/articles", instance.articleCreatePOST)
+	mux.HandleFunc("GET /api/admin/articles/{id}", instance.articleGET)
+	mux.HandleFunc("PUT /api/admin/articles/{id}/draft", instance.articleDraftPUT)
+	mux.HandleFunc("POST /api/admin/articles/{id}/publish", instance.articlePublishPOST)
+	mux.HandleFunc("POST /api/admin/articles/{id}/withdraw", instance.articleWithdrawPOST)
+	mux.HandleFunc("GET /api/admin/covers", instance.coversGET)
+	mux.HandleFunc("GET /admin/preview/articles/{id}", instance.articlePreviewGET)
 	mux.HandleFunc("/api/admin", instance.apiNotFound)
 	mux.HandleFunc("/api/admin/", instance.apiNotFound)
 	mux.HandleFunc("GET /admin", instance.indexGET)

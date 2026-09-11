@@ -120,6 +120,12 @@ func (driver *memoryTableDriver) ListPage(ctx context.Context, filter string, ma
 	result := make([]tableEntity, 0)
 	for key, entity := range driver.entities {
 		if strings.HasPrefix(key, partitionFromFilter(filter)+"\x00") {
+			if entityType := propertyFromFilter(filter, "entityType"); entityType != "" {
+				var value map[string]any
+				if err := json.Unmarshal(entity.Value, &value); err != nil || value["entityType"] != entityType {
+					continue
+				}
+			}
 			if id := propertyFromFilter(filter, "id"); id != "" {
 				var value map[string]any
 				if err := json.Unmarshal(entity.Value, &value); err != nil || value["id"] != id {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,12 @@ func (driver *successfulTransactionStaleArticleTable) Get(ctx context.Context, p
 	}
 	return driver.memoryTableDriver.Get(ctx, partition, row)
 }
+func (driver *successfulTransactionStaleArticleTable) List(ctx context.Context, filter string, maximum int32) ([]tableEntity, error) {
+	if driver.returnStale && strings.Contains(filter, "id eq '") {
+		return []tableEntity{driver.stale}, nil
+	}
+	return driver.memoryTableDriver.List(ctx, filter, maximum)
+}
 
 type successfulUpdateStaleContactTable struct {
 	*memoryTableDriver
@@ -210,7 +217,7 @@ func TestArticleServicePreservesBodyWhenMetadataOutcomeCannotBeVerified(t *testi
 	blobs := newMemoryBlobDriver()
 	now := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	service := articles.NewService(newArticleMetadataRepository(driver), newArticleBodyStore(blobs, func() time.Time { return now }, func() string { return "version-1" }), outcomeClock{now}, outcomeIDs{})
-	_, err := service.CreateDraft(context.Background(), articles.DraftInput{Slug: "article-one", Title: "Titolo valido", Summary: "Sommario sufficientemente lungo", Area: "civile", CoverID: "cover", Body: articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc"}`), HTML: "<p>body</p>", PlainText: "body"}})
+	_, err := service.CreateDraft(context.Background(), articles.DraftInput{Slug: "article-one", Title: "Titolo valido", Summary: "Sommario sufficientemente lungo", Area: "diritti-reali", CoverID: "contracts-pen", Body: articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"body"}]}]}`)}})
 	if !errors.Is(err, articles.ErrCommitUnknown) {
 		t.Fatalf("CreateDraft() error = %v", err)
 	}
@@ -470,7 +477,7 @@ func cloneMemoryTableDriver(source *memoryTableDriver) *memoryTableDriver {
 
 func outcomeArticle(id, slug string) articles.Article {
 	now := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
-	return articles.Article{ID: id, Slug: slug, Title: "Titolo valido", Summary: "Sommario sufficientemente lungo", Area: "civile", CoverID: "cover", Status: articles.StatusDraft, DraftBody: &articles.BodyRef{BlobName: "articles/" + id + "/v1.json", Version: "v1", SavedAt: now}, CreatedAt: now, UpdatedAt: now}
+	return articles.Article{ID: id, Slug: slug, Title: "Titolo valido", Summary: "Sommario sufficientemente lungo", Area: "diritti-reali", CoverID: "contracts-pen", Status: articles.StatusDraft, DraftBody: &articles.BodyRef{BlobName: "articles/" + id + "/v1.json", Version: "v1", SavedAt: now}, CreatedAt: now, UpdatedAt: now}
 }
 func outcomeContact(id string) contacts.Contact {
 	now := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
@@ -478,7 +485,7 @@ func outcomeContact(id string) contacts.Contact {
 }
 
 func outcomeDraft(slug, plainText string) articles.DraftInput {
-	return articles.DraftInput{Slug: slug, Title: "Titolo valido", Summary: "Sommario sufficientemente lungo", Area: "civile", CoverID: "cover", Body: articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc"}`), HTML: "<p>" + plainText + "</p>", PlainText: plainText}}
+	return articles.DraftInput{Slug: slug, Title: "Titolo valido", Summary: "Sommario sufficientemente lungo", Area: "diritti-reali", CoverID: "contracts-pen", Body: articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"` + plainText + `"}]}]}`)}}
 }
 
 func outcomeSession(label string, created time.Time) auth.Session {

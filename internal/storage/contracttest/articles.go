@@ -207,7 +207,10 @@ func ArticleBodyStore(t *testing.T, factory func() articles.BodyStore) {
 
 	store := factory()
 	ctx := context.Background()
-	body := articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc"}`), HTML: "<p>contenuto</p>", PlainText: "contenuto"}
+	body, err := articles.CompileDocument(1, []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"contenuto"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	first, err := store.Put(ctx, "article-1", body)
 	if err != nil {
 		t.Fatalf("Put() error = %v", err)
@@ -247,8 +250,8 @@ func articleFixture(id, slug string, created time.Time) articles.Article {
 		Slug:      slug,
 		Title:     "Titolo valido",
 		Summary:   "Sommario sufficientemente lungo",
-		Area:      "obbligazioni",
-		CoverID:   "cover-1",
+		Area:      "obbligazioni-e-contratti",
+		CoverID:   "contracts-pen",
 		Status:    articles.StatusDraft,
 		DraftBody: &articles.BodyRef{BlobName: id, Version: "body-1", SavedAt: created},
 		CreatedAt: created,

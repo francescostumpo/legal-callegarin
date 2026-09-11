@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/francescostumpo/legal-callegarin/internal/webassets"
 )
 
 const (
@@ -127,11 +129,11 @@ func (article Article) Validate() error {
 	if err := validateTrimmedRuneLength("summary", article.Summary, 20, 320); err != nil {
 		return err
 	}
-	if strings.TrimSpace(article.Area) == "" {
-		return validationError("area is required")
+	if !ValidArea(article.Area) {
+		return validationError("area is invalid")
 	}
-	if strings.TrimSpace(article.CoverID) == "" {
-		return validationError("cover ID is required")
+	if !webassets.ValidCoverID(article.CoverID) {
+		return validationError("cover ID is invalid")
 	}
 	if !validStatus(article.Status) {
 		return validationError("status is invalid")
@@ -193,8 +195,8 @@ func (published PublishedMetadata) validate() error {
 	if err := validateTrimmedRuneLength("published summary", published.Summary, 20, 320); err != nil {
 		return err
 	}
-	if strings.TrimSpace(published.Area) == "" || strings.TrimSpace(published.CoverID) == "" {
-		return validationError("published area and cover ID are required")
+	if !ValidArea(published.Area) || !webassets.ValidCoverID(published.CoverID) {
+		return validationError("published area or cover ID is invalid")
 	}
 	seen := map[string]bool{published.Slug: true}
 	for _, slug := range published.HistoricalSlugs {
@@ -208,65 +210,19 @@ func (published PublishedMetadata) validate() error {
 }
 
 func (body Body) Validate() error {
-	if body.SchemaVersion != 1 {
-		return validationError("body schema version must be 1")
-	}
-	if len(body.Document) == 0 || len(body.Document) > maxDocumentBytes || !json.Valid(body.Document) {
-		return validationError("body document must be valid JSON of at most 512 KiB")
-	}
-	var document any
-	if err := json.Unmarshal(body.Document, &document); err != nil {
-		return validationError("body document must be valid JSON")
-	}
-	nodeCount := 0
-	if err := validateDocument(document, 0, &nodeCount); err != nil {
+	compiled, err := CompileDocument(body.SchemaVersion, body.Document)
+	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(body.HTML) == "" {
-		return validationError("body HTML is required")
-	}
-	if len(body.HTML) > maxHTMLBytes {
-		return validationError("body HTML must contain at most 512 KiB")
-	}
-	if strings.TrimSpace(body.PlainText) == "" {
-		return validationError("body plain text is required")
-	}
-	if len(body.PlainText) > maxPlainTextBytes {
-		return validationError("body plain text must contain at most 512 KiB")
+	if body.HTML != compiled.HTML || body.PlainText != compiled.PlainText {
+		return validationError("body derived fields are not canonical")
 	}
 	return nil
 }
 
-func validateDocument(value any, nodeDepth int, nodeCount *int) error {
-	switch typed := value.(type) {
-	case map[string]any:
-		if _, isNode := typed["type"].(string); isNode {
-			nodeDepth++
-			*nodeCount++
-			if nodeDepth > maxDocumentDepth {
-				return validationError("body document exceeds maximum depth")
-			}
-			if *nodeCount > maxDocumentNodes {
-				return validationError("body document exceeds maximum node count")
-			}
-		}
-		if href, ok := typed["href"].(string); ok && utf8.RuneCountInString(href) > maxLinkLength {
-			return validationError("body document link exceeds maximum length")
-		}
-		for _, child := range typed {
-			if err := validateDocument(child, nodeDepth, nodeCount); err != nil {
-				return err
-			}
-		}
-	case []any:
-		for _, child := range typed {
-			if err := validateDocument(child, nodeDepth, nodeCount); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
+var validAreas = map[string]bool{"famiglia-e-persone": true, "successioni-e-donazioni": true, "obbligazioni-e-contratti": true, "recupero-crediti": true, "risarcimento-danni": true, "diritti-reali": true, "diritto-penale": true, "diritto-tributario": true}
+
+func ValidArea(area string) bool { return validAreas[area] }
 
 func ValidateTransition(from, to Status) error {
 	if !validStatus(from) || !validStatus(to) {

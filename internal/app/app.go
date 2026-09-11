@@ -64,8 +64,15 @@ func New(options Options) (http.Handler, error) {
 		events = publicweb.NewArticleEventSink()
 	}
 	articleReader := options.Articles
-	if articleReader == nil && bundle != nil && bundle.Articles != nil && bundle.Bodies != nil {
-		articleReader = articles.NewService(bundle.Articles, bundle.Bodies, appClock{now: clock}, secureArticleIDs{}, events)
+	var articleService articles.ArticleService
+	if configured, ok := options.Articles.(articles.ArticleService); ok {
+		articleService = configured
+	}
+	if bundle != nil && bundle.Articles != nil && bundle.Bodies != nil {
+		articleService = articles.NewService(bundle.Articles, bundle.Bodies, appClock{now: clock}, secureArticleIDs{}, events)
+		if articleReader == nil {
+			articleReader = articleService
+		}
 	}
 	rendererOptions := make([]publicweb.RendererOption, 0, 6)
 	if articleReader != nil {
@@ -134,6 +141,8 @@ func New(options Options) (http.Handler, error) {
 		ConfiguredUsername: options.Config.AdminUsername,
 		Sessions:           sessions,
 		Contacts:           contactService,
+		Articles:           articleService,
+		Renderer:           renderer,
 		Assets:             options.Assets,
 		SessionKey:         signingKey,
 		PublicBaseURL:      options.Config.PublicBaseURL,

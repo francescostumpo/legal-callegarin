@@ -17,7 +17,11 @@ import {
   Routes,
   useParams,
   useSearchParams,
+  useNavigate,
 } from "react-router-dom"
+import { EditorContent, useEditor } from "@tiptap/react"
+import StarterKit from "@tiptap/starter-kit"
+import TiptapLink from "@tiptap/extension-link"
 
 import {
   AdminClient,
@@ -29,6 +33,10 @@ import {
   type DashboardDTO,
   type PurgeDTO,
   type SessionDTO,
+  type ArticleDetailDTO,
+  type ArticlePageDTO,
+  type ArticleStatus,
+  type CoverDTO,
 } from "./api"
 import "./admin.css"
 
@@ -95,6 +103,15 @@ export default function App({ onUnauthorized = redirectToLogin }: AppProps) {
           <Route
             path="contatti/:id"
             element={<ContactDetail client={client} />}
+          />
+          <Route path="articoli" element={<ArticleList client={client} />} />
+          <Route
+            path="articoli/nuovo"
+            element={<ArticleEditor client={client} />}
+          />
+          <Route
+            path="articoli/:id"
+            element={<ArticleEditor client={client} />}
           />
           <Route path="*" element={<Navigate replace to="/" />} />
         </Route>
@@ -225,6 +242,9 @@ function Navigation({
     <div className="navigation-links">
       <NavLink end onClick={onNavigate} to="/">
         Panoramica
+      </NavLink>
+      <NavLink onClick={onNavigate} to="/articoli">
+        Articoli
       </NavLink>
       <NavLink onClick={onNavigate} to="/contatti">
         Contatti
@@ -825,6 +845,411 @@ function StateLabel({ state }: { state: ContactState }) {
     archived: "Archiviato",
   }
   return <span className={`state state-${state}`}>{labels[state]}</span>
+}
+
+const articleAreas = [
+  "famiglia-e-persone",
+  "successioni-e-donazioni",
+  "obbligazioni-e-contratti",
+  "recupero-crediti",
+  "risarcimento-danni",
+  "diritti-reali",
+  "diritto-penale",
+  "diritto-tributario",
+]
+
+function ArticleList({ client }: { client: AdminClient }) {
+  const [status, setStatus] = useState<ArticleStatus | "">("")
+  const [page, setPage] = useState<ArticlePageDTO>({
+    items: [],
+    nextCursor: "",
+  })
+  const [error, setError] = useState("")
+  useEffect(() => {
+    const controller = new AbortController()
+    const query = status ? `?status=${status}` : ""
+    void client
+      .fetchJSON<ArticlePageDTO>(`/api/admin/articles${query}`, {
+        signal: controller.signal,
+      })
+      .then(({ data }) => setPage(data))
+      .catch((reason: unknown) => {
+        if (!(reason instanceof DOMException && reason.name === "AbortError"))
+          setError("Impossibile caricare gli articoli")
+      })
+    return () => controller.abort()
+  }, [client, status])
+  return (
+    <section>
+      <PageHeading eyebrow="Pubblicazione" title="Articoli" />
+      <div className="article-list-actions">
+        <Link className="primary" to="/articoli/nuovo">
+          Nuovo articolo
+        </Link>
+        <label>
+          Stato{" "}
+          <select
+            value={status}
+            onChange={(event) =>
+              setStatus(event.target.value as ArticleStatus | "")
+            }
+          >
+            <option value="">Tutti</option>
+            <option value="draft">Bozza</option>
+            <option value="published">Pubblicato</option>
+            <option value="withdrawn">Ritirato</option>
+          </select>
+        </label>
+      </div>
+      {error ? <p role="alert">{error}</p> : null}
+      <div className="article-cards">
+        {page.items.map((article) => (
+          <article className="article-admin-card" key={article.id}>
+            <p className="eyebrow">{article.status}</p>
+            <h2>
+              <Link to={`/articoli/${article.id}`}>{article.title}</Link>
+            </h2>
+            <p>{article.summary}</p>
+            <small>Aggiornato {formatDate(article.updatedAt)}</small>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function ArticleEditor({ client }: { client: AdminClient }) {
+  const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const [form, setForm] = useState({
+    slug: "",
+    title: "",
+    summary: "",
+    area: articleAreas[0],
+    coverId: "",
+  })
+  const [covers, setCovers] = useState<CoverDTO[]>([])
+  const [etag, setETag] = useState<string | null>(null)
+  const [status, setStatus] = useState<ArticleStatus>("draft")
+  const [dirty, setDirty] = useState(false)
+  const [reloadRequired, setReloadRequired] = useState(false)
+  const [previewWidth, setPreviewWidth] = useState("100%")
+  const [message, setMessage] = useState("")
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        heading: { levels: [2, 3] },
+        code: false,
+        codeBlock: false,
+        strike: false,
+        underline: false,
+        link: false,
+        horizontalRule: false,
+        hardBreak: false,
+      }),
+      TiptapLink.configure({ openOnClick: false, autolink: false }),
+    ],
+    content: { type: "doc", content: [{ type: "paragraph" }] },
+    onUpdate: () => setDirty(true),
+  })
+  useEffect(() => {
+    void client
+      .fetchJSON<CoverDTO[]>("/api/admin/covers")
+      .then(({ data }) => setCovers(data))
+  }, [client])
+  useEffect(() => {
+    if (!id || !editor) return
+    const controller = new AbortController()
+    void client
+      .fetchJSON<ArticleDetailDTO>(`/api/admin/articles/${id}`, {
+        signal: controller.signal,
+      })
+      .then(({ data, etag: freshETag }) => {
+        setForm({
+          slug: data.slug,
+          title: data.title,
+          summary: data.summary,
+          area: data.area,
+          coverId: data.coverId,
+        })
+        setStatus(data.status)
+        setETag(freshETag)
+        editor.commands.setContent(data.body.document as never)
+        setDirty(false)
+      })
+      .catch(() => setMessage("Impossibile caricare l’articolo"))
+    return () => controller.abort()
+  }, [client, editor, id])
+  useEffect(() => {
+    if (!dirty) return
+    const unload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+    }
+    const links = (event: MouseEvent) => {
+      const anchor = (event.target as Element | null)?.closest("a[href]")
+      if (
+        anchor &&
+        !window.confirm("Le modifiche non salvate andranno perse. Continuare?")
+      ) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    }
+    window.addEventListener("beforeunload", unload)
+    document.addEventListener("click", links, true)
+    return () => {
+      window.removeEventListener("beforeunload", unload)
+      document.removeEventListener("click", links, true)
+    }
+  }, [dirty])
+  const change = (field: keyof typeof form, value: string) => {
+    setForm((current) => ({ ...current, [field]: value }))
+    setDirty(true)
+  }
+  const payload = () => ({
+    ...form,
+    body: {
+      schemaVersion: 1 as const,
+      document: editor?.getJSON() ?? { type: "doc" },
+    },
+  })
+  const save = async () => {
+    if (!editor) return
+    setMessage("")
+    try {
+      if (!id) {
+        const result = await client.fetchJSON<ArticleDetailDTO>(
+          "/api/admin/articles",
+          { method: "POST", body: payload() },
+        )
+        setDirty(false)
+        navigate(`/articoli/${result.data.id}`, { replace: true })
+      } else {
+        const result = await client.fetchJSON<ArticleDetailDTO>(
+          `/api/admin/articles/${id}/draft`,
+          { method: "PUT", ifMatch: etag ?? undefined, body: payload() },
+        )
+        setETag(result.etag)
+        setStatus(result.data.status)
+        setDirty(false)
+        setMessage("Bozza salvata")
+      }
+    } catch (reason) {
+      if (
+        reason instanceof APIError &&
+        (reason.code === "commit_unknown" || reason.code === "article_conflict")
+      ) {
+        setReloadRequired(true)
+        setMessage(
+          reason.code === "commit_unknown"
+            ? "Esito del salvataggio incerto: ricarica prima di riprovare. Il testo locale è preservato."
+            : "Conflitto con una versione più recente: il testo locale è preservato. Ricarica per riconciliare.",
+        )
+      } else
+        setMessage(
+          reason instanceof APIError
+            ? reason.message
+            : "Salvataggio non riuscito",
+        )
+    }
+  }
+  const transition = async (action: "publish" | "withdraw") => {
+    if (!id || !etag || dirty) return
+    try {
+      const result = await client.fetchJSON<ArticleDetailDTO>(
+        `/api/admin/articles/${id}/${action}`,
+        { method: "POST", ifMatch: etag },
+      )
+      setETag(result.etag)
+      setStatus(result.data.status)
+      setMessage(
+        action === "publish" ? "Articolo pubblicato" : "Articolo ritirato",
+      )
+    } catch (reason) {
+      setMessage(
+        reason instanceof APIError ? reason.message : "Operazione non riuscita",
+      )
+    }
+  }
+  return (
+    <section className="article-editor">
+      <PageHeading
+        eyebrow={id ? status : "Nuova bozza locale"}
+        title={id ? "Modifica articolo" : "Nuovo articolo"}
+      />
+      {dirty ? <p className="dirty-indicator">Modifiche non salvate</p> : null}
+      {message ? <p role="status">{message}</p> : null}
+      {reloadRequired ? (
+        <button type="button" onClick={() => window.location.reload()}>
+          Ricarica per riconciliare
+        </button>
+      ) : null}
+      <div className="article-fields">
+        <label>
+          Titolo{" "}
+          <input
+            value={form.title}
+            onChange={(e) => change("title", e.target.value)}
+          />
+        </label>
+        <label>
+          Slug{" "}
+          <input
+            value={form.slug}
+            onChange={(e) => change("slug", e.target.value)}
+          />
+        </label>
+        <label>
+          Sommario{" "}
+          <textarea
+            value={form.summary}
+            onChange={(e) => change("summary", e.target.value)}
+          />
+        </label>
+        <label>
+          Area{" "}
+          <select
+            value={form.area}
+            onChange={(e) => change("area", e.target.value)}
+          >
+            {articleAreas.map((area) => (
+              <option key={area}>{area}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Copertina{" "}
+          <select
+            value={form.coverId}
+            onChange={(e) => change("coverId", e.target.value)}
+          >
+            <option value="">Nessuna (fallback editoriale)</option>
+            {covers.map((cover) => (
+              <option key={cover.id} value={cover.id}>
+                {cover.alt}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="editor-toolbar" aria-label="Formattazione">
+        <button
+          type="button"
+          onClick={() => editor?.chain().focus().toggleBold().run()}
+        >
+          Grassetto
+        </button>
+        <button
+          type="button"
+          onClick={() => editor?.chain().focus().toggleItalic().run()}
+        >
+          Corsivo
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            editor?.chain().focus().toggleHeading({ level: 2 }).run()
+          }
+        >
+          Titolo 2
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            editor?.chain().focus().toggleHeading({ level: 3 }).run()
+          }
+        >
+          Titolo 3
+        </button>
+        <button
+          type="button"
+          onClick={() => editor?.chain().focus().toggleBulletList().run()}
+        >
+          Elenco
+        </button>
+        <button
+          type="button"
+          onClick={() => editor?.chain().focus().toggleOrderedList().run()}
+        >
+          Numerato
+        </button>
+        <button
+          type="button"
+          onClick={() => editor?.chain().focus().toggleBlockquote().run()}
+        >
+          Citazione
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const href = window.prompt("Indirizzo del collegamento")
+            if (href) editor?.chain().focus().setLink({ href }).run()
+          }}
+        >
+          Collegamento
+        </button>
+      </div>
+      <EditorContent className="tiptap-surface" editor={editor} />
+      <div className="article-editor-actions">
+        <button
+          className="primary"
+          disabled={reloadRequired}
+          type="button"
+          onClick={() => void save()}
+        >
+          {id ? "Salva bozza" : "Crea bozza"}
+        </button>
+        {id ? (
+          <>
+            <button
+              disabled={dirty || reloadRequired}
+              type="button"
+              onClick={() => void transition("publish")}
+            >
+              Pubblica
+            </button>
+            {status === "published" ? (
+              <button
+                disabled={dirty || reloadRequired}
+                type="button"
+                onClick={() => void transition("withdraw")}
+              >
+                Ritira
+              </button>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+      {id ? (
+        <div className="preview-panel">
+          <h2>Anteprima ultima bozza salvata</h2>
+          <div className="preview-sizes">
+            <button type="button" onClick={() => setPreviewWidth("360px")}>
+              360
+            </button>
+            <button type="button" onClick={() => setPreviewWidth("768px")}>
+              768
+            </button>
+            <button type="button" onClick={() => setPreviewWidth("100%")}>
+              Desktop
+            </button>
+            <a
+              href={`/admin/preview/articles/${id}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Apri in nuova scheda
+            </a>
+          </div>
+          <iframe
+            style={{ width: previewWidth }}
+            title="Anteprima articolo salvato"
+            src={`/admin/preview/articles/${id}`}
+          />
+        </div>
+      ) : null}
+    </section>
+  )
 }
 
 function PageHeading({ eyebrow, title }: { eyebrow: string; title: string }) {

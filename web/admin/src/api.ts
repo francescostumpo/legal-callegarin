@@ -43,10 +43,37 @@ export type ContactPageDTO = {
   nextCursor: string
 }
 
+export type ArticleStatus = "draft" | "published" | "withdrawn"
+export type ArticleDocument = { type: "doc"; content?: unknown[] }
+export type ArticleSummaryDTO = {
+  id: string
+  slug: string
+  title: string
+  summary: string
+  area: string
+  coverId: string
+  status: ArticleStatus
+  createdAt: string
+  updatedAt: string
+}
+export type ArticleDetailDTO = ArticleSummaryDTO & {
+  body: { schemaVersion: 1; document: ArticleDocument }
+}
+export type ArticlePageDTO = { items: ArticleSummaryDTO[]; nextCursor: string }
+export type CoverDTO = {
+  id: string
+  alt: string
+  cardAvif: string
+  cardWebp: string
+  landscapeAvif: string
+  landscapeWebp: string
+}
+
 type RequestOptions = {
-  method?: "POST" | "DELETE"
+  method?: "POST" | "PUT" | "DELETE"
   ifMatch?: string
   signal?: AbortSignal
+  body?: unknown
 }
 
 export type APIResult<T> = {
@@ -56,11 +83,13 @@ export type APIResult<T> = {
 
 export class APIError extends Error {
   readonly status: number
+  readonly code: string
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code = "") {
     super(message)
     this.name = "APIError"
     this.status = status
+    this.code = code
   }
 }
 
@@ -88,10 +117,13 @@ export class AdminClient {
     if (options.ifMatch !== undefined) {
       headers["If-Match"] = options.ifMatch
     }
+    if (options.body !== undefined) headers["Content-Type"] = "application/json"
     const response = await fetch(path, {
       method: options.method,
       credentials: "same-origin",
       headers,
+      body:
+        options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: options.signal,
     })
     if (response.status === 401 && !this.#transitionedToLogin) {
@@ -100,15 +132,20 @@ export class AdminClient {
     }
     if (!response.ok) {
       let message = "Richiesta non riuscita"
+      let code = ""
       try {
-        const payload = (await response.json()) as { error?: string }
+        const payload = (await response.json()) as {
+          error?: string
+          code?: string
+        }
         if (typeof payload.error === "string" && payload.error !== "") {
           message = payload.error
         }
+        code = payload.code ?? ""
       } catch {
         // The UI intentionally falls back to one generic message.
       }
-      throw new APIError(response.status, message)
+      throw new APIError(response.status, message, code)
     }
     if (response.status === 204) {
       return { data: undefined as T, etag: response.headers.get("ETag") }

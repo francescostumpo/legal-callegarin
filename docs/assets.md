@@ -61,3 +61,16 @@ Upstream provenance recorded by the pinned packages:
 
 The CSS fallback stacks use locally available serif and system sans-serif
 families when a WOFF2 file cannot be loaded.
+
+## Article editor and sanitizer dependencies
+
+Task 9 pins TipTap `3.31.3` (`@tiptap/react`, `@tiptap/pm`,
+`@tiptap/starter-kit`, and `@tiptap/extension-link`) under the MIT license.
+TipTap was selected for its schema-constrained ProseMirror document model and
+React integration; the configured schema exposes only the article formats in
+the design. The server remains authoritative and never trusts TipTap HTML.
+
+The server pins `github.com/microcosm-cc/bluemonday` `v1.0.27` under the
+3-clause BSD license. It is a mature, allowlist-oriented Go HTML sanitizer and
+is applied after deterministic server rendering. Its policy admits only the
+article elements and anchor attributes defined by the Task 9 contract.

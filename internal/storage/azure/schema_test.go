@@ -24,10 +24,10 @@ func TestArticleEntityRoundTripUsesStableKeysUTCAndSchema(t *testing.T) {
 	deleted := last.Add(time.Hour)
 	article := articles.Article{
 		ID: "article_01", Slug: "bozza-corrente", Title: "Titolo valido", Summary: "Sommario sufficientemente lungo",
-		Area: "obbligazioni", CoverID: "cover-1", Status: articles.StatusPublished,
+		Area: "obbligazioni-e-contratti", CoverID: "contracts-pen", Status: articles.StatusPublished,
 		DraftBody:        &articles.BodyRef{BlobName: "articles/article_01/draft.json", Version: "draft", SavedAt: created},
 		PublishedBody:    &articles.BodyRef{BlobName: "articles/article_01/live.json", Version: "live", SavedAt: first},
-		Published:        &articles.PublishedMetadata{Slug: "slug-pubblico", Title: "Titolo pubblico", Summary: "Sommario pubblico sufficientemente lungo", Area: "obbligazioni", CoverID: "cover-2", HistoricalSlugs: []string{"slug-storico"}},
+		Published:        &articles.PublishedMetadata{Slug: "slug-pubblico", Title: "Titolo pubblico", Summary: "Sommario pubblico sufficientemente lungo", Area: "obbligazioni-e-contratti", CoverID: "contracts-pen", HistoricalSlugs: []string{"slug-storico"}},
 		FirstPublishedAt: &first, LastPublishedAt: &last, CreatedAt: created, UpdatedAt: last, DeletedAt: &deleted, ETag: `W/"domain-etag"`,
 	}
 
@@ -35,7 +35,11 @@ func TestArticleEntityRoundTripUsesStableKeysUTCAndSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshalArticleEntity() error = %v", err)
 	}
-	assertEntityHeader(t, encoded, articlesPartition, article.ID, articleEntityType)
+	rowKey, rowErr := articleRowKey(article.ID, article.CreatedAt)
+	if rowErr != nil {
+		t.Fatal(rowErr)
+	}
+	assertEntityHeader(t, encoded, articlesPartition, rowKey, articleEntityType)
 	if !strings.Contains(string(encoded), `"schemaVersion":1`) {
 		t.Fatalf("article entity lacks schema version: %s", encoded)
 	}
@@ -61,7 +65,7 @@ func TestArticleEntityRoundTripPreservesNilPointersAndLists(t *testing.T) {
 	created := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	article := articles.Article{
 		ID: "draft-1", Slug: "draft-slug", Title: "Titolo valido", Summary: "Sommario sufficientemente lungo",
-		Area: "obbligazioni", CoverID: "cover-1", Status: articles.StatusDraft,
+		Area: "obbligazioni-e-contratti", CoverID: "contracts-pen", Status: articles.StatusDraft,
 		DraftBody: &articles.BodyRef{BlobName: "articles/draft-1/v1.json", Version: "v1", SavedAt: created},
 		CreatedAt: created, UpdatedAt: created,
 	}
@@ -172,7 +176,10 @@ func TestSessionEntityContainsOnlySHA256HashAndPreservesNilRevocation(t *testing
 func TestBodyEnvelopeRoundTripAndBlobName(t *testing.T) {
 	t.Parallel()
 
-	body := articles.Body{SchemaVersion: 1, Document: json.RawMessage(`{"type":"doc","content":[]}`), HTML: "<p>Contenuto</p>", PlainText: "Contenuto"}
+	body, compileErr := articles.CompileDocument(1, json.RawMessage(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Contenuto"}]}]}`))
+	if compileErr != nil {
+		t.Fatal(compileErr)
+	}
 	encoded, err := marshalBodyEnvelope(body)
 	if err != nil {
 		t.Fatalf("marshalBodyEnvelope() error = %v", err)

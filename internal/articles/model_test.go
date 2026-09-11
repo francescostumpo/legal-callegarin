@@ -63,7 +63,7 @@ func TestArticleValidate(t *testing.T) {
 		{name: "short summary", mutate: func(article *Article) { article.Summary = strings.Repeat("a", 19) }},
 		{name: "long summary", mutate: func(article *Article) { article.Summary = strings.Repeat("a", 321) }},
 		{name: "missing area", mutate: func(article *Article) { article.Area = "" }},
-		{name: "missing cover", mutate: func(article *Article) { article.CoverID = "" }},
+		{name: "unknown cover", mutate: func(article *Article) { article.CoverID = "unknown-cover" }},
 		{name: "invalid status", mutate: func(article *Article) { article.Status = "unknown" }},
 		{name: "missing created timestamp", mutate: func(article *Article) { article.CreatedAt = time.Time{} }},
 		{name: "updated before created", mutate: func(article *Article) { article.UpdatedAt = article.CreatedAt.Add(-time.Second) }},
@@ -109,7 +109,10 @@ func TestArticleValidate(t *testing.T) {
 func TestBodyValidate(t *testing.T) {
 	t.Parallel()
 
-	valid := Body{SchemaVersion: 1, Document: []byte(`{"type":"doc","content":[]}`), HTML: "<p>contenuto</p>", PlainText: "contenuto"}
+	valid, err := CompileDocument(1, []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"contenuto"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid Body.Validate() error = %v", err)
 	}
@@ -212,14 +215,14 @@ func validArticle() Article {
 		Slug:          "diritto-civile",
 		Title:         "Titolo valido",
 		Summary:       "Sommario sufficientemente lungo",
-		Area:          "obbligazioni",
-		CoverID:       "cover-1",
+		Area:          "obbligazioni-e-contratti",
+		CoverID:       "contracts-pen",
 		Status:        StatusPublished,
 		DraftBody:     ref,
 		PublishedBody: ref,
 		Published: &PublishedMetadata{
 			Slug: "valid-article", Title: "A valid article title", Summary: "A sufficiently detailed article summary",
-			Area: "obbligazioni", CoverID: "contracts-pen",
+			Area: "obbligazioni-e-contratti", CoverID: "contracts-pen",
 		},
 		FirstPublishedAt: &firstPublished,
 		LastPublishedAt:  &lastPublished,

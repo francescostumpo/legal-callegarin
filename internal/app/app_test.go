@@ -412,7 +412,7 @@ func (ids *appArticleIDs) NewID() string {
 func appArticleDraft(slug, title, body string) articles.DraftInput {
 	return articles.DraftInput{
 		Slug: slug, Title: title, Summary: "Sommario sufficientemente descrittivo", Area: "obbligazioni-e-contratti", CoverID: "contracts-pen",
-		Body: articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc"}`), HTML: "<p>" + body + "</p>", PlainText: body},
+		Body: articles.Body{SchemaVersion: 1, Document: []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"` + body + `"}]}]}`)},
 	}
 }
 
