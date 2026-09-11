@@ -43,6 +43,9 @@ func run(logger *slog.Logger) error {
 		storageContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if cfg.AzureStorageConnectionString != "" {
+			if err = azurestorage.EnsureFromConnectionString(storageContext, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames()); err != nil {
+				return fmt.Errorf("provision development Azure storage: %w", err)
+			}
 			bundle, err = azurestorage.OpenFromConnectionString(storageContext, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames(), time.Now)
 		} else {
 			bundle, err = azurestorage.Open(storageContext, cfg.AzureStorageAccountURL, azurestorage.DefaultResourceNames(), time.Now)

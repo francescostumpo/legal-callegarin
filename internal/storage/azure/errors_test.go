@@ -2,8 +2,10 @@ package azure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -45,9 +47,52 @@ func TestClassifyTransactionErrorReadsInnerMultipartStatus(t *testing.T) {
 		{"403 Forbidden", ErrAuthentication},
 		{"503 Service Unavailable", ErrTransient},
 	} {
-		err := errors.New("RESPONSE 202: 202 Accepted\r\nHTTP/1.1 " + test.status + "\r\n")
+		err := responseErrorWithMessage(t, http.StatusAccepted, "multipart boundary\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nHTTP/1.1 "+test.status+"\r\n")
 		if got := classifyTransactionError(err); !errors.Is(got, test.want) {
 			t.Fatalf("inner %s classified as %v, want %v", test.status, got, test.want)
 		}
 	}
+}
+
+func TestClassifyTransactionErrorRejectsUntrustedStatusText(t *testing.T) {
+	secret := "customer-secret HTTP/1.1 409 Conflict"
+	for _, err := range []error{
+		errors.New("\r\n\r\nHTTP/1.1 409 Conflict\r\n"),
+		responseErrorWithMessage(t, http.StatusBadRequest, "\r\n\r\nHTTP/1.1 409 Conflict\r\n"),
+		responseErrorWithMessage(t, http.StatusAccepted, "application data: "+secret+"\r\n"),
+		responseErrorWithMessage(t, http.StatusAccepted, "\n\nHTTP/1.1 409 Conflict\n"),
+	} {
+		classified := classifyTransactionError(err)
+		if errors.Is(classified, ErrConflict) {
+			t.Fatalf("classifyTransactionError(%T) trusted an unanchored status", err)
+		}
+		if classified != nil && classified.Error() != err.Error() && contains(classified.Error(), "customer-secret") {
+			t.Fatal("classified error exposed application data")
+		}
+	}
+}
+
+func TestClassifyTransactionErrorDoesNotExposeMultipartBody(t *testing.T) {
+	err := responseErrorWithMessage(t, http.StatusAccepted, "secret-value\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nHTTP/1.1 409 Conflict\r\n")
+	classified := classifyTransactionError(err)
+	if !errors.Is(classified, ErrConflict) || contains(classified.Error(), "secret-value") {
+		t.Fatalf("classified error = %q", classified)
+	}
+}
+
+func responseErrorWithMessage(t *testing.T, status int, message string) error {
+	t.Helper()
+	encoded, err := json.Marshal(map[string]any{"statusCode": status, "errorMessage": message})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response azcore.ResponseError
+	if err := json.Unmarshal(encoded, &response); err != nil {
+		t.Fatal(err)
+	}
+	return &response
+}
+
+func contains(value, substring string) bool {
+	return len(substring) <= len(value) && strings.Contains(value, substring)
 }

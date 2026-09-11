@@ -1,6 +1,7 @@
 package azure
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
 )
+
+const maxBodyEnvelopeBytes = 8 * 1024 * 1024
 
 type ArticleBodyStore struct {
 	blobs   blobDriver
@@ -37,6 +40,9 @@ func (store *ArticleBodyStore) Put(ctx context.Context, articleID string, body a
 	if err != nil {
 		return articles.BodyRef{}, err
 	}
+	if len(encoded) > maxBodyEnvelopeBytes {
+		return articles.BodyRef{}, articles.ErrBodyTooLarge
+	}
 	version := store.version()
 	name, err := articleBlobName(articleID, version)
 	if err != nil {
@@ -46,6 +52,17 @@ func (store *ArticleBodyStore) Put(ctx context.Context, articleID string, body a
 		if errors.Is(err, ErrPrecondition) || errors.Is(err, ErrConflict) {
 			return articles.BodyRef{}, articles.ErrConflict
 		}
+		if mutationOutcomeMayBeUnknown(err) {
+			observed, getErr := store.blobs.Get(ctx, name, maxBodyEnvelopeBytes+1)
+			switch {
+			case getErr == nil && len(observed.Value) <= maxBodyEnvelopeBytes && bytes.Equal(observed.Value, encoded):
+				return articles.BodyRef{BlobName: name, Version: version, SavedAt: store.now().UTC()}, nil
+			case errors.Is(getErr, ErrNotFound):
+				return articles.BodyRef{}, mapArticleError(err, false)
+			default:
+				return articles.BodyRef{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, err)
+			}
+		}
 		return articles.BodyRef{}, mapArticleError(err, false)
 	}
 	return articles.BodyRef{BlobName: name, Version: version, SavedAt: store.now().UTC()}, nil
@@ -54,18 +71,40 @@ func (store *ArticleBodyStore) Get(ctx context.Context, ref articles.BodyRef) (a
 	if err := validateBodyRef(ref); err != nil {
 		return articles.Body{}, err
 	}
-	encoded, err := store.blobs.Get(ctx, ref.BlobName)
+	download, err := store.blobs.Get(ctx, ref.BlobName, maxBodyEnvelopeBytes+1)
 	if err != nil {
 		return articles.Body{}, mapArticleError(err, false)
 	}
+	encoded, err := boundedBodyValue(download)
+	if err != nil {
+		return articles.Body{}, err
+	}
 	return unmarshalBodyEnvelope(encoded)
+}
+
+func boundedBodyValue(download blobDownload) ([]byte, error) {
+	if download.ContentLength != nil && *download.ContentLength > maxBodyEnvelopeBytes || len(download.Value) > maxBodyEnvelopeBytes {
+		return nil, articles.ErrBodyTooLarge
+	}
+	return download.Value, nil
 }
 func (store *ArticleBodyStore) Delete(ctx context.Context, ref articles.BodyRef) error {
 	if err := validateBodyRef(ref); err != nil {
 		return err
 	}
 	err := store.blobs.Delete(ctx, ref.BlobName)
-	return mapArticleError(err, false)
+	if err == nil || !mutationOutcomeMayBeUnknown(err) {
+		return mapArticleError(err, false)
+	}
+	_, getErr := store.blobs.Get(ctx, ref.BlobName, maxBodyEnvelopeBytes+1)
+	switch {
+	case errors.Is(getErr, ErrNotFound):
+		return nil
+	case getErr == nil:
+		return mapArticleError(err, false)
+	default:
+		return unknownCommitForContext(ctx, articles.ErrCommitUnknown, err)
+	}
 }
 func validateBodyRef(ref articles.BodyRef) error {
 	suffix := "/" + ref.Version + ".json"

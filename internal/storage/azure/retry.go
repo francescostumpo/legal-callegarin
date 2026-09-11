@@ -68,6 +68,9 @@ func (executor operationExecutor) do(ctx context.Context, operation func(context
 		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 		err = operation(attemptCtx)
 		cancel()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		classified := classifyStorageError(err)
 		if err == nil || !errors.Is(classified, ErrTransient) || attempt == attempts-1 {
 			return classified
@@ -79,6 +82,23 @@ func (executor operationExecutor) do(ctx context.Context, operation func(context
 		if err := sleep(ctx, jitter(delay)); err != nil {
 			return err
 		}
+	}
+	return classifyStorageError(err)
+}
+
+func (executor operationExecutor) mutate(ctx context.Context, operation func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	timeout := executor.timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err := operation(attemptCtx)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
 	return classifyStorageError(err)
 }

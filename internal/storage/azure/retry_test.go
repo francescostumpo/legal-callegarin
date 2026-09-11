@@ -63,3 +63,27 @@ func TestExecutorAppliesPerAttemptDeadlineAndCancellation(t *testing.T) {
 		t.Fatalf("canceled do() error = %v, attempts = %d", err, attempts)
 	}
 }
+
+func TestExecutorMutationNeverRetries(t *testing.T) {
+	executor := operationExecutor{attempts: 3, timeout: time.Second}
+	attempts := 0
+	err := executor.mutate(context.Background(), func(context.Context) error {
+		attempts++
+		return &azcore.ResponseError{StatusCode: http.StatusServiceUnavailable}
+	})
+	if !errors.Is(err, ErrTransient) || attempts != 1 {
+		t.Fatalf("mutate() error = %v, attempts = %d", err, attempts)
+	}
+}
+
+func TestExecutorPreservesCallerCancellationAfterOperationReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	executor := operationExecutor{attempts: 3, timeout: time.Second}
+	err := executor.mutate(ctx, func(context.Context) error {
+		cancel()
+		return ErrTransient
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("mutate() error = %v", err)
+	}
+}

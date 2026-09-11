@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
+	"regexp"
+	"strconv"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 )
@@ -41,12 +42,13 @@ func classifyStorageError(err error) error {
 			class = ErrTransient
 		}
 		if class != nil {
-			return fmt.Errorf("%w: %v", class, err)
+			return fmt.Errorf("%w: Azure Storage returned HTTP %d", class, responseError.StatusCode)
 		}
+		return fmt.Errorf("azure storage returned HTTP %d", responseError.StatusCode)
 	}
 	var networkError net.Error
 	if errors.As(err, &networkError) {
-		return fmt.Errorf("%w: %v", ErrTransient, err)
+		return fmt.Errorf("%w: network request failed", ErrTransient)
 	}
 	return err
 }
@@ -55,29 +57,41 @@ func classifyStorageError(err error) error {
 // batch status (202). The only preserved subrequest status is in the parsed
 // multipart error text, so classify it at this boundary before retry policy is
 // applied. Exact HTTP status lines avoid matching application data.
+var transactionStatusLine = regexp.MustCompile(`\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nHTTP/1\.1 ([0-9]{3})(?: [^\r\n]*)?\r\n`)
+
 func classifyTransactionError(err error) error {
 	if err == nil {
 		return nil
 	}
-	for _, status := range []struct {
-		line  string
-		class error
-	}{
-		{"HTTP/1.1 404 ", ErrNotFound},
-		{"HTTP/1.1 409 ", ErrConflict},
-		{"HTTP/1.1 412 ", ErrPrecondition},
-		{"HTTP/1.1 401 ", ErrAuthentication},
-		{"HTTP/1.1 403 ", ErrAuthentication},
-		{"HTTP/1.1 408 ", ErrTransient},
-		{"HTTP/1.1 429 ", ErrTransient},
-		{"HTTP/1.1 500 ", ErrTransient},
-		{"HTTP/1.1 502 ", ErrTransient},
-		{"HTTP/1.1 503 ", ErrTransient},
-		{"HTTP/1.1 504 ", ErrTransient},
-	} {
-		if strings.Contains(err.Error(), status.line) {
-			return fmt.Errorf("%w: %v", status.class, err)
-		}
+	var responseError *azcore.ResponseError
+	if !errors.As(err, &responseError) || responseError.StatusCode != http.StatusAccepted {
+		return classifyStorageError(err)
+	}
+	match := transactionStatusLine.FindStringSubmatch(err.Error())
+	if len(match) != 2 {
+		return classifyStorageError(err)
+	}
+	status, parseErr := strconv.Atoi(match[1])
+	if parseErr != nil {
+		return classifyStorageError(err)
+	}
+	var class error
+	switch status {
+	case http.StatusNotFound:
+		class = ErrNotFound
+	case http.StatusConflict:
+		class = ErrConflict
+	case http.StatusPreconditionFailed:
+		class = ErrPrecondition
+	case http.StatusUnauthorized, http.StatusForbidden:
+		class = ErrAuthentication
+	case http.StatusRequestTimeout, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		class = ErrTransient
+	}
+	if class != nil {
+		return fmt.Errorf("%w: table transaction subrequest returned HTTP %d", class, status)
 	}
 	return classifyStorageError(err)
 }

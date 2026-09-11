@@ -63,3 +63,11 @@ Azure mode uses `AZURE_STORAGE_ACCOUNT_URL` with a canonical
 `AZURE_STORAGE_CONNECTION_STRING` is limited to development/test (for example,
 Azurite). The former `AZURE_ACCOUNT_URL` name is rejected explicitly. Storage
 connection strings and credentials must never be logged.
+
+Production startup is non-provisioning: it constructs clients and starts even
+when Azure Storage is temporarily unavailable; readiness then reports `503`
+while liveness remains `200`. The deployment Bicep is responsible for creating
+the `articles`, `contacts`, and `sessions` tables and the private
+`article-bodies` container before the application revision starts. The explicit
+connection-string development path provisions those resources for Azurite and
+local tests only.

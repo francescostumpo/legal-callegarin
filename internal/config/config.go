@@ -4,8 +4,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net/url"
-	"strings"
+
+	"github.com/francescostumpo/legal-callegarin/internal/storage/azureurl"
 )
 
 const (
@@ -121,25 +121,14 @@ func validate(cfg Config) error {
 		if cfg.AzureStorageAccountURL == "" && cfg.AzureStorageConnectionString == "" {
 			return errors.New("AZURE_STORAGE_ACCOUNT_URL is required when STORAGE_MODE=azure without a development connection string")
 		}
-		if cfg.AzureStorageAccountURL != "" && !canonicalAzureStorageAccountURL(cfg.AzureStorageAccountURL) {
-			return errors.New("AZURE_STORAGE_ACCOUNT_URL must be a canonical HTTPS blob service origin")
+		if cfg.AzureStorageAccountURL != "" {
+			if _, _, err := azureurl.Endpoints(cfg.AzureStorageAccountURL); err != nil {
+				return errors.New("AZURE_STORAGE_ACCOUNT_URL must be a canonical HTTPS blob service origin")
+			}
 		}
 	}
 
 	return nil
-}
-
-func canonicalAzureStorageAccountURL(raw string) bool {
-	if raw == "" || strings.TrimSpace(raw) != raw {
-		return false
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Port() != "" || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return false
-	}
-	const suffix = ".blob.core.windows.net"
-	account := strings.TrimSuffix(parsed.Hostname(), suffix)
-	return account != parsed.Hostname() && account != "" && !strings.Contains(account, ".")
 }
 
 func loadSessionKey(environment, encoded string) ([]byte, error) {

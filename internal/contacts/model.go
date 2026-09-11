@@ -14,6 +14,7 @@ var (
 	ErrConflict          = errors.New("contact conflict")
 	ErrValidation        = errors.New("contact validation failed")
 	ErrInvalidTransition = errors.New("invalid contact transition")
+	ErrCommitUnknown     = errors.New("contact persistence outcome is unknown")
 )
 
 type State string

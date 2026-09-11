@@ -9,7 +9,11 @@ import (
 	"unicode/utf8"
 )
 
-const maxDocumentBytes = 512 * 1024
+const (
+	maxDocumentBytes  = 512 * 1024
+	maxHTMLBytes      = 512 * 1024
+	maxPlainTextBytes = 512 * 1024
+)
 
 const (
 	maxDocumentDepth = 32
@@ -23,6 +27,8 @@ var (
 	ErrValidation        = errors.New("article validation failed")
 	ErrSlugTaken         = errors.New("article slug is already taken")
 	ErrInvalidTransition = errors.New("invalid article transition")
+	ErrCommitUnknown     = errors.New("article persistence outcome is unknown")
+	ErrBodyTooLarge      = errors.New("article body exceeds the storage limit")
 )
 
 type Status string
@@ -219,8 +225,14 @@ func (body Body) Validate() error {
 	if strings.TrimSpace(body.HTML) == "" {
 		return validationError("body HTML is required")
 	}
+	if len(body.HTML) > maxHTMLBytes {
+		return validationError("body HTML must contain at most 512 KiB")
+	}
 	if strings.TrimSpace(body.PlainText) == "" {
 		return validationError("body plain text is required")
+	}
+	if len(body.PlainText) > maxPlainTextBytes {
+		return validationError("body plain text must contain at most 512 KiB")
 	}
 	return nil
 }

@@ -47,6 +47,9 @@ func (repository *ArticleMetadataRepository) Create(ctx context.Context, article
 			}
 			return articles.Article{}, articles.ErrSlugTaken
 		}
+		if mutationOutcomeMayBeUnknown(err) {
+			return repository.reconcileCreate(ctx, article, err)
+		}
 		return articles.Article{}, mapArticleError(err, false)
 	}
 	return repository.Get(ctx, article.ID)
@@ -203,9 +206,70 @@ func (repository *ArticleMetadataRepository) Update(ctx context.Context, article
 		if errors.Is(err, ErrConflict) {
 			return articles.Article{}, articles.ErrSlugTaken
 		}
+		if mutationOutcomeMayBeUnknown(err) {
+			return repository.reconcileUpdate(ctx, stored, article, err)
+		}
 		return articles.Article{}, mapArticleError(err, false)
 	}
 	return repository.Get(ctx, article.ID)
+}
+
+func (repository *ArticleMetadataRepository) reconcileCreate(ctx context.Context, desired articles.Article, cause error) (articles.Article, error) {
+	observed, err := repository.Get(ctx, desired.ID)
+	if errors.Is(err, articles.ErrNotFound) {
+		return articles.Article{}, mapArticleError(cause, false)
+	}
+	if err != nil || !sameArticleState(observed, desired) {
+		return articles.Article{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, cause)
+	}
+	if ok, verifyErr := repository.slugStateMatches(ctx, slugRecordMap(desired), nil); verifyErr != nil || !ok {
+		return articles.Article{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, cause)
+	}
+	return observed, nil
+}
+
+func (repository *ArticleMetadataRepository) reconcileUpdate(ctx context.Context, prior, desired articles.Article, cause error) (articles.Article, error) {
+	observed, err := repository.Get(ctx, desired.ID)
+	if err != nil {
+		return articles.Article{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, cause)
+	}
+	desiredSlugs, priorSlugs := slugRecordMap(desired), slugRecordMap(prior)
+	if sameArticleState(observed, desired) {
+		if ok, verifyErr := repository.slugStateMatches(ctx, desiredSlugs, priorSlugs); verifyErr == nil && ok {
+			return observed, nil
+		}
+		return articles.Article{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, cause)
+	}
+	if sameArticleState(observed, prior) {
+		if ok, verifyErr := repository.slugStateMatches(ctx, priorSlugs, desiredSlugs); verifyErr == nil && ok {
+			return articles.Article{}, mapArticleError(cause, false)
+		}
+	}
+	return articles.Article{}, unknownCommitForContext(ctx, articles.ErrCommitUnknown, cause)
+}
+
+// slugStateMatches verifies wanted records and verifies that records present only
+// in the alternate state are absent. ETags are intentionally ignored.
+func (repository *ArticleMetadataRepository) slugStateMatches(ctx context.Context, wanted, alternate map[string]slugRecord) (bool, error) {
+	for slug, expected := range wanted {
+		entity, err := repository.table.Get(ctx, articlesPartition, slugRowKey(slug))
+		if err != nil {
+			return false, err
+		}
+		observed, err := unmarshalSlugEntity(entity.Value, entity.ETag)
+		if err != nil || observed.Slug != expected.Slug || observed.ArticleID != expected.ArticleID || observed.PublishedTarget != expected.PublishedTarget {
+			return false, err
+		}
+	}
+	for slug := range alternate {
+		if _, keep := wanted[slug]; keep {
+			continue
+		}
+		if _, err := repository.table.Get(ctx, articlesPartition, slugRowKey(slug)); !errors.Is(err, ErrNotFound) {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func slugRecords(article articles.Article) []slugRecord {

@@ -3,13 +3,12 @@ package azure
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/auth"
 )
 
-const maxSessionScan = 1000
+const sessionCleanupPageSize = 100
 
 type SessionRepository struct{ table tableDriver }
 
@@ -22,6 +21,17 @@ func (repository *SessionRepository) Create(ctx context.Context, session auth.Se
 		return err
 	}
 	_, err = repository.table.Add(ctx, encoded)
+	if mutationOutcomeMayBeUnknown(err) {
+		observed, getErr := repository.Get(ctx, session.TokenHash)
+		switch {
+		case getErr == nil && sameSessionState(observed, session):
+			return nil
+		case errors.Is(getErr, auth.ErrNotFound):
+			return mapSessionError(err)
+		default:
+			return unknownCommitForContext(ctx, auth.ErrCommitUnknown, err)
+		}
+	}
 	return mapSessionError(err)
 }
 func (repository *SessionRepository) Get(ctx context.Context, tokenHash string) (auth.Session, error) {
@@ -39,6 +49,7 @@ func (repository *SessionRepository) Revoke(ctx context.Context, tokenHash, expe
 	if session.ETag != expectedETag {
 		return auth.ErrConflict
 	}
+	prior := session
 	session.RevokedAt = &revokedAt
 	if err := session.Validate(); err != nil {
 		return err
@@ -48,38 +59,67 @@ func (repository *SessionRepository) Revoke(ctx context.Context, tokenHash, expe
 		return err
 	}
 	_, err = repository.table.Update(ctx, encoded, expectedETag)
+	if mutationOutcomeMayBeUnknown(err) {
+		observed, getErr := repository.Get(ctx, tokenHash)
+		switch {
+		case getErr == nil && sameSessionState(observed, session):
+			return nil
+		case getErr == nil && sameSessionState(observed, prior):
+			return mapSessionError(err)
+		default:
+			return unknownCommitForContext(ctx, auth.ErrCommitUnknown, err)
+		}
+	}
 	return mapSessionError(err)
 }
 func (repository *SessionRepository) DeleteExpired(ctx context.Context, cutoff time.Time) (int, error) {
-	entities, err := repository.table.List(ctx, "PartitionKey eq 'sessions'", maxSessionScan+1)
-	if err != nil {
-		return 0, mapSessionError(err)
-	}
-	if len(entities) > maxSessionScan {
-		return 0, fmt.Errorf("%w: active session set exceeds %d", auth.ErrValidation, maxSessionScan)
-	}
 	deleted := 0
-	for _, entity := range entities {
-		var header entityHeader
-		if err := decodeHeader(entity.Value, &header); err != nil {
-			return deleted, err
-		}
-		if header.EntityType != sessionEntityType {
-			continue
-		}
-		session, err := unmarshalSessionEntity(entity.Value, entity.ETag)
+	var continuation *tableContinuation
+	for {
+		entities, next, err := repository.table.ListPage(ctx, "PartitionKey eq 'sessions'", sessionCleanupPageSize, continuation)
 		if err != nil {
-			return deleted, err
-		}
-		if session.ExpiresAt.After(cutoff) {
-			continue
-		}
-		if err := repository.table.Delete(ctx, sessionsPartition, session.TokenHash, session.ETag); err != nil {
 			return deleted, mapSessionError(err)
 		}
-		deleted++
+		for _, entity := range entities {
+			var header entityHeader
+			if err := decodeHeader(entity.Value, &header); err != nil {
+				return deleted, err
+			}
+			if header.EntityType != sessionEntityType {
+				continue
+			}
+			session, err := unmarshalSessionEntity(entity.Value, entity.ETag)
+			if err != nil {
+				return deleted, err
+			}
+			if session.ExpiresAt.After(cutoff) {
+				continue
+			}
+			err = repository.table.Delete(ctx, sessionsPartition, session.TokenHash, session.ETag)
+			if mutationOutcomeMayBeUnknown(err) {
+				observed, getErr := repository.Get(ctx, session.TokenHash)
+				switch {
+				case errors.Is(getErr, auth.ErrNotFound):
+					err = nil
+				case getErr == nil && sameSessionState(observed, session):
+					err = mapSessionError(err)
+				default:
+					err = unknownCommitForContext(ctx, auth.ErrCommitUnknown, err)
+				}
+			}
+			if err != nil {
+				return deleted, mapSessionError(err)
+			}
+			deleted++
+		}
+		if next == nil {
+			return deleted, nil
+		}
+		if continuation != nil && *continuation == *next {
+			return deleted, unknownCommit(auth.ErrCommitUnknown, errors.New("session cleanup continuation did not advance"))
+		}
+		continuation = next
 	}
-	return deleted, nil
 }
 func mapSessionError(err error) error {
 	switch {

@@ -37,6 +37,17 @@ func (repository *ContactRepository) Create(ctx context.Context, contact contact
 	}
 	etag, err := repository.table.Add(ctx, encoded)
 	if err != nil {
+		if mutationOutcomeMayBeUnknown(err) {
+			observed, getErr := repository.findByID(ctx, contact.ID)
+			switch {
+			case getErr == nil && sameContactState(observed, contact):
+				return observed, nil
+			case errors.Is(getErr, contacts.ErrNotFound):
+				return contacts.Contact{}, mapContactError(err)
+			default:
+				return contacts.Contact{}, unknownCommitForContext(ctx, contacts.ErrCommitUnknown, err)
+			}
+		}
 		return contacts.Contact{}, mapContactError(err)
 	}
 	contact.ETag = etag
@@ -156,6 +167,17 @@ func (repository *ContactRepository) Update(ctx context.Context, contact contact
 	}
 	etag, err := repository.table.Update(ctx, encoded, expectedETag)
 	if err != nil {
+		if mutationOutcomeMayBeUnknown(err) {
+			observed, getErr := repository.findByID(ctx, contact.ID)
+			switch {
+			case getErr == nil && sameContactState(observed, contact):
+				return observed, nil
+			case getErr == nil && sameContactState(observed, stored):
+				return contacts.Contact{}, mapContactError(err)
+			default:
+				return contacts.Contact{}, unknownCommitForContext(ctx, contacts.ErrCommitUnknown, err)
+			}
+		}
 		return contacts.Contact{}, mapContactError(err)
 	}
 	contact.ETag = etag
@@ -176,7 +198,19 @@ func (repository *ContactRepository) Delete(ctx context.Context, id, expectedETa
 	if err != nil {
 		return err
 	}
-	return mapContactError(repository.table.Delete(ctx, contactsPartition, row, expectedETag))
+	err = repository.table.Delete(ctx, contactsPartition, row, expectedETag)
+	if err == nil || !mutationOutcomeMayBeUnknown(err) {
+		return mapContactError(err)
+	}
+	observed, getErr := repository.findByID(ctx, id)
+	switch {
+	case errors.Is(getErr, contacts.ErrNotFound):
+		return nil
+	case getErr == nil && sameContactState(observed, stored):
+		return mapContactError(err)
+	default:
+		return unknownCommitForContext(ctx, contacts.ErrCommitUnknown, err)
+	}
 }
 func contactMatches(contact contacts.Contact, query string) bool {
 	return strings.Contains(strings.ToLower(contact.Name), query) || strings.Contains(strings.ToLower(contact.Email), query) || strings.Contains(strings.ToLower(contact.Phone), query) || strings.Contains(strings.ToLower(contact.Message), query)

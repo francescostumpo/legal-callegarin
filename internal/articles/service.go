@@ -2,6 +2,7 @@ package articles
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -88,7 +89,9 @@ func (service *service) CreateDraft(ctx context.Context, input DraftInput) (Arti
 	article.DraftBody = &ref
 	created, err := service.repository.Create(ctx, article)
 	if err != nil {
-		_ = service.bodies.Delete(ctx, ref)
+		if !errors.Is(err, ErrCommitUnknown) {
+			_ = service.bodies.Delete(ctx, ref)
+		}
 		return Article{}, err
 	}
 	return created, nil
@@ -125,7 +128,9 @@ func (service *service) SaveDraft(ctx context.Context, id string, input DraftInp
 
 	result, err := service.repository.Update(ctx, updated, expectedETag)
 	if err != nil {
-		_ = service.bodies.Delete(ctx, newRef)
+		if !errors.Is(err, ErrCommitUnknown) {
+			_ = service.bodies.Delete(ctx, newRef)
+		}
 		return Article{}, err
 	}
 	if stored.DraftBody != nil && !sameBodyRef(stored.DraftBody, stored.PublishedBody) {

@@ -23,6 +23,9 @@ func (table *recordingTable) Delete(context.Context, string, string, string) err
 func (table *recordingTable) List(context.Context, string, int32) ([]tableEntity, error) {
 	return nil, table.err
 }
+func (table *recordingTable) ListPage(context.Context, string, int32, *tableContinuation) ([]tableEntity, *tableContinuation, error) {
+	return nil, nil, table.err
+}
 func (table *recordingTable) Transaction(_ context.Context, actions []tableAction) error {
 	table.actions = append([]tableAction(nil), actions...)
 	return table.err

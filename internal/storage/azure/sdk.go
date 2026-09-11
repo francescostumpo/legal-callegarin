@@ -40,7 +40,7 @@ func (driver *sdkTableDriver) Get(ctx context.Context, partitionKey, rowKey stri
 }
 
 func (driver *sdkTableDriver) Add(ctx context.Context, entity []byte) (etag string, err error) {
-	err = driver.executor.do(ctx, func(attempt context.Context) error {
+	err = driver.executor.mutate(ctx, func(attempt context.Context) error {
 		response, callErr := driver.client.AddEntity(attempt, entity, nil)
 		if callErr == nil {
 			etag = string(response.ETag)
@@ -51,7 +51,7 @@ func (driver *sdkTableDriver) Add(ctx context.Context, entity []byte) (etag stri
 }
 
 func (driver *sdkTableDriver) Update(ctx context.Context, entity []byte, etag string) (nextETag string, err error) {
-	err = driver.executor.do(ctx, func(attempt context.Context) error {
+	err = driver.executor.mutate(ctx, func(attempt context.Context) error {
 		match := azcore.ETag(etag)
 		response, callErr := driver.client.UpdateEntity(attempt, entity, &aztables.UpdateEntityOptions{IfMatch: &match, UpdateMode: aztables.UpdateModeReplace})
 		if callErr == nil {
@@ -63,7 +63,7 @@ func (driver *sdkTableDriver) Update(ctx context.Context, entity []byte, etag st
 }
 
 func (driver *sdkTableDriver) Delete(ctx context.Context, partitionKey, rowKey, etag string) error {
-	return driver.executor.do(ctx, func(attempt context.Context) error {
+	return driver.executor.mutate(ctx, func(attempt context.Context) error {
 		match := azcore.ETag(etag)
 		_, err := driver.client.DeleteEntity(attempt, partitionKey, rowKey, &aztables.DeleteEntityOptions{IfMatch: &match})
 		return err
@@ -98,6 +98,42 @@ func (driver *sdkTableDriver) List(ctx context.Context, filter string, maximum i
 	return entities, err
 }
 
+func (driver *sdkTableDriver) ListPage(ctx context.Context, filter string, maximum int32, continuation *tableContinuation) (entities []tableEntity, next *tableContinuation, err error) {
+	err = driver.executor.do(ctx, func(attempt context.Context) error {
+		entities = entities[:0]
+		next = nil
+		options := &aztables.ListEntitiesOptions{Filter: &filter, Top: &maximum}
+		if continuation != nil {
+			options.NextPartitionKey = &continuation.PartitionKey
+			options.NextRowKey = &continuation.RowKey
+		}
+		page, callErr := driver.client.NewListEntitiesPager(options).NextPage(attempt)
+		if callErr != nil {
+			return callErr
+		}
+		for _, value := range page.Entities {
+			var metadata struct {
+				ETag string `json:"odata.etag"`
+			}
+			if unmarshalErr := json.Unmarshal(value, &metadata); unmarshalErr != nil {
+				return fmt.Errorf("decode table ETag: %w", unmarshalErr)
+			}
+			entities = append(entities, tableEntity{Value: value, ETag: metadata.ETag})
+		}
+		if page.NextPartitionKey != nil || page.NextRowKey != nil {
+			next = &tableContinuation{}
+			if page.NextPartitionKey != nil {
+				next.PartitionKey = *page.NextPartitionKey
+			}
+			if page.NextRowKey != nil {
+				next.RowKey = *page.NextRowKey
+			}
+		}
+		return nil
+	})
+	return entities, next, err
+}
+
 func (driver *sdkTableDriver) Transaction(ctx context.Context, actions []tableAction) error {
 	converted := make([]aztables.TransactionAction, 0, len(actions))
 	for _, action := range actions {
@@ -118,7 +154,7 @@ func (driver *sdkTableDriver) Transaction(ctx context.Context, actions []tableAc
 		}
 		converted = append(converted, convertedAction)
 	}
-	return driver.executor.do(ctx, func(attempt context.Context) error {
+	return driver.executor.mutate(ctx, func(attempt context.Context) error {
 		_, err := driver.client.SubmitTransaction(attempt, converted, nil)
 		return classifyTransactionError(err)
 	})
@@ -136,7 +172,7 @@ type sdkBlobDriver struct {
 }
 
 func (driver *sdkBlobDriver) PutImmutable(ctx context.Context, name string, content []byte) error {
-	return driver.executor.do(ctx, func(attempt context.Context) error {
+	return driver.executor.mutate(ctx, func(attempt context.Context) error {
 		_, err := driver.client.UploadBuffer(attempt, driver.container, name, content, &azblob.UploadBufferOptions{
 			HTTPHeaders: &blob.HTTPHeaders{BlobContentType: to.Ptr("application/json")},
 			AccessConditions: &blob.AccessConditions{ModifiedAccessConditions: &blob.ModifiedAccessConditions{
@@ -147,21 +183,22 @@ func (driver *sdkBlobDriver) PutImmutable(ctx context.Context, name string, cont
 	})
 }
 
-func (driver *sdkBlobDriver) Get(ctx context.Context, name string) (content []byte, err error) {
+func (driver *sdkBlobDriver) Get(ctx context.Context, name string, maximumRead int64) (content blobDownload, err error) {
 	err = driver.executor.do(ctx, func(attempt context.Context) error {
 		response, callErr := driver.client.DownloadStream(attempt, driver.container, name, nil)
 		if callErr != nil {
 			return callErr
 		}
 		defer response.Body.Close()
-		content, callErr = io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
+		content.ContentLength = response.ContentLength
+		content.Value, callErr = io.ReadAll(io.LimitReader(response.Body, maximumRead))
 		return callErr
 	})
 	return content, err
 }
 
 func (driver *sdkBlobDriver) Delete(ctx context.Context, name string) error {
-	return driver.executor.do(ctx, func(attempt context.Context) error {
+	return driver.executor.mutate(ctx, func(attempt context.Context) error {
 		_, err := driver.client.DeleteBlob(attempt, driver.container, name, nil)
 		return err
 	})

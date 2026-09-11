@@ -42,6 +42,9 @@ func TestAzuriteContracts(t *testing.T) {
 			ArticlesTable: "a" + suffix, ContactsTable: "c" + suffix, SessionsTable: "s" + suffix,
 			BodiesContainer: "b-" + suffix,
 		}
+		if err := EnsureFromConnectionString(context.Background(), connectionString, names); err != nil {
+			t.Fatalf("EnsureFromConnectionString(): %v", err)
+		}
 		bundle, err := OpenFromConnectionString(context.Background(), connectionString, names, time.Now)
 		if err != nil {
 			t.Fatalf("OpenFromConnectionString(): %v", err)

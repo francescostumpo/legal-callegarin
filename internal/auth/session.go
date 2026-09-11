@@ -11,9 +11,10 @@ import (
 )
 
 var (
-	ErrNotFound   = errors.New("session not found")
-	ErrConflict   = errors.New("session conflict")
-	ErrValidation = errors.New("session validation failed")
+	ErrNotFound      = errors.New("session not found")
+	ErrConflict      = errors.New("session conflict")
+	ErrValidation    = errors.New("session validation failed")
+	ErrCommitUnknown = errors.New("session persistence outcome is unknown")
 )
 
 type Session struct {

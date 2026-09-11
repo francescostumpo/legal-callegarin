@@ -69,7 +69,7 @@ func Open(ctx context.Context, accountURL string, names ResourceNames, now func(
 	if err != nil {
 		return nil, errors.New("initialize Azure Blob client")
 	}
-	return openWithClients(ctx, tableService, blobClient, names, now)
+	return openWithClients(tableService, blobClient, names, now)
 }
 
 func OpenFromConnectionString(ctx context.Context, connectionString string, names ResourceNames, now func() time.Time) (*storage.Bundle, error) {
@@ -88,27 +88,53 @@ func OpenFromConnectionString(ctx context.Context, connectionString string, name
 	if err != nil {
 		return nil, errors.New("initialize Azure Blob client from connection string")
 	}
-	return openWithClients(ctx, tableService, blobClient, names, now)
+	return openWithClients(tableService, blobClient, names, now)
 }
 
-func openWithClients(ctx context.Context, tableService *aztables.ServiceClient, blobClient *azblob.Client, names ResourceNames, now func() time.Time) (*storage.Bundle, error) {
+// EnsureFromConnectionString provisions the development/test resources. Production
+// resources are provisioned by infrastructure-as-code and Open never creates them.
+func EnsureFromConnectionString(ctx context.Context, connectionString string, names ResourceNames) error {
+	if err := names.validate(); err != nil {
+		return err
+	}
+	if connectionString == "" {
+		return errors.New("azure storage connection string is required")
+	}
+	options := azureClientOptions()
+	tableService, err := aztables.NewServiceClientFromConnectionString(connectionString, &aztables.ClientOptions{ClientOptions: options})
+	if err != nil {
+		return errors.New("initialize Azure Table client from connection string")
+	}
+	blobClient, err := azblob.NewClientFromConnectionString(connectionString, &azblob.ClientOptions{ClientOptions: options})
+	if err != nil {
+		return errors.New("initialize Azure Blob client from connection string")
+	}
+	return ensureResources(ctx, tableService, blobClient, names)
+}
+
+func ensureResources(ctx context.Context, tableService *aztables.ServiceClient, blobClient *azblob.Client, names ResourceNames) error {
 	executor := defaultExecutor()
 	for _, name := range []string{names.ArticlesTable, names.ContactsTable, names.SessionsTable} {
-		err := executor.do(ctx, func(attempt context.Context) error {
+		err := executor.mutate(ctx, func(attempt context.Context) error {
 			_, callErr := tableService.CreateTable(attempt, name, nil)
 			return callErr
 		})
 		if err != nil && !errors.Is(err, ErrConflict) {
-			return nil, fmt.Errorf("ensure Azure table %q: %w", name, err)
+			return fmt.Errorf("ensure Azure table %q: %w", name, err)
 		}
 	}
-	err := executor.do(ctx, func(attempt context.Context) error {
+	err := executor.mutate(ctx, func(attempt context.Context) error {
 		_, callErr := blobClient.CreateContainer(attempt, names.BodiesContainer, nil)
 		return callErr
 	})
 	if err != nil && !errors.Is(err, ErrConflict) {
-		return nil, fmt.Errorf("ensure private Azure blob container: %w", err)
+		return fmt.Errorf("ensure private Azure blob container: %w", err)
 	}
+	return nil
+}
+
+func openWithClients(tableService *aztables.ServiceClient, blobClient *azblob.Client, names ResourceNames, now func() time.Time) (*storage.Bundle, error) {
+	executor := defaultExecutor()
 	articlesTable := &sdkTableDriver{client: tableService.NewClient(names.ArticlesTable), executor: executor}
 	contactsTable := &sdkTableDriver{client: tableService.NewClient(names.ContactsTable), executor: executor}
 	sessionsTable := &sdkTableDriver{client: tableService.NewClient(names.SessionsTable), executor: executor}

@@ -107,8 +107,13 @@ func (driver *memoryTableDriver) Delete(ctx context.Context, partition, row, eta
 }
 
 func (driver *memoryTableDriver) List(ctx context.Context, filter string, maximum int32) ([]tableEntity, error) {
+	result, _, err := driver.ListPage(ctx, filter, maximum, nil)
+	return result, err
+}
+
+func (driver *memoryTableDriver) ListPage(ctx context.Context, filter string, maximum int32, continuation *tableContinuation) ([]tableEntity, *tableContinuation, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	driver.mu.Lock()
 	defer driver.mu.Unlock()
@@ -131,10 +136,23 @@ func (driver *memoryTableDriver) List(ctx context.Context, filter string, maximu
 		pj, rj, _ := entityKey(result[j].Value)
 		return pi+ri < pj+rj
 	})
-	if len(result) > int(maximum) {
-		result = result[:maximum]
+	start := 0
+	if continuation != nil {
+		for start < len(result) {
+			partition, row, _ := entityKey(result[start].Value)
+			if partition > continuation.PartitionKey || partition == continuation.PartitionKey && row > continuation.RowKey {
+				break
+			}
+			start++
+		}
 	}
-	return result, nil
+	result = result[start:]
+	if len(result) <= int(maximum) {
+		return result, nil, nil
+	}
+	result = result[:maximum]
+	partition, row, _ := entityKey(result[len(result)-1].Value)
+	return result, &tableContinuation{PartitionKey: partition, RowKey: row}, nil
 }
 
 func propertyFromFilter(filter, property string) string {
@@ -231,17 +249,22 @@ func (d *memoryBlobDriver) PutImmutable(ctx context.Context, name string, value 
 	d.values[name] = append([]byte(nil), value...)
 	return nil
 }
-func (d *memoryBlobDriver) Get(ctx context.Context, name string) ([]byte, error) {
+func (d *memoryBlobDriver) Get(ctx context.Context, name string, maximumRead int64) (blobDownload, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return blobDownload{}, err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	v, ok := d.values[name]
 	if !ok {
-		return nil, ErrNotFound
+		return blobDownload{}, ErrNotFound
 	}
-	return append([]byte(nil), v...), nil
+	length := int64(len(v))
+	if length > maximumRead {
+		length = maximumRead
+	}
+	declared := int64(len(v))
+	return blobDownload{Value: append([]byte(nil), v[:length]...), ContentLength: &declared}, nil
 }
 func (d *memoryBlobDriver) Delete(ctx context.Context, name string) error {
 	if err := ctx.Err(); err != nil {
