@@ -288,11 +288,11 @@ Standard JSON errors from `/api/admin/**`:
 
 - Go 1.27.1 is declared and `cmd/web` starts one HTTP server.
 - Node 24 is declared in `engines`; React admin builds into `internal/webassets/admin`.
-- `go build ./cmd/web` succeeds even before the full admin build because `.keep` is embedded.
+- `go build -o ./bin/legal-callegarin ./cmd/web` succeeds even before the full admin build because `.keep` is embedded; `/bin/` is ignored by Git.
 - Configuration rejects missing production secrets and accepts safe local-memory defaults only when `APP_ENV=development` or isolated `APP_ENV=test`.
 - `make check` has one stable entry point for formatting, vet, static analysis, Go tests, TypeScript checks, frontend tests, and frontend build.
 
-**Validation:** `make check && go build ./cmd/web`
+**Validation:** `make check && go build -o ./bin/legal-callegarin ./cmd/web`
 
 **Prohibited changes:** No business models, no page designs, no network calls, no credentials, no Docker/Bicep/CI.
 
