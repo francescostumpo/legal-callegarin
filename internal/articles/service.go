@@ -35,6 +35,12 @@ type ArticleService interface {
 	Publish(context.Context, string, string) (Article, error)
 	Withdraw(context.Context, string, string) (Article, error)
 	GetPreview(context.Context, string) (ArticleWithBody, error)
+	GetPublished(context.Context, string) (ArticleWithBody, error)
+	ListPublished(context.Context, ListOptions) (ArticlePage, error)
+}
+
+type ArticleEvents interface {
+	PublicArticleChanged(context.Context, Article, Article)
 }
 
 type service struct {
@@ -42,10 +48,15 @@ type service struct {
 	bodies     BodyStore
 	clock      Clock
 	ids        IDGenerator
+	events     ArticleEvents
 }
 
-func NewService(repository MetadataRepository, bodies BodyStore, clock Clock, ids IDGenerator) ArticleService {
-	return &service{repository: repository, bodies: bodies, clock: clock, ids: ids}
+func NewService(repository MetadataRepository, bodies BodyStore, clock Clock, ids IDGenerator, eventObservers ...ArticleEvents) ArticleService {
+	var events ArticleEvents
+	if len(eventObservers) > 0 {
+		events = eventObservers[0]
+	}
+	return &service{repository: repository, bodies: bodies, clock: clock, ids: ids, events: events}
 }
 
 func (service *service) CreateDraft(ctx context.Context, input DraftInput) (Article, error) {
@@ -91,10 +102,6 @@ func (service *service) SaveDraft(ctx context.Context, id string, input DraftInp
 	if err != nil {
 		return Article{}, err
 	}
-	if stored.FirstPublishedAt != nil && normalized.Slug != stored.Slug {
-		return Article{}, fmt.Errorf("%w: published slug cannot change", ErrValidation)
-	}
-
 	newRef, err := service.bodies.Put(ctx, stored.ID, normalized.Body)
 	if err != nil {
 		return Article{}, err
@@ -138,12 +145,18 @@ func (service *service) Publish(ctx context.Context, id, expectedETag string) (A
 	updated := stored
 	updated.Status = StatusPublished
 	updated.PublishedBody = cloneBodyReference(stored.DraftBody)
+	updated.Published = nextPublishedMetadata(stored.Published, stored)
 	if updated.FirstPublishedAt == nil {
 		updated.FirstPublishedAt = &now
 	}
 	updated.LastPublishedAt = &now
 	updated.UpdatedAt = now
-	return service.repository.Update(ctx, updated, expectedETag)
+	result, err := service.repository.Update(ctx, updated, expectedETag)
+	if err != nil {
+		return Article{}, err
+	}
+	service.notifyPublicChange(ctx, stored, result)
+	return result, nil
 }
 
 func (service *service) Withdraw(ctx context.Context, id, expectedETag string) (Article, error) {
@@ -155,9 +168,15 @@ func (service *service) Withdraw(ctx context.Context, id, expectedETag string) (
 		return Article{}, fmt.Errorf("%w: only a published article can be withdrawn", ErrInvalidTransition)
 	}
 	now := service.clock.Now()
+	before := stored
 	stored.Status = StatusWithdrawn
 	stored.UpdatedAt = now
-	return service.repository.Update(ctx, stored, expectedETag)
+	result, err := service.repository.Update(ctx, stored, expectedETag)
+	if err != nil {
+		return Article{}, err
+	}
+	service.notifyPublicChange(ctx, before, result)
+	return result, nil
 }
 
 func (service *service) GetPreview(ctx context.Context, id string) (ArticleWithBody, error) {
@@ -173,6 +192,37 @@ func (service *service) GetPreview(ctx context.Context, id string) (ArticleWithB
 		return ArticleWithBody{}, err
 	}
 	return ArticleWithBody{Article: article, Body: body}, nil
+}
+
+func (service *service) GetPublished(ctx context.Context, slug string) (ArticleWithBody, error) {
+	article, err := service.repository.GetPublishedBySlug(ctx, slug)
+	if err != nil {
+		return ArticleWithBody{}, err
+	}
+	if article.Status != StatusPublished || article.Published == nil || article.PublishedBody == nil {
+		return ArticleWithBody{}, ErrNotFound
+	}
+	body, err := service.bodies.Get(ctx, *article.PublishedBody)
+	if err != nil {
+		return ArticleWithBody{}, err
+	}
+	return ArticleWithBody{Article: publishedProjection(article), Body: body}, nil
+}
+
+func (service *service) ListPublished(ctx context.Context, options ListOptions) (ArticlePage, error) {
+	status := StatusPublished
+	options.Status = &status
+	page, err := service.repository.List(ctx, options)
+	if err != nil {
+		return ArticlePage{}, err
+	}
+	for index, article := range page.Items {
+		if article.Published == nil || article.PublishedBody == nil {
+			return ArticlePage{}, fmt.Errorf("%w: published article lacks public snapshot", ErrValidation)
+		}
+		page.Items[index] = publishedProjection(article)
+	}
+	return page, nil
 }
 
 func normalizeDraftInput(input DraftInput) (DraftInput, error) {
@@ -201,4 +251,44 @@ func cloneBodyReference(ref *BodyRef) *BodyRef {
 	}
 	copy := *ref
 	return &copy
+}
+
+func nextPublishedMetadata(previous *PublishedMetadata, draft Article) *PublishedMetadata {
+	history := make([]string, 0)
+	seen := map[string]bool{draft.Slug: true}
+	if previous != nil {
+		for _, slug := range previous.HistoricalSlugs {
+			if !seen[slug] {
+				history = append(history, slug)
+				seen[slug] = true
+			}
+		}
+		if !seen[previous.Slug] {
+			history = append(history, previous.Slug)
+		}
+	}
+	return &PublishedMetadata{
+		Slug: draft.Slug, Title: draft.Title, Summary: draft.Summary,
+		Area: draft.Area, CoverID: draft.CoverID, HistoricalSlugs: history,
+	}
+}
+
+func publishedProjection(article Article) Article {
+	published := article.Published
+	article.Slug = published.Slug
+	article.Title = published.Title
+	article.Summary = published.Summary
+	article.Area = published.Area
+	article.CoverID = published.CoverID
+	article.DraftBody = nil
+	if article.LastPublishedAt != nil {
+		article.UpdatedAt = *article.LastPublishedAt
+	}
+	return article
+}
+
+func (service *service) notifyPublicChange(ctx context.Context, before, after Article) {
+	if service.events != nil {
+		service.events.PublicArticleChanged(ctx, before, after)
+	}
 }

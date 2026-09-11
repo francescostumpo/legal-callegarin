@@ -49,7 +49,24 @@
   </section>
   {{end}}
 </div>
-{{end}} {{if eq .Kind "area"}}
+{{end}} {{if eq .Kind "area"}} {{if .Articles}}
+<section class="section section--stone" aria-labelledby="related-articles">
+  <div class="shell">
+    <h2 id="related-articles">Approfondimenti collegati</h2>
+    <div class="area-grid">
+      {{range .Articles}}
+      <article class="area-card">
+        <div class="area-card__body">
+          <p class="eyebrow">Sentenze e riflessioni</p>
+          <h3><a href="{{.Href}}">{{.Title}}</a></h3>
+          <p>{{.Summary}}</p>
+        </div>
+      </article>
+      {{end}}
+    </div>
+  </div>
+</section>
+{{end}}
 <aside class="consultation-callout">
   <div class="shell consultation-callout__inner">
     <div>

@@ -68,6 +68,7 @@ func TestArticleValidate(t *testing.T) {
 		{name: "missing created timestamp", mutate: func(article *Article) { article.CreatedAt = time.Time{} }},
 		{name: "updated before created", mutate: func(article *Article) { article.UpdatedAt = article.CreatedAt.Add(-time.Second) }},
 		{name: "published without body", mutate: func(article *Article) { article.Status, article.PublishedBody = StatusPublished, nil }},
+		{name: "published without metadata", mutate: func(article *Article) { article.Published = nil }},
 		{name: "published without first timestamp", mutate: func(article *Article) { article.Status, article.FirstPublishedAt = StatusPublished, nil }},
 		{name: "withdrawn without published body", mutate: func(article *Article) { article.Status, article.PublishedBody = StatusWithdrawn, nil }},
 		{
@@ -207,15 +208,19 @@ func validArticle() Article {
 	lastPublished := firstPublished
 	ref := &BodyRef{BlobName: "article-1", Version: "1", SavedAt: created}
 	return Article{
-		ID:               "article-1",
-		Slug:             "diritto-civile",
-		Title:            "Titolo valido",
-		Summary:          "Sommario sufficientemente lungo",
-		Area:             "obbligazioni",
-		CoverID:          "cover-1",
-		Status:           StatusPublished,
-		DraftBody:        ref,
-		PublishedBody:    ref,
+		ID:            "article-1",
+		Slug:          "diritto-civile",
+		Title:         "Titolo valido",
+		Summary:       "Sommario sufficientemente lungo",
+		Area:          "obbligazioni",
+		CoverID:       "cover-1",
+		Status:        StatusPublished,
+		DraftBody:     ref,
+		PublishedBody: ref,
+		Published: &PublishedMetadata{
+			Slug: "valid-article", Title: "A valid article title", Summary: "A sufficiently detailed article summary",
+			Area: "obbligazioni", CoverID: "contracts-pen",
+		},
 		FirstPublishedAt: &firstPublished,
 		LastPublishedAt:  &lastPublished,
 		CreatedAt:        created,

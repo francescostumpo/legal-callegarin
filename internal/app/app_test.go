@@ -1,11 +1,14 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"testing/fstest"
 
+	"github.com/francescostumpo/legal-callegarin/internal/articles"
 	"github.com/francescostumpo/legal-callegarin/internal/config"
 	"github.com/francescostumpo/legal-callegarin/internal/webassets"
 )
@@ -66,4 +69,35 @@ func TestNewRejectsInvalidPublicAssets(t *testing.T) {
 	if err == nil {
 		t.Fatal("New() error = nil, want template initialization error")
 	}
+}
+
+func TestNewInjectsPublicArticleReader(t *testing.T) {
+	t.Parallel()
+
+	handler, err := New(Options{
+		Config:   config.Config{PublicBaseURL: "https://studio.example.test"},
+		Assets:   webassets.Files,
+		Articles: failingArticleReader{},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/sentenze-e-riflessioni", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
+
+type failingArticleReader struct{}
+
+func (failingArticleReader) ListPublished(context.Context, articles.ListOptions) (articles.ArticlePage, error) {
+	return articles.ArticlePage{}, errors.New("article storage unavailable")
+}
+
+func (failingArticleReader) GetPublished(context.Context, string) (articles.ArticleWithBody, error) {
+	return articles.ArticleWithBody{}, errors.New("article storage unavailable")
 }

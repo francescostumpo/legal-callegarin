@@ -90,6 +90,10 @@ func ArticleMetadataRepository(t *testing.T, factory func() articles.MetadataRep
 		published := articleFixture("published", "published-article", base.Add(4*time.Minute))
 		published.Status = articles.StatusPublished
 		published.PublishedBody = published.DraftBody
+		published.Published = &articles.PublishedMetadata{
+			Slug: published.Slug, Title: published.Title, Summary: published.Summary,
+			Area: published.Area, CoverID: published.CoverID,
+		}
 		firstPublished := published.CreatedAt
 		published.FirstPublishedAt = &firstPublished
 		published.LastPublishedAt = &firstPublished
@@ -104,6 +108,31 @@ func ArticleMetadataRepository(t *testing.T, factory func() articles.MetadataRep
 	})
 
 	articlePaginationLimits(t, factory)
+
+	t.Run("published canonical and historical slugs remain reserved", func(t *testing.T) {
+		repository := factory()
+		ctx := context.Background()
+		createdAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+		published := articleFixture("published-aliases", "current-draft-slug", createdAt)
+		published.Status = articles.StatusPublished
+		published.PublishedBody = published.DraftBody
+		published.Published = &articles.PublishedMetadata{
+			Slug: "public-canonical", Title: published.Title, Summary: published.Summary,
+			Area: published.Area, CoverID: published.CoverID, HistoricalSlugs: []string{"public-historical"},
+		}
+		publishedAt := createdAt
+		published.FirstPublishedAt = &publishedAt
+		published.LastPublishedAt = &publishedAt
+		if _, err := repository.Create(ctx, published); err != nil {
+			t.Fatalf("Create(published aliases) error = %v", err)
+		}
+		for index, slug := range []string{"public-canonical", "public-historical"} {
+			conflict := articleFixture(fmt.Sprintf("conflict-%d", index), slug, createdAt.Add(time.Duration(index+1)*time.Minute))
+			if _, err := repository.Create(ctx, conflict); !errors.Is(err, articles.ErrSlugTaken) {
+				t.Fatalf("Create(%q) error = %v, want ErrSlugTaken", slug, err)
+			}
+		}
+	})
 }
 
 func articlePaginationLimits(t *testing.T, factory func() articles.MetadataRepository) {

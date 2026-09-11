@@ -1,0 +1,36 @@
+{{define "content"}}
+<header class="page-hero">
+  <div class="page-hero__media" aria-hidden="true">
+    {{template "editorial-picture" .HeroImage}}
+  </div>
+  <div class="page-hero__overlay"></div>
+  <div class="page-hero__content shell">
+    <p class="eyebrow">{{.Eyebrow}}</p>
+    <h1>{{.Heading}}</h1>
+    <p>{{.Lead}}</p>
+  </div>
+</header>
+<section class="section shell" aria-labelledby="published-articles">
+  <h2 id="published-articles" class="visually-hidden">Articoli pubblicati</h2>
+  {{if .Articles}}
+  <div class="area-grid">
+    {{range .Articles}}
+    <article class="area-card">
+      <a class="area-card__media" href="{{.Href}}"
+        >{{template "editorial-picture" .Image}}</a
+      >
+      <div class="area-card__body">
+        <p class="eyebrow">{{.AreaTitle}}</p>
+        <h3><a href="{{.Href}}">{{.Title}}</a></h3>
+        <p>{{.Summary}}</p>
+      </div>
+    </article>
+    {{end}}
+  </div>
+  {{else}}
+  <p class="reading-column">Nessun approfondimento è attualmente pubblicato.</p>
+  {{end}} {{if .NextURL}}<a class="text-link" href="{{.NextURL}}"
+    >Articoli precedenti <span aria-hidden="true">→</span></a
+  >{{end}}
+</section>
+{{end}}

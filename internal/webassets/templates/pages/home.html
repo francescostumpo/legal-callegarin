@@ -76,21 +76,34 @@
 </section>
 
 <section class="section" data-home-section="articles">
-  <div class="shell article-feature">
-    <div class="article-feature__media">
-      {{template "editorial-picture" .ArticleImage}}
-    </div>
-    <div class="article-feature__copy">
-      <p class="eyebrow">Sentenze e riflessioni</p>
-      <h2>Approfondimenti in preparazione</h2>
-      <p>
-        DATO DA CONFERMARE — i tre contenuti più recenti appariranno qui dopo la
-        pubblicazione editoriale.
-      </p>
+  <div class="shell">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Sentenze e riflessioni</p>
+        <h2>Approfondimenti recenti</h2>
+      </div>
       <a class="text-link" href="/sentenze-e-riflessioni"
         >Vai agli approfondimenti <span aria-hidden="true">→</span></a
       >
     </div>
+    {{if .Articles}}
+    <div class="area-grid">
+      {{range .Articles}}
+      <article class="area-card">
+        <a class="area-card__media" href="{{.Href}}"
+          >{{template "editorial-picture" .Image}}</a
+        >
+        <div class="area-card__body">
+          <p class="eyebrow">{{.AreaTitle}}</p>
+          <h3><a href="{{.Href}}">{{.Title}}</a></h3>
+          <p>{{.Summary}}</p>
+        </div>
+      </article>
+      {{end}}
+    </div>
+    {{else}}
+    <p>Nessun approfondimento è attualmente pubblicato.</p>
+    {{end}}
   </div>
 </section>
 

@@ -1,5 +1,7 @@
 package public
 
+import "html/template"
+
 type PageKind string
 
 const (
@@ -9,6 +11,7 @@ const (
 	pageKindAreas         PageKind = "areas"
 	pageKindArea          PageKind = "area"
 	pageKindArticles      PageKind = "articles"
+	pageKindArticle       PageKind = "article"
 	pageKindContact       PageKind = "contact"
 	pageKindPrivacyPolicy PageKind = "privacy-policy"
 )
@@ -32,6 +35,12 @@ type PageData struct {
 	Areas             []PracticeArea
 	HighlightedAreas  []PracticeArea
 	DevelopmentNotice string
+	Robots            string
+	OpenGraphType     string
+	OpenGraphURL      string
+	OpenGraphImageURL string
+	StructuredData    template.JS
+	Articles          []ArticleCard
 }
 
 type NavigationItem struct {

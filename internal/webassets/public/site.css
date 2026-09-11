@@ -517,6 +517,54 @@ h3 {
   align-self: center;
 }
 
+.article-detail {
+  min-width: 0;
+}
+
+.article-byline {
+  max-width: var(--reading);
+  padding-block-end: var(--space-3);
+  border-bottom: var(--border);
+  color: var(--color-ivory-muted);
+  font-size: 0.9rem;
+}
+
+.article-body {
+  max-width: var(--reading);
+  font-size: clamp(1.05rem, 1rem + 0.25vw, 1.2rem);
+  line-height: 1.75;
+}
+
+.article-body > * + * {
+  margin-block-start: var(--space-4);
+}
+
+.article-body h2,
+.article-body h3 {
+  margin-block-start: var(--space-6);
+}
+
+.article-body blockquote {
+  padding-inline-start: var(--space-4);
+  border-inline-start: 0.2rem solid var(--color-copper);
+  color: var(--color-ivory-muted);
+  font-size: clamp(1.35rem, 1.15rem + 0.8vw, 2rem);
+}
+
+.preview-ribbon {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-copper);
+  color: var(--color-charcoal);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
 .statement {
   border-block: var(--border);
   background: linear-gradient(115deg, #1d1b17, var(--color-charcoal));

@@ -189,6 +189,22 @@ func TestStandaloneLinksMeetMinimumPointerTarget(t *testing.T) {
 	}
 }
 
+func TestArticlePagesHaveReadableEditorialTypography(t *testing.T) {
+	t.Parallel()
+
+	cssBytes, err := fs.ReadFile(webassets.Files, "public/site.css")
+	if err != nil {
+		t.Fatalf("read site.css: %v", err)
+	}
+	css := string(cssBytes)
+	for _, selector := range []string{".article-detail", ".article-byline", ".article-body", ".preview-ribbon"} {
+		if !strings.Contains(css, selector+" {") {
+			t.Fatalf("site.css lacks rule for %q", selector)
+		}
+	}
+	assertCSSRuleContains(t, css, ".article-body", "max-width:", "font-size:", "line-height:")
+}
+
 func TestMobileCloseControlRequiresJavaScriptEnhancement(t *testing.T) {
 	t.Parallel()
 

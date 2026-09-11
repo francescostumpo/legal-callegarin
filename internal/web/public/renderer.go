@@ -2,19 +2,38 @@ package public
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 )
 
 type Renderer struct {
-	baseURL  string
-	home     *template.Template
-	standard *template.Template
-	pages    map[string]PageData
+	baseURL      string
+	home         *template.Template
+	standard     *template.Template
+	articleIndex *template.Template
+	article      *template.Template
+	pages        map[string]PageData
+	images       map[string]EditorialImage
+	articles     ArticleReader
+	cache        *htmlCache
+}
+
+type rendererOptions struct {
+	articles ArticleReader
+	now      func() time.Time
+}
+
+type RendererOption func(*rendererOptions)
+
+func WithArticleReader(reader ArticleReader) RendererOption {
+	return func(options *rendererOptions) { options.articles = reader }
 }
 
 type assetManifest struct {
@@ -33,9 +52,13 @@ type manifestDerivative struct {
 	Filename string `json:"filename"`
 }
 
-func NewRenderer(files fs.FS, publicBaseURL string) (*Renderer, error) {
+func NewRenderer(files fs.FS, publicBaseURL string, optionFunctions ...RendererOption) (*Renderer, error) {
 	if files == nil {
 		return nil, fmt.Errorf("public assets filesystem is required")
+	}
+	baseURL, err := normalizePublicBaseURL(publicBaseURL)
+	if err != nil {
+		return nil, err
 	}
 	home, err := parsePageTemplate(files, "templates/pages/home.html")
 	if err != nil {
@@ -45,16 +68,36 @@ func NewRenderer(files fs.FS, publicBaseURL string) (*Renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse standard templates: %w", err)
 	}
+	articleIndex, err := parsePageTemplate(files, "templates/pages/articles.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse article index templates: %w", err)
+	}
+	article, err := parsePageTemplate(files, "templates/pages/article.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse article templates: %w", err)
+	}
 	images, err := loadEditorialImages(files)
 	if err != nil {
 		return nil, err
 	}
 
+	options := rendererOptions{articles: emptyArticleReader{}, now: time.Now}
+	for _, apply := range optionFunctions {
+		if apply != nil {
+			apply(&options)
+		}
+	}
+	if options.articles == nil {
+		options.articles = emptyArticleReader{}
+	}
 	return &Renderer{
-		baseURL:  strings.TrimRight(publicBaseURL, "/"),
-		home:     home,
-		standard: standard,
-		pages:    pageCatalog(images),
+		baseURL:      baseURL,
+		home:         home,
+		standard:     standard,
+		articleIndex: articleIndex,
+		article:      article,
+		pages:        pageCatalog(images), images: images, articles: options.articles,
+		cache: newHTMLCache(options.now, publicCacheMaxEntries, publicCacheMaxBytes, publicCacheTTL),
 	}, nil
 }
 
@@ -70,36 +113,83 @@ func RegisterRoutes(mux *http.ServeMux, renderer *Renderer, files fs.FS) error {
 	if err != nil {
 		return fmt.Errorf("open editorial assets: %w", err)
 	}
-	mux.Handle("GET /assets/covers/", http.StripPrefix("/assets/covers/", http.FileServerFS(coverFiles)))
-	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServerFS(publicFiles)))
+	mux.Handle("GET /assets/covers/", http.StripPrefix("/assets/covers/", staticAssetHandler(coverFiles)))
+	mux.Handle("GET /assets/", http.StripPrefix("/assets/", staticAssetHandler(publicFiles)))
+	mux.HandleFunc("GET /sitemap.xml", renderer.sitemapHandler())
+	mux.HandleFunc("GET /robots.txt", renderer.robotsHandler())
 
 	for path := range renderer.pages {
 		pattern := "GET " + path
 		if path == "/" {
 			pattern = "GET /{$}"
 		}
-		mux.HandleFunc(pattern, renderer.pageHandler(path))
+		if path == "/sentenze-e-riflessioni" {
+			mux.HandleFunc(pattern, renderer.articleIndexHandler())
+		} else {
+			mux.HandleFunc(pattern, renderer.pageHandler(path))
+		}
 	}
+	mux.HandleFunc("GET /sentenze-e-riflessioni/{slug}", renderer.articleDetailHandler())
 	return nil
 }
 
 func (renderer *Renderer) pageHandler(path string) http.HandlerFunc {
-	return func(response http.ResponseWriter, _ *http.Request) {
-		page := renderer.pages[path]
-		page.CanonicalURL = renderer.baseURL + page.Path
-		selected := renderer.standard
-		if page.Kind == pageKindHome {
-			selected = renderer.home
+	return func(response http.ResponseWriter, request *http.Request) {
+		key := "static:" + path
+		if path == "/" {
+			key = cacheKeyHome
+		} else if strings.HasPrefix(path, "/aree-di-attivita/") {
+			key = cachePrefixArea + strings.TrimPrefix(path, "/aree-di-attivita/")
 		}
-		var output bytes.Buffer
-		if err := selected.ExecuteTemplate(&output, "base", page); err != nil {
-			http.Error(response, "rendering unavailable", http.StatusInternalServerError)
+		body, err := renderer.cache.GetOrFill(request.Context(), key, func(ctx context.Context) ([]byte, error) {
+			return renderer.renderPage(ctx, path)
+		})
+		if err != nil {
+			http.Error(response, "content temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		response.Header().Set("Content-Type", "text/html; charset=utf-8")
-		response.WriteHeader(http.StatusOK)
-		_, _ = response.Write(output.Bytes())
+		writeRevalidatingHTML(response, request, body)
 	}
+}
+
+func (renderer *Renderer) renderPage(ctx context.Context, path string) ([]byte, error) {
+	page := renderer.pages[path]
+	page.CanonicalURL = renderer.baseURL + page.Path
+	if page.Kind == pageKindHome {
+		cards, err := renderer.latestArticleCards(ctx, "", 3)
+		if err != nil {
+			return nil, err
+		}
+		page.Articles = cards
+	} else if page.Kind == pageKindArea {
+		area := strings.TrimPrefix(page.Path, "/aree-di-attivita/")
+		cards, err := renderer.latestArticleCards(ctx, area, 3)
+		if err != nil {
+			return nil, err
+		}
+		page.Articles = cards
+	}
+	renderer.applyPageSEO(&page, "website", page.HeroImage, nil)
+	selected := renderer.standard
+	if page.Kind == pageKindHome {
+		selected = renderer.home
+	}
+	var output bytes.Buffer
+	if err := selected.ExecuteTemplate(&output, "base", page); err != nil {
+		return nil, fmt.Errorf("render public page: %w", err)
+	}
+	return output.Bytes(), nil
+}
+
+func normalizePublicBaseURL(raw string) (string, error) {
+	if strings.TrimSpace(raw) != raw || raw == "" {
+		return "", fmt.Errorf("PUBLIC_BASE_URL must be an absolute HTTP(S) origin")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", fmt.Errorf("PUBLIC_BASE_URL must be an absolute HTTP(S) origin")
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
 
 func parsePageTemplate(files fs.FS, pageTemplate string) (*template.Template, error) {

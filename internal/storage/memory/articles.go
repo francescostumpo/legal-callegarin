@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -35,8 +36,10 @@ func (repository *ArticleMetadataRepository) Create(ctx context.Context, article
 	if _, exists := repository.articles[article.ID]; exists {
 		return articles.Article{}, articles.ErrConflict
 	}
-	if _, exists := repository.slugs[article.Slug]; exists {
-		return articles.Article{}, articles.ErrSlugTaken
+	for _, slug := range articleSlugs(article) {
+		if repository.slugOwnedByOther(slug, article.ID) {
+			return articles.Article{}, articles.ErrSlugTaken
+		}
 	}
 	article.ETag = repository.newETag()
 	repository.articles[article.ID] = cloneArticle(article)
@@ -68,6 +71,23 @@ func (repository *ArticleMetadataRepository) GetBySlug(ctx context.Context, slug
 		return articles.Article{}, articles.ErrNotFound
 	}
 	return cloneArticle(repository.articles[id]), nil
+}
+
+func (repository *ArticleMetadataRepository) GetPublishedBySlug(ctx context.Context, slug string) (articles.Article, error) {
+	if err := ctx.Err(); err != nil {
+		return articles.Article{}, err
+	}
+	repository.mu.RLock()
+	defer repository.mu.RUnlock()
+	for _, article := range repository.articles {
+		if article.Published == nil {
+			continue
+		}
+		if article.Published.Slug == slug || slices.Contains(article.Published.HistoricalSlugs, slug) {
+			return cloneArticle(article), nil
+		}
+	}
+	return articles.Article{}, articles.ErrNotFound
 }
 
 func (repository *ArticleMetadataRepository) List(ctx context.Context, options articles.ListOptions) (articles.ArticlePage, error) {
@@ -124,8 +144,10 @@ func (repository *ArticleMetadataRepository) Update(ctx context.Context, article
 	if stored.ETag != expectedETag {
 		return articles.Article{}, articles.ErrConflict
 	}
-	if owner, exists := repository.slugs[article.Slug]; exists && owner != article.ID {
-		return articles.Article{}, articles.ErrSlugTaken
+	for _, slug := range articleSlugs(article) {
+		if repository.slugOwnedByOther(slug, article.ID) {
+			return articles.Article{}, articles.ErrSlugTaken
+		}
 	}
 	if stored.Slug != article.Slug {
 		delete(repository.slugs, stored.Slug)
@@ -139,6 +161,27 @@ func (repository *ArticleMetadataRepository) Update(ctx context.Context, article
 func (repository *ArticleMetadataRepository) newETag() string {
 	repository.nextETag++
 	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatUint(repository.nextETag, 10)))
+}
+
+func (repository *ArticleMetadataRepository) slugOwnedByOther(slug, articleID string) bool {
+	for id, stored := range repository.articles {
+		if id == articleID {
+			continue
+		}
+		if stored.Slug == slug || stored.Published != nil && (stored.Published.Slug == slug || slices.Contains(stored.Published.HistoricalSlugs, slug)) {
+			return true
+		}
+	}
+	return false
+}
+
+func articleSlugs(article articles.Article) []string {
+	slugs := []string{article.Slug}
+	if article.Published != nil {
+		slugs = append(slugs, article.Published.Slug)
+		slugs = append(slugs, article.Published.HistoricalSlugs...)
+	}
+	return slugs
 }
 
 func articleCursorStart(items []articles.Article, encoded string) (int, error) {
@@ -160,10 +203,20 @@ func articleCursorStart(items []articles.Article, encoded string) (int, error) {
 func cloneArticle(article articles.Article) articles.Article {
 	article.DraftBody = cloneBodyRef(article.DraftBody)
 	article.PublishedBody = cloneBodyRef(article.PublishedBody)
+	article.Published = clonePublishedMetadata(article.Published)
 	article.FirstPublishedAt = cloneTime(article.FirstPublishedAt)
 	article.LastPublishedAt = cloneTime(article.LastPublishedAt)
 	article.DeletedAt = cloneTime(article.DeletedAt)
 	return article
+}
+
+func clonePublishedMetadata(metadata *articles.PublishedMetadata) *articles.PublishedMetadata {
+	if metadata == nil {
+		return nil
+	}
+	clone := *metadata
+	clone.HistoricalSlugs = append([]string(nil), metadata.HistoricalSlugs...)
+	return &clone
 }
 
 func cloneBodyRef(ref *articles.BodyRef) *articles.BodyRef {

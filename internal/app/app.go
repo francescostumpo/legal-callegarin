@@ -11,13 +11,18 @@ import (
 )
 
 type Options struct {
-	Config config.Config
-	Assets fs.FS
-	Logger *slog.Logger
+	Config   config.Config
+	Assets   fs.FS
+	Logger   *slog.Logger
+	Articles publicweb.ArticleReader
 }
 
 func New(options Options) (http.Handler, error) {
-	renderer, err := publicweb.NewRenderer(options.Assets, options.Config.PublicBaseURL)
+	rendererOptions := make([]publicweb.RendererOption, 0, 1)
+	if options.Articles != nil {
+		rendererOptions = append(rendererOptions, publicweb.WithArticleReader(options.Articles))
+	}
+	renderer, err := publicweb.NewRenderer(options.Assets, options.Config.PublicBaseURL, rendererOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("initialize public renderer: %w", err)
 	}

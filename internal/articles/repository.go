@@ -6,6 +6,7 @@ type MetadataRepository interface {
 	Create(context.Context, Article) (Article, error)
 	Get(context.Context, string) (Article, error)
 	GetBySlug(context.Context, string) (Article, error)
+	GetPublishedBySlug(context.Context, string) (Article, error)
 	List(context.Context, ListOptions) (ArticlePage, error)
 	Update(context.Context, Article, string) (Article, error)
 }

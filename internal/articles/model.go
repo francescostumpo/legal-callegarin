@@ -39,6 +39,15 @@ type BodyRef struct {
 	SavedAt  time.Time `json:"savedAt"`
 }
 
+type PublishedMetadata struct {
+	Slug            string
+	Title           string
+	Summary         string
+	Area            string
+	CoverID         string
+	HistoricalSlugs []string
+}
+
 type Article struct {
 	ID               string
 	Slug             string
@@ -49,6 +58,7 @@ type Article struct {
 	Status           Status
 	DraftBody        *BodyRef
 	PublishedBody    *BodyRef
+	Published        *PublishedMetadata
 	FirstPublishedAt *time.Time
 	LastPublishedAt  *time.Time
 	CreatedAt        time.Time
@@ -136,12 +146,17 @@ func (article Article) Validate() error {
 			return err
 		}
 	}
-	if article.Status == StatusPublished || article.Status == StatusWithdrawn {
-		if article.PublishedBody == nil || article.FirstPublishedAt == nil || article.LastPublishedAt == nil {
-			return validationError("published or withdrawn article requires body and publication timestamps")
+	if article.Published != nil {
+		if err := article.Published.validate(); err != nil {
+			return err
 		}
 	}
-	if article.Status == StatusDraft && (article.PublishedBody != nil || article.FirstPublishedAt != nil || article.LastPublishedAt != nil) {
+	if article.Status == StatusPublished || article.Status == StatusWithdrawn {
+		if article.PublishedBody == nil || article.Published == nil || article.FirstPublishedAt == nil || article.LastPublishedAt == nil {
+			return validationError("published or withdrawn article requires metadata, body, and publication timestamps")
+		}
+	}
+	if article.Status == StatusDraft && (article.PublishedBody != nil || article.Published != nil || article.FirstPublishedAt != nil || article.LastPublishedAt != nil) {
 		return validationError("draft article cannot have publication data")
 	}
 	if article.FirstPublishedAt != nil && article.FirstPublishedAt.Before(article.CreatedAt) {
@@ -157,6 +172,31 @@ func (article Article) Validate() error {
 		if article.LastPublishedAt.After(article.UpdatedAt) {
 			return validationError("last publication cannot follow update")
 		}
+	}
+	return nil
+}
+
+func (published PublishedMetadata) validate() error {
+	normalizedSlug, err := NormalizeSlug(published.Slug)
+	if err != nil || normalizedSlug != published.Slug {
+		return validationError("published slug must be normalized")
+	}
+	if err := validateTrimmedRuneLength("published title", published.Title, 5, 160); err != nil {
+		return err
+	}
+	if err := validateTrimmedRuneLength("published summary", published.Summary, 20, 320); err != nil {
+		return err
+	}
+	if strings.TrimSpace(published.Area) == "" || strings.TrimSpace(published.CoverID) == "" {
+		return validationError("published area and cover ID are required")
+	}
+	seen := map[string]bool{published.Slug: true}
+	for _, slug := range published.HistoricalSlugs {
+		normalized, err := NormalizeSlug(slug)
+		if err != nil || normalized != slug || seen[slug] {
+			return validationError("historical published slugs must be normalized and unique")
+		}
+		seen[slug] = true
 	}
 	return nil
 }
