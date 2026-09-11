@@ -12,8 +12,6 @@ import (
 	"golang.org/x/term"
 )
 
-const maxPasswordBytes = 4096
-
 type dependencies struct {
 	stdin      io.Reader
 	stdout     io.Writer
@@ -64,15 +62,21 @@ func run(args []string, deps dependencies) int {
 			writeFailure(deps.stderr)
 			return 1
 		}
-		reader := bufio.NewReader(io.LimitReader(deps.stdin, 2*maxPasswordBytes+4))
+		reader := bufio.NewReader(io.LimitReader(deps.stdin, 2*auth.MaxPasswordBytes+4))
 		first, err = readPasswordLine(reader)
 		if err == nil {
 			second, err = readPasswordLine(reader)
 		}
+		if err == nil {
+			_, trailingErr := reader.ReadByte()
+			if trailingErr != io.EOF {
+				err = errorsNewInput()
+			}
+		}
 	}
 	defer zero(first)
 	defer zero(second)
-	if err != nil || len(first) == 0 || len(first) > maxPasswordBytes || !bytes.Equal(first, second) {
+	if err != nil || auth.ValidatePassword(first) != nil || !bytes.Equal(first, second) {
 		writeFailure(deps.stderr)
 		return 1
 	}
@@ -95,7 +99,7 @@ func readPasswordLine(reader *bufio.Reader) ([]byte, error) {
 	}
 	line = bytes.TrimSuffix(line, []byte{'\n'})
 	line = bytes.TrimSuffix(line, []byte{'\r'})
-	if len(line) > maxPasswordBytes {
+	if len(line) > auth.MaxPasswordBytes {
 		return nil, errorsNewInput()
 	}
 	return line, nil

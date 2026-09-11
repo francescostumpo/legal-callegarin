@@ -38,15 +38,16 @@ type SessionController interface {
 }
 
 type Options struct {
-	Credentials   CredentialVerifier
-	Sessions      SessionController
-	Assets        fs.FS
-	SessionKey    []byte
-	PublicBaseURL string
-	Now           func() time.Time
-	TrustedProxy  bool
-	LoginCapacity int
-	MaxBuckets    int
+	Credentials        CredentialVerifier
+	ConfiguredUsername string
+	Sessions           SessionController
+	Assets             fs.FS
+	SessionKey         []byte
+	PublicBaseURL      string
+	Now                func() time.Time
+	TrustedProxy       bool
+	LoginCapacity      int
+	MaxBuckets         int
 }
 
 type handler struct {
@@ -69,7 +70,7 @@ type loginView struct {
 }
 
 func New(options Options) (http.Handler, error) {
-	if options.Credentials == nil || options.Sessions == nil || options.Assets == nil || len(options.SessionKey) < 32 {
+	if options.Credentials == nil || options.Sessions == nil || options.Assets == nil || len(options.SessionKey) < 32 || normalizeUsername(options.ConfiguredUsername) == "" {
 		return nil, errors.New("admin handler requires credentials, sessions, assets, and a session key")
 	}
 	base, err := url.Parse(options.PublicBaseURL)
@@ -97,6 +98,7 @@ func New(options Options) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("admin login template: %w", err)
 	}
+	configuredUsernameKey := keyedValue(options.SessionKey, "callegarin/admin-login-username/v1", normalizeUsername(options.ConfiguredUsername))
 	instance := &handler{
 		credentials:    options.Credentials,
 		sessions:       options.Sessions,
@@ -107,7 +109,7 @@ func New(options Options) (http.Handler, error) {
 		expectedOrigin: base.Scheme + "://" + base.Host,
 		now:            options.Now,
 		trustedProxy:   options.TrustedProxy,
-		limiter:        newLoginLimiter(options.LoginCapacity, time.Minute, time.Hour, options.MaxBuckets),
+		limiter:        newLoginLimiter(options.LoginCapacity, time.Minute, time.Hour, options.MaxBuckets, configuredUsernameKey),
 		template:       loginTemplate,
 	}
 	mux := http.NewServeMux()
@@ -136,6 +138,7 @@ func (handler *handler) loginGET(response http.ResponseWriter, _ *http.Request) 
 }
 
 func (handler *handler) loginPOST(response http.ResponseWriter, request *http.Request) {
+	setPrivateAdminHeaders(response)
 	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/x-www-form-urlencoded" {
 		handler.renderLogin(response, http.StatusUnsupportedMediaType, "Richiesta non valida")
@@ -153,7 +156,7 @@ func (handler *handler) loginPOST(response http.ResponseWriter, request *http.Re
 	username := request.PostForm.Get("username")
 	password := request.PostForm.Get("password")
 	started := request.PostForm.Get("started")
-	if len(username) > 128 || len(password) == 0 || len(password) > 1024 || len(started) > 256 || !handler.validFormToken(started) {
+	if len(username) > 128 || auth.ValidatePassword([]byte(password)) != nil || len(started) > 256 || !handler.validFormToken(started) {
 		handler.renderLogin(response, http.StatusBadRequest, "Richiesta non valida")
 		return
 	}
@@ -162,11 +165,13 @@ func (handler *handler) loginPOST(response http.ResponseWriter, request *http.Re
 		handler.renderLogin(response, http.StatusBadRequest, "Richiesta non valida")
 		return
 	}
-	usernameKey := keyedValue(handler.sessionKey, "callegarin/admin-login-username/v1", normalizeUsername(username))
 	now := handler.now().UTC()
-	addressAllowed := handler.limiter.allowAddress(addressKey, now)
-	usernameAllowed := handler.limiter.allowUsername(usernameKey, now)
-	if !addressAllowed || !usernameAllowed {
+	if !handler.limiter.allowAddress(addressKey, now) {
+		handler.renderLogin(response, http.StatusTooManyRequests, "Accesso temporaneamente non disponibile")
+		return
+	}
+	usernameKey := keyedValue(handler.sessionKey, "callegarin/admin-login-username/v1", normalizeUsername(username))
+	if !handler.limiter.allowUsername(usernameKey, now) {
 		handler.renderLogin(response, http.StatusTooManyRequests, "Accesso temporaneamente non disponibile")
 		return
 	}
@@ -184,17 +189,16 @@ func (handler *handler) loginPOST(response http.ResponseWriter, request *http.Re
 		return
 	}
 	webmiddleware.SetSessionCookie(response, raw, now)
-	response.Header().Set("Cache-Control", "no-store")
 	http.Redirect(response, request, "/admin", http.StatusSeeOther)
 }
 
 func (handler *handler) sessionGET(response http.ResponseWriter, request *http.Request) {
+	setPrivateAdminHeaders(response)
 	principal, ok := webmiddleware.PrincipalFromContext(request.Context())
 	if !ok {
 		writeJSONError(response, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(response).Encode(map[string]string{
 		"username":  principal.Username,
@@ -203,6 +207,7 @@ func (handler *handler) sessionGET(response http.ResponseWriter, request *http.R
 }
 
 func (handler *handler) sessionDELETE(response http.ResponseWriter, request *http.Request) {
+	setPrivateAdminHeaders(response)
 	principal, ok := webmiddleware.PrincipalFromContext(request.Context())
 	if !ok {
 		writeJSONError(response, http.StatusUnauthorized, "authentication required")
@@ -213,7 +218,6 @@ func (handler *handler) sessionDELETE(response http.ResponseWriter, request *htt
 		return
 	}
 	webmiddleware.ClearSessionCookie(response, handler.now())
-	response.Header().Set("Cache-Control", "no-store")
 	response.WriteHeader(http.StatusNoContent)
 }
 
@@ -222,8 +226,7 @@ func (handler *handler) indexGET(response http.ResponseWriter, _ *http.Request) 
 }
 
 func (handler *handler) adminGET(response http.ResponseWriter, request *http.Request) {
-	response.Header().Set("Cache-Control", "no-store")
-	response.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	setPrivateAdminHeaders(response)
 	if strings.HasPrefix(request.URL.Path, "/admin/assets/") {
 		clone := request.Clone(request.Context())
 		clone.URL.Path = strings.TrimPrefix(request.URL.Path, "/admin/")
@@ -234,16 +237,14 @@ func (handler *handler) adminGET(response http.ResponseWriter, request *http.Req
 }
 
 func (handler *handler) renderLogin(response http.ResponseWriter, status int, message string) {
-	response.Header().Set("Cache-Control", "no-store")
-	response.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	setPrivateAdminHeaders(response)
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	response.WriteHeader(status)
 	_ = handler.template.Execute(response, loginView{Token: handler.newFormToken(), Error: message})
 }
 
 func serveAdminIndex(response http.ResponseWriter, index []byte) {
-	response.Header().Set("Cache-Control", "no-store")
-	response.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	setPrivateAdminHeaders(response)
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = response.Write(index)
 }
@@ -307,10 +308,15 @@ func keyedValue(key []byte, domain, value string) string {
 }
 
 func writeJSONError(response http.ResponseWriter, status int, message string) {
-	response.Header().Set("Cache-Control", "no-store")
+	setPrivateAdminHeaders(response)
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
 	response.WriteHeader(status)
 	_ = json.NewEncoder(response).Encode(map[string]string{"error": message})
+}
+
+func setPrivateAdminHeaders(response http.ResponseWriter) {
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("X-Robots-Tag", "noindex, nofollow")
 }
 
 const loginPage = `<!doctype html>

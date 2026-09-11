@@ -16,6 +16,7 @@ import (
 var (
 	ErrInvalidCredentials  = errors.New("invalid credentials")
 	ErrInvalidPasswordHash = errors.New("invalid password hash")
+	ErrInvalidPassword     = errors.New("invalid password")
 )
 
 const (
@@ -34,6 +35,10 @@ const (
 	maxArgonIterations = 4
 	minArgonLanes      = 1
 	maxArgonLanes      = 4
+
+	// MaxPasswordBytes is the single input limit used by password generation
+	// and every password-entry surface.
+	MaxPasswordBytes = 1024
 )
 
 type passwordDeriver func(password, salt []byte, iterations, memory uint32, parallelism uint8, keyLength uint32) []byte
@@ -51,6 +56,9 @@ type Credentials struct {
 // HashPassword returns an Argon2id PHC string using OWASP's 19 MiB, two
 // iteration, one-lane profile. A 16-byte random salt and 32-byte key are used.
 func HashPassword(password []byte, random io.Reader) (string, error) {
+	if err := ValidatePassword(password); err != nil {
+		return "", err
+	}
 	if random == nil {
 		return "", fmt.Errorf("password hashing: random source is required")
 	}
@@ -67,6 +75,13 @@ func HashPassword(password []byte, random io.Reader) (string, error) {
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(hash),
 	), nil
+}
+
+func ValidatePassword(password []byte) error {
+	if len(password) == 0 || len(password) > MaxPasswordBytes {
+		return ErrInvalidPassword
+	}
+	return nil
 }
 
 func ParseCredentials(username, phc string) (*Credentials, error) {

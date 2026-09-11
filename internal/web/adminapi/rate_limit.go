@@ -25,6 +25,8 @@ type bucketSet struct {
 	refillInterval time.Duration
 	idleExpiry     time.Duration
 	maxEntries     int
+	pinnedKey      string
+	failClosedFull bool
 }
 
 type loginLimiter struct {
@@ -33,11 +35,19 @@ type loginLimiter struct {
 	usernames bucketSet
 }
 
-func newLoginLimiter(capacity int, refillInterval, idleExpiry time.Duration, maxEntries int) *loginLimiter {
-	newSet := func() bucketSet {
-		return bucketSet{buckets: make(map[string]*loginBucket), capacity: float64(capacity), refillInterval: refillInterval, idleExpiry: idleExpiry, maxEntries: maxEntries}
+func newLoginLimiter(capacity int, refillInterval, idleExpiry time.Duration, maxEntries int, configuredUsernameKey string) *loginLimiter {
+	newSet := func(pinnedKey string, failClosedFull bool) bucketSet {
+		set := bucketSet{
+			buckets: make(map[string]*loginBucket), capacity: float64(capacity),
+			refillInterval: refillInterval, idleExpiry: idleExpiry, maxEntries: maxEntries,
+			pinnedKey: pinnedKey, failClosedFull: failClosedFull,
+		}
+		if pinnedKey != "" && maxEntries > 0 {
+			set.buckets[pinnedKey] = &loginBucket{tokens: float64(capacity)}
+		}
+		return set
 	}
-	return &loginLimiter{addresses: newSet(), usernames: newSet()}
+	return &loginLimiter{addresses: newSet("", false), usernames: newSet(configuredUsernameKey, true)}
 }
 
 func (limiter *loginLimiter) allowAddress(key string, now time.Time) bool {
@@ -66,7 +76,7 @@ func (limiter *loginLimiter) usernameSize() int {
 
 func (set *bucketSet) allow(key string, now time.Time) bool {
 	for candidate, bucket := range set.buckets {
-		if now.Sub(bucket.lastSeen) >= set.idleExpiry {
+		if candidate != set.pinnedKey && now.Sub(bucket.lastSeen) >= set.idleExpiry {
 			delete(set.buckets, candidate)
 		}
 	}
@@ -76,7 +86,9 @@ func (set *bucketSet) allow(key string, now time.Time) bool {
 			return false
 		}
 		if len(set.buckets) >= set.maxEntries {
-			set.evictOldest()
+			if set.failClosedFull || !set.evictOldest() {
+				return false
+			}
 		}
 		bucket = &loginBucket{tokens: set.capacity, lastRefill: now, lastSeen: now}
 		set.buckets[key] = bucket
@@ -93,15 +105,22 @@ func (set *bucketSet) allow(key string, now time.Time) bool {
 	return true
 }
 
-func (set *bucketSet) evictOldest() {
+func (set *bucketSet) evictOldest() bool {
 	var oldest string
 	var seen time.Time
 	for key, bucket := range set.buckets {
+		if key == set.pinnedKey {
+			continue
+		}
 		if oldest == "" || bucket.lastSeen.Before(seen) {
 			oldest, seen = key, bucket.lastSeen
 		}
 	}
+	if oldest == "" {
+		return false
+	}
 	delete(set.buckets, oldest)
+	return true
 }
 
 func loginAddressKey(request *http.Request, trustedProxy bool, key []byte) (string, error) {

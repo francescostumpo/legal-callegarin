@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"bufio"
 	"context"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,30 +91,207 @@ func TestUnsafeAdminAPIRequiresExactOriginAndSessionCSRF(t *testing.T) {
 }
 
 func TestMiddlewareAddsSecurityHeadersRequestIDAndRecoversWithoutLeaking(t *testing.T) {
-	handler, err := New(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		panic("secret-panic-value")
+	for name, writeBeforePanic := range map[string]bool{"before write": false, "after apparent success": true} {
+		t.Run(name, func(t *testing.T) {
+			var logs strings.Builder
+			handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				if writeBeforePanic {
+					response.WriteHeader(http.StatusOK)
+					_, _ = response.Write([]byte("partial-success-secret"))
+				}
+				panic("secret-panic-value")
+			}), Options{
+				SessionKey:    []byte("0123456789abcdef0123456789abcdef"),
+				PublicBaseURL: "https://studio.example.test",
+				Logger:        slog.New(slog.NewTextHandler(&logs, nil)),
+				RequestID:     func() string { return "request-123" },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin/login", nil))
+			if response.Code != http.StatusInternalServerError || response.Body.String() != "Internal Server Error\n" {
+				t.Fatalf("recovery response = %d %q", response.Code, response.Body.String())
+			}
+			for header := range map[string]bool{"Content-Security-Policy": true, "Strict-Transport-Security": true, "X-Content-Type-Options": true, "Referrer-Policy": true} {
+				if response.Header().Get(header) == "" {
+					t.Errorf("missing %s", header)
+				}
+			}
+			if response.Header().Get("X-Request-ID") != "request-123" || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("X-Robots-Tag") != "noindex, nofollow" {
+				t.Fatalf("request/recovery headers = %#v", response.Header())
+			}
+			if logText := logs.String(); !strings.Contains(logText, "request completed") || !strings.Contains(logText, "status=500") || !strings.Contains(logText, "outcome=recovered_panic") || strings.Contains(logText, "secret") {
+				t.Fatalf("panic completion log = %q", logText)
+			}
+		})
+	}
+}
+
+func TestAdminResponseBufferFailsClosedAtBoundWithoutPartialOutput(t *testing.T) {
+	var logs strings.Builder
+	handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte("response-too-large"))
 	}), Options{
-		SessionKey:    []byte("0123456789abcdef0123456789abcdef"),
-		PublicBaseURL: "https://studio.example.test",
-		Logger:        slog.New(slog.NewTextHandler(&strings.Builder{}, nil)),
-		RequestID:     func() string { return "request-123" },
+		SessionKey: []byte("0123456789abcdef0123456789abcdef"), PublicBaseURL: "https://studio.example.test",
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)), MaxAdminResponseBytes: 8,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test/health/live", nil))
-	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "secret") {
-		t.Fatalf("recovery response = %d %q", response.Code, response.Body.String())
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin/login", nil))
+	if response.Code != http.StatusInternalServerError || response.Body.String() != "Internal Server Error\n" {
+		t.Fatalf("overflow response = %d %q", response.Code, response.Body.String())
 	}
-	for name := range map[string]bool{"Content-Security-Policy": true, "Strict-Transport-Security": true, "X-Content-Type-Options": true, "Referrer-Policy": true} {
-		if response.Header().Get(name) == "" {
-			t.Errorf("missing %s", name)
+	if !strings.Contains(logs.String(), "status=500") || !strings.Contains(logs.String(), "outcome=response_too_large") {
+		t.Fatalf("overflow log = %q", logs.String())
+	}
+}
+
+func TestPublicResponseIsNotBufferedAndRecorderPreservesSemantics(t *testing.T) {
+	underlying := newInterfaceResponseWriter()
+	handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusCreated)
+		response.WriteHeader(http.StatusTeapot)
+		_, _ = response.Write([]byte("visible"))
+		if underlying.body.String() != "visible" {
+			t.Fatal("public response was buffered")
 		}
+		response.(http.Flusher).Flush()
+		if _, _, err := response.(http.Hijacker).Hijack(); err != nil {
+			t.Fatalf("Hijack: %v", err)
+		}
+		if err := response.(http.Pusher).Push("/asset", nil); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		if _, err := response.(io.ReaderFrom).ReadFrom(&onlyReader{data: []byte("-read-from")}); err != nil {
+			t.Fatalf("ReadFrom: %v", err)
+		}
+	}), Options{SessionKey: []byte("0123456789abcdef0123456789abcdef"), PublicBaseURL: "https://studio.example.test"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if response.Header().Get("X-Request-ID") != "request-123" || response.Header().Get("Cache-Control") != "no-store" {
-		t.Fatalf("request/recovery headers = %#v", response.Header())
+	handler.ServeHTTP(underlying, httptest.NewRequest(http.MethodGet, "https://studio.example.test/health/live", nil))
+	if underlying.status != http.StatusCreated || underlying.body.String() != "visible-read-from" || !underlying.flushed || !underlying.hijacked || !underlying.pushed || !underlying.readFrom {
+		t.Fatalf("recorder semantics = status=%d body=%q flush=%t hijack=%t push=%t readFrom=%t", underlying.status, underlying.body.String(), underlying.flushed, underlying.hijacked, underlying.pushed, underlying.readFrom)
 	}
+}
+
+func TestResponseRecordersHonorImplicitStatusRepeatedHeaderAndAdminNoStreaming(t *testing.T) {
+	underlying := newInterfaceResponseWriter()
+	recorder := &captureResponseWriter{ResponseWriter: underlying}
+	if _, err := recorder.Write([]byte("implicit")); err != nil {
+		t.Fatal(err)
+	}
+	recorder.WriteHeader(http.StatusCreated)
+	if recorder.responseStatus() != http.StatusOK || underlying.status != http.StatusOK {
+		t.Fatalf("implicit status = recorder %d underlying %d", recorder.responseStatus(), underlying.status)
+	}
+
+	underlying = newInterfaceResponseWriter()
+	recorder = &captureResponseWriter{ResponseWriter: underlying}
+	recorder.WriteHeader(http.StatusCreated)
+	recorder.WriteHeader(http.StatusTeapot)
+	if recorder.responseStatus() != http.StatusCreated || underlying.status != http.StatusCreated {
+		t.Fatalf("repeated WriteHeader changed status: recorder %d underlying %d", recorder.responseStatus(), underlying.status)
+	}
+
+	buffered := newBoundedAdminResponse(make(http.Header), 128)
+	if _, ok := any(buffered).(http.Flusher); ok {
+		t.Fatal("atomic admin response unexpectedly exposes streaming")
+	}
+	buffered.WriteHeader(http.StatusAccepted)
+	buffered.WriteHeader(http.StatusTeapot)
+	if buffered.responseStatus() != http.StatusAccepted {
+		t.Fatalf("admin repeated WriteHeader status = %d", buffered.responseStatus())
+	}
+}
+
+func TestAllAdminMiddlewareResponsesArePrivateAndNoindex(t *testing.T) {
+	authenticator := &authenticatorStub{session: auth.Session{Username: "admin"}}
+	handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNoContent)
+	}), Options{Authenticator: authenticator, SessionKey: []byte("0123456789abcdef0123456789abcdef"), PublicBaseURL: "https://studio.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, request := range map[string]*http.Request{
+		"auth error": httptest.NewRequest(http.MethodGet, "https://studio.example.test/api/admin/session", nil),
+		"origin error": func() *http.Request {
+			r := httptest.NewRequest(http.MethodDelete, "https://studio.example.test/api/admin/session", nil)
+			r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "raw"})
+			return r
+		}(),
+		"asset success": func() *http.Request {
+			r := httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin/assets/app.js", nil)
+			r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "raw"})
+			return r
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("X-Robots-Tag") != "noindex, nofollow" {
+				t.Fatalf("admin privacy headers = %#v", response.Header())
+			}
+		})
+	}
+}
+
+type interfaceResponseWriter struct {
+	header                              http.Header
+	body                                strings.Builder
+	status                              int
+	flushed, hijacked, pushed, readFrom bool
+}
+
+func newInterfaceResponseWriter() *interfaceResponseWriter {
+	return &interfaceResponseWriter{header: make(http.Header)}
+}
+func (writer *interfaceResponseWriter) Header() http.Header { return writer.header }
+func (writer *interfaceResponseWriter) WriteHeader(status int) {
+	if writer.status == 0 {
+		writer.status = status
+	}
+}
+func (writer *interfaceResponseWriter) Write(value []byte) (int, error) {
+	if writer.status == 0 {
+		writer.status = http.StatusOK
+	}
+	return writer.body.Write(value)
+}
+func (writer *interfaceResponseWriter) Flush() { writer.flushed = true }
+func (writer *interfaceResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	writer.hijacked = true
+	left, right := net.Pipe()
+	_ = right.Close()
+	return left, bufio.NewReadWriter(bufio.NewReader(left), bufio.NewWriter(left)), nil
+}
+func (writer *interfaceResponseWriter) Push(string, *http.PushOptions) error {
+	writer.pushed = true
+	return nil
+}
+func (writer *interfaceResponseWriter) ReadFrom(reader io.Reader) (int64, error) {
+	writer.readFrom = true
+	value, err := io.ReadAll(reader)
+	if err != nil {
+		return 0, err
+	}
+	written, err := writer.Write(value)
+	return int64(written), err
+}
+
+type onlyReader struct{ data []byte }
+
+func (reader *onlyReader) Read(value []byte) (int, error) {
+	if len(reader.data) == 0 {
+		return 0, io.EOF
+	}
+	count := copy(value, reader.data)
+	reader.data = reader.data[count:]
+	return count, nil
 }
 
 func TestMiddlewareCapsRequestBodiesBeforeHandler(t *testing.T) {

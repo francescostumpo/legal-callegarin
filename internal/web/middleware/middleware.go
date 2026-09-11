@@ -30,13 +30,14 @@ type Authenticator interface {
 }
 
 type Options struct {
-	Authenticator Authenticator
-	SessionKey    []byte
-	PublicBaseURL string
-	Logger        *slog.Logger
-	MaxBodyBytes  int64
-	RequestID     func() string
-	Now           func() time.Time
+	Authenticator         Authenticator
+	SessionKey            []byte
+	PublicBaseURL         string
+	Logger                *slog.Logger
+	MaxBodyBytes          int64
+	MaxAdminResponseBytes int64
+	RequestID             func() string
+	Now                   func() time.Time
 }
 
 type Principal struct {
@@ -62,6 +63,9 @@ func New(next http.Handler, options Options) (http.Handler, error) {
 	if options.MaxBodyBytes <= 0 {
 		options.MaxBodyBytes = defaultBodyLimit
 	}
+	if options.MaxAdminResponseBytes <= 0 {
+		options.MaxAdminResponseBytes = defaultAdminResponseLimit
+	}
 	if options.RequestID == nil {
 		options.RequestID = secureRequestID
 	}
@@ -77,7 +81,7 @@ func New(next http.Handler, options Options) (http.Handler, error) {
 	handler = bodyLimit(handler, options.MaxBodyBytes)
 	handler = accessLog(handler, options.Logger, options.Now)
 	handler = securityHeaders(handler)
-	handler = recoverPanics(handler, options.Logger)
+	handler = recoverPanics(handler, options.Logger, options.MaxAdminResponseBytes)
 	handler = requestID(handler, options.RequestID)
 	return handler, nil
 }
@@ -144,69 +148,10 @@ func requestID(next http.Handler, generate func() string) http.Handler {
 	})
 }
 
-func recoverPanics(next http.Handler, logger *slog.Logger) http.Handler {
-	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		defer func() {
-			if recover() == nil {
-				return
-			}
-			logger.Error("request panic recovered", "request_id", RequestIDFromContext(request.Context()))
-			response.Header().Set("Cache-Control", "no-store")
-			response.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			response.WriteHeader(http.StatusInternalServerError)
-			_, _ = response.Write([]byte("Internal Server Error\n"))
-		}()
-		next.ServeHTTP(response, request)
-	})
-}
-
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		response.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'")
-		response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		response.Header().Set("Referrer-Policy", "no-referrer")
-		response.Header().Set("X-Content-Type-Options", "nosniff")
-		response.Header().Set("X-Frame-Options", "DENY")
-		response.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
+		applySecurityHeaders(response.Header(), request.URL.Path)
 		next.ServeHTTP(response, request)
-	})
-}
-
-type statusWriter struct {
-	http.ResponseWriter
-	status int
-}
-
-func (writer *statusWriter) WriteHeader(status int) {
-	if writer.status == 0 {
-		writer.status = status
-	}
-	writer.ResponseWriter.WriteHeader(status)
-}
-
-func (writer *statusWriter) Write(body []byte) (int, error) {
-	if writer.status == 0 {
-		writer.status = http.StatusOK
-	}
-	return writer.ResponseWriter.Write(body)
-}
-
-func accessLog(next http.Handler, logger *slog.Logger, now func() time.Time) http.Handler {
-	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		started := now()
-		writer := &statusWriter{ResponseWriter: response}
-		next.ServeHTTP(writer, request)
-		status := writer.status
-		if status == 0 {
-			status = http.StatusOK
-		}
-		logger.Info("request completed",
-			"request_id", RequestIDFromContext(request.Context()),
-			"method", request.Method,
-			"path", request.URL.Path,
-			"status", status,
-			"duration_ms", now().Sub(started).Milliseconds(),
-		)
 	})
 }
 

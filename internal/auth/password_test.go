@@ -94,3 +94,17 @@ func TestCredentialVersionIsStableDomainSeparatedDigest(t *testing.T) {
 		t.Fatal("credential version is not stable")
 	}
 }
+
+func TestPasswordLengthBoundaryIsSharedByHashing(t *testing.T) {
+	maximum := bytes.Repeat([]byte{'x'}, MaxPasswordBytes)
+	if _, err := HashPassword(maximum, bytes.NewReader(bytes.Repeat([]byte{0x51}, 16))); err != nil {
+		t.Fatalf("HashPassword(maximum): %v", err)
+	}
+	tooLong := append(append([]byte(nil), maximum...), 'x')
+	if _, err := HashPassword(tooLong, bytes.NewReader(bytes.Repeat([]byte{0x52}, 16))); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("HashPassword(maximum+1) error = %v, want ErrInvalidPassword", err)
+	}
+	if err := ValidatePassword(nil); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("ValidatePassword(empty) error = %v", err)
+	}
+}

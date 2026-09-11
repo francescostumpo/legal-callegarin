@@ -130,13 +130,14 @@ func New(options Options) (http.Handler, error) {
 		return nil, fmt.Errorf("initialize admin sessions: %w", err)
 	}
 	adminHandler, err := adminapi.New(adminapi.Options{
-		Credentials:   credentials,
-		Sessions:      sessions,
-		Assets:        options.Assets,
-		SessionKey:    signingKey,
-		PublicBaseURL: options.Config.PublicBaseURL,
-		Now:           clock,
-		TrustedProxy:  options.TrustedProxy || options.Config.TrustedProxy,
+		Credentials:        credentials,
+		ConfiguredUsername: options.Config.AdminUsername,
+		Sessions:           sessions,
+		Assets:             options.Assets,
+		SessionKey:         signingKey,
+		PublicBaseURL:      options.Config.PublicBaseURL,
+		Now:                clock,
+		TrustedProxy:       options.TrustedProxy || options.Config.TrustedProxy,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize admin handler: %w", err)

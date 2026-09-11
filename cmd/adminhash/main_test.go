@@ -71,3 +71,45 @@ func TestRunReadsHiddenTerminalPasswordTwice(t *testing.T) {
 		t.Fatalf("terminal run: exit=%d reads=%d stdout=%q stderr=%q", exit, reads, stdout.String(), stderr.String())
 	}
 }
+
+func TestRunUsesSharedPasswordLengthBoundary(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		size     int
+		wantExit int
+		wantPHC  bool
+	}{
+		"maximum":   {size: auth.MaxPasswordBytes, wantExit: 0, wantPHC: true},
+		"maximum+1": {size: auth.MaxPasswordBytes + 1, wantExit: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			password := strings.Repeat("x", testCase.size)
+			var stdout, stderr bytes.Buffer
+			exit := run(nil, dependencies{
+				stdin: strings.NewReader(password + "\n" + password + "\n"), stdout: &stdout, stderr: &stderr,
+				random: bytes.NewReader(bytes.Repeat([]byte{0x71}, 16)),
+			})
+			if exit != testCase.wantExit || strings.HasPrefix(stdout.String(), "$argon2id$") != testCase.wantPHC {
+				t.Fatalf("size %d: exit=%d stdout=%q stderr=%q", testCase.size, exit, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunRejectsAnyPipedInputAfterExactlyTwoLines(t *testing.T) {
+	for name, input := range map[string]string{
+		"third line":     "secret\nsecret\nthird\n",
+		"trailing byte":  "secret\nsecret\nx",
+		"trailing space": "secret\nsecret\n ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exit := run(nil, dependencies{
+				stdin: strings.NewReader(input), stdout: &stdout, stderr: &stderr,
+				random: bytes.NewReader(bytes.Repeat([]byte{0x81}, 16)),
+			})
+			if exit == 0 || stdout.Len() != 0 || stderr.String() != "adminhash: unable to generate password hash\n" {
+				t.Fatalf("trailing input accepted: exit=%d stdout=%q stderr=%q", exit, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
