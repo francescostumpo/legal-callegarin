@@ -145,6 +145,19 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 			env:       withOverride(validProduction, "TRUSTED_PROXY", "TRUE"),
 			wantError: "TRUSTED_PROXY",
 		},
+		{
+			name:      "invalid article storage schema mode",
+			env:       withOverride(validProduction, "ARTICLE_STORAGE_SCHEMA_MODE", "automatic"),
+			wantError: "ARTICLE_STORAGE_SCHEMA_MODE",
+		},
+		{
+			name: "article storage schema mode with memory storage",
+			env: map[string]string{
+				"APP_ENV":                     "development",
+				"ARTICLE_STORAGE_SCHEMA_MODE": "compat",
+			},
+			wantError: "ARTICLE_STORAGE_SCHEMA_MODE",
+		},
 	}
 
 	for _, tt := range tests {
@@ -181,8 +194,33 @@ func TestLoadAllowsAzureConnectionStringOnlyOutsideProduction(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if got.AzureStorageConnectionString != secret || got.AzureStorageAccountURL != "" {
+			if got.AzureStorageConnectionString != secret || got.AzureStorageAccountURL != "" || got.ArticleStorageSchemaMode != "compat" {
 				t.Fatalf("Azure configuration = URL %q, connection string present %t", got.AzureStorageAccountURL, got.AzureStorageConnectionString != "")
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsExplicitArticleStorageSchemaModes(t *testing.T) {
+	t.Parallel()
+
+	validSessionKey := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	for _, mode := range []string{"compat", "migrate", "repair"} {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			got, err := Load(mapGetenv(map[string]string{
+				"APP_ENV":                     "production",
+				"PUBLIC_BASE_URL":             "https://example.test",
+				"STORAGE_MODE":                "azure",
+				"ARTICLE_STORAGE_SCHEMA_MODE": mode,
+				"AZURE_STORAGE_ACCOUNT_URL":   "https://example.blob.core.windows.net",
+				"ADMIN_USERNAME":              "admin",
+				"ADMIN_PASSWORD_HASH":         "$argon2id$fixture",
+				"SESSION_KEY_BASE64":          validSessionKey,
+			}))
+			if err != nil || got.ArticleStorageSchemaMode != mode {
+				t.Fatalf("Load() mode = %q, %v", got.ArticleStorageSchemaMode, err)
 			}
 		})
 	}
@@ -210,6 +248,7 @@ func assertConfig(t *testing.T, got, want Config) {
 		got.StorageMode != want.StorageMode ||
 		got.AzureStorageAccountURL != want.AzureStorageAccountURL ||
 		got.AzureStorageConnectionString != want.AzureStorageConnectionString ||
+		got.ArticleStorageSchemaMode != want.ArticleStorageSchemaMode ||
 		got.AdminUsername != want.AdminUsername ||
 		got.AdminPasswordHash != want.AdminPasswordHash ||
 		got.TrustedProxy != want.TrustedProxy ||

@@ -21,6 +21,23 @@ const (
 
 type ResourceNames struct{ ArticlesTable, ContactsTable, SessionsTable, BodiesContainer string }
 
+type ArticleSchemaMode string
+
+const (
+	ArticleSchemaCompat  ArticleSchemaMode = "compat"
+	ArticleSchemaMigrate ArticleSchemaMode = "migrate"
+	ArticleSchemaRepair  ArticleSchemaMode = "repair"
+)
+
+func (mode ArticleSchemaMode) validate() error {
+	switch mode {
+	case ArticleSchemaCompat, ArticleSchemaMigrate, ArticleSchemaRepair:
+		return nil
+	default:
+		return errors.New("article schema mode must be compat, migrate, or repair")
+	}
+}
+
 func DefaultResourceNames() ResourceNames {
 	return ResourceNames{defaultArticlesTable, defaultContactsTable, defaultSessionsTable, defaultBodiesContainer}
 }
@@ -49,7 +66,14 @@ func (readiness *azureReadiness) Ready(ctx context.Context) error {
 }
 
 func Open(ctx context.Context, accountURL string, names ResourceNames, now func() time.Time) (*storage.Bundle, error) {
+	return OpenWithArticleSchemaMode(ctx, accountURL, names, ArticleSchemaMigrate, now)
+}
+
+func OpenWithArticleSchemaMode(ctx context.Context, accountURL string, names ResourceNames, mode ArticleSchemaMode, now func() time.Time) (*storage.Bundle, error) {
 	if err := names.validate(); err != nil {
+		return nil, err
+	}
+	if err := mode.validate(); err != nil {
 		return nil, err
 	}
 	tableURL, blobURL, err := storageEndpoints(accountURL)
@@ -69,11 +93,18 @@ func Open(ctx context.Context, accountURL string, names ResourceNames, now func(
 	if err != nil {
 		return nil, errors.New("initialize Azure Blob client")
 	}
-	return openWithClients(tableService, blobClient, names, now)
+	return openWithClients(tableService, blobClient, names, mode, now)
 }
 
 func OpenFromConnectionString(ctx context.Context, connectionString string, names ResourceNames, now func() time.Time) (*storage.Bundle, error) {
+	return OpenFromConnectionStringWithArticleSchemaMode(ctx, connectionString, names, ArticleSchemaMigrate, now)
+}
+
+func OpenFromConnectionStringWithArticleSchemaMode(ctx context.Context, connectionString string, names ResourceNames, mode ArticleSchemaMode, now func() time.Time) (*storage.Bundle, error) {
 	if err := names.validate(); err != nil {
+		return nil, err
+	}
+	if err := mode.validate(); err != nil {
 		return nil, err
 	}
 	if connectionString == "" {
@@ -88,7 +119,7 @@ func OpenFromConnectionString(ctx context.Context, connectionString string, name
 	if err != nil {
 		return nil, errors.New("initialize Azure Blob client from connection string")
 	}
-	return openWithClients(tableService, blobClient, names, now)
+	return openWithClients(tableService, blobClient, names, mode, now)
 }
 
 // EnsureFromConnectionString provisions the development/test resources. Production
@@ -133,7 +164,7 @@ func ensureResources(ctx context.Context, tableService *aztables.ServiceClient, 
 	return nil
 }
 
-func openWithClients(tableService *aztables.ServiceClient, blobClient *azblob.Client, names ResourceNames, now func() time.Time) (*storage.Bundle, error) {
+func openWithClients(tableService *aztables.ServiceClient, blobClient *azblob.Client, names ResourceNames, mode ArticleSchemaMode, now func() time.Time) (*storage.Bundle, error) {
 	executor := defaultExecutor()
 	articlesTable := &sdkTableDriver{client: tableService.NewClient(names.ArticlesTable), executor: executor}
 	contactsTable := &sdkTableDriver{client: tableService.NewClient(names.ContactsTable), executor: executor}
@@ -142,5 +173,5 @@ func openWithClients(tableService *aztables.ServiceClient, blobClient *azblob.Cl
 	if now == nil {
 		now = time.Now
 	}
-	return &storage.Bundle{Articles: newArticleMetadataRepository(articlesTable), Bodies: newArticleBodyStore(blobs, now, defaultVersion), Contacts: newContactRepository(contactsTable, now), Sessions: newSessionRepository(sessionsTable), Readiness: &azureReadiness{tables: []tableDriver{articlesTable, contactsTable, sessionsTable}, blobs: blobs}}, nil
+	return &storage.Bundle{Articles: newArticleMetadataRepositoryWithMode(articlesTable, mode), Bodies: newArticleBodyStore(blobs, now, defaultVersion), Contacts: newContactRepository(contactsTable, now), Sessions: newSessionRepository(sessionsTable), Readiness: &azureReadiness{tables: []tableDriver{articlesTable, contactsTable, sessionsTable}, blobs: blobs}}, nil
 }

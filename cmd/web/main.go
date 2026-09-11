@@ -34,44 +34,97 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	return runConfigured(context.Background(), cfg, logger, productionAzureRuntime{}, serveHTTP)
+}
 
-	var bundle *storagebundle.Bundle
+type azureRuntime interface {
+	Ensure(context.Context, config.Config) error
+	Migrate(context.Context, config.Config) (azurestorage.ArticleMigrationResult, error)
+	Repair(context.Context, config.Config) (azurestorage.ArticleMigrationResult, error)
+	Open(context.Context, config.Config, func() time.Time) (*storagebundle.Bundle, error)
+}
+
+type productionAzureRuntime struct{}
+
+func (productionAzureRuntime) Ensure(ctx context.Context, cfg config.Config) error {
+	return azurestorage.EnsureFromConnectionString(ctx, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames())
+}
+
+func (productionAzureRuntime) Migrate(ctx context.Context, cfg config.Config) (azurestorage.ArticleMigrationResult, error) {
+	if cfg.AzureStorageConnectionString != "" {
+		return azurestorage.MigrateArticleRowsFromConnectionString(ctx, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames())
+	}
+	return azurestorage.MigrateArticleRows(ctx, cfg.AzureStorageAccountURL, azurestorage.DefaultResourceNames())
+}
+
+func (productionAzureRuntime) Repair(ctx context.Context, cfg config.Config) (azurestorage.ArticleMigrationResult, error) {
+	if cfg.AzureStorageConnectionString != "" {
+		return azurestorage.RepairArticleRowsFromConnectionString(ctx, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames())
+	}
+	return azurestorage.RepairArticleRows(ctx, cfg.AzureStorageAccountURL, azurestorage.DefaultResourceNames())
+}
+
+func (productionAzureRuntime) Open(ctx context.Context, cfg config.Config, now func() time.Time) (*storagebundle.Bundle, error) {
+	mode := azurestorage.ArticleSchemaMode(cfg.ArticleStorageSchemaMode)
+	if cfg.AzureStorageConnectionString != "" {
+		return azurestorage.OpenFromConnectionStringWithArticleSchemaMode(ctx, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames(), mode, now)
+	}
+	return azurestorage.OpenWithArticleSchemaMode(ctx, cfg.AzureStorageAccountURL, azurestorage.DefaultResourceNames(), mode, now)
+}
+
+func initializeStorage(ctx context.Context, cfg config.Config, now func() time.Time, runtime azureRuntime) (*storagebundle.Bundle, azurestorage.ArticleMigrationResult, error) {
 	switch cfg.StorageMode {
 	case "memory":
-		bundle = memorystorage.NewBundle(time.Now)
+		return memorystorage.NewBundle(now), azurestorage.ArticleMigrationResult{}, nil
 	case "azure":
-		storageContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		storageContext, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
+		if cfg.AzureStorageConnectionString != "" && cfg.Environment != "production" {
+			if err := runtime.Ensure(storageContext, cfg); err != nil {
+				return nil, azurestorage.ArticleMigrationResult{}, fmt.Errorf("provision development Azure storage: %w", err)
+			}
+		}
 		var migration azurestorage.ArticleMigrationResult
-		if cfg.AzureStorageConnectionString != "" {
-			if err = azurestorage.EnsureFromConnectionString(storageContext, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames()); err != nil {
-				return fmt.Errorf("provision development Azure storage: %w", err)
-			}
-			migration, err = azurestorage.MigrateArticleRowsFromConnectionString(storageContext, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames())
-			if err != nil {
-				return fmt.Errorf("migrate article storage schema: %w", err)
-			}
-			bundle, err = azurestorage.OpenFromConnectionString(storageContext, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames(), time.Now)
-		} else {
-			migration, err = azurestorage.MigrateArticleRows(storageContext, cfg.AzureStorageAccountURL, azurestorage.DefaultResourceNames())
-			if err != nil {
-				return fmt.Errorf("migrate article storage schema: %w", err)
-			}
-			bundle, err = azurestorage.Open(storageContext, cfg.AzureStorageAccountURL, azurestorage.DefaultResourceNames(), time.Now)
+		var err error
+		switch cfg.ArticleStorageSchemaMode {
+		case config.ArticleStorageSchemaCompat:
+		case config.ArticleStorageSchemaMigrate:
+			migration, err = runtime.Migrate(storageContext, cfg)
+		case config.ArticleStorageSchemaRepair:
+			migration, err = runtime.Repair(storageContext, cfg)
+		default:
+			return nil, migration, fmt.Errorf("initialize storage: unsupported article schema mode %q", cfg.ArticleStorageSchemaMode)
 		}
 		if err != nil {
-			return fmt.Errorf("initialize storage: %w", err)
+			return nil, migration, fmt.Errorf("prepare article storage schema: %w", err)
 		}
-		logger.Info("article storage schema ready", "migrated", migration.Migrated, "scanned", migration.Scanned)
+		bundle, err := runtime.Open(storageContext, cfg, now)
+		if err != nil {
+			return nil, migration, fmt.Errorf("initialize storage: %w", err)
+		}
+		return bundle, migration, nil
 	default:
-		return fmt.Errorf("initialize storage: unsupported mode %q", cfg.StorageMode)
+		return nil, azurestorage.ArticleMigrationResult{}, fmt.Errorf("initialize storage: unsupported mode %q", cfg.StorageMode)
+	}
+}
+
+func runConfigured(ctx context.Context, cfg config.Config, logger *slog.Logger, runtime azureRuntime, serve func(config.Config, http.Handler, *slog.Logger) error) error {
+	bundle, migration, err := initializeStorage(ctx, cfg, time.Now, runtime)
+	if err != nil {
+		return err
+	}
+	if cfg.StorageMode == "azure" && cfg.ArticleStorageSchemaMode != config.ArticleStorageSchemaCompat {
+		logger.Info("article storage schema ready", "mode", cfg.ArticleStorageSchemaMode, "migrated", migration.Migrated, "scanned", migration.Scanned)
 	}
 
 	handler, err := app.New(app.Options{Config: cfg, Assets: webassets.Files, Logger: logger, Storage: bundle})
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)
 	}
+	return serve(cfg, handler, logger)
+}
 
+func serveHTTP(cfg config.Config, handler http.Handler, logger *slog.Logger) error {
 	server := &http.Server{
 		Addr:              cfg.HTTPAddress,
 		Handler:           handler,

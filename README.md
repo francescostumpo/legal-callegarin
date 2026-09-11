@@ -69,23 +69,18 @@ Azure mode uses `AZURE_STORAGE_ACCOUNT_URL` with a canonical
 Azurite). The former `AZURE_ACCOUNT_URL` name is rejected explicitly. Storage
 connection strings and credentials must never be logged.
 
-Production startup is non-provisioning. Before the HTTP listener starts, an
-explicit, idempotent schema hook checks a durable completion marker. Without
-the marker it scans existing article rows in bounded pages, moves legacy
-direct-ID rows to reverse-time RowKeys with conditional same-partition
-transactions, verifies a complete pass, and only then creates the marker. A
-failed or interrupted migration aborts startup and is safe to rerun; completed
-startups perform one point read and no table scan. Normal reads, including
-`GET`, never migrate data.
+Production startup is non-provisioning. Azure defaults
+`ARTICLE_STORAGE_SCHEMA_MODE` to `compat`: dual-reader/current-writer serving
+with no startup migration. The approved two-stage rollout deploys one immutable
+GHCR digest to every active revision in `compat`, then switches that same
+artifact to `migrate`; migration converges legacy rows and creates/checks the
+durable marker before the HTTP listener starts. Normal post-migration startup
+uses the marker fast path and a current-only O(page) repository. `repair`
+forces an idempotent convergence scan after writers are quiesced and does not
+delete the marker. See [the article storage rollout runbook](docs/article-storage-rollout.md).
 
-The marker rollout has a deployment gate: before the marker-bearing revision
-receives traffic, every serving revision must already write reverse-time keys
-and read both legacy and current layouts. Rollback must not cross that
-dual-reader/current-writer floor. Do not run an older direct-ID writer after
-the marker exists; if that gate is violated, stop the legacy writer, remove the
-`schema:article-row-key:v1` marker under operator control, and restart the
-current revision to force a new verified scan. The deployment Bicep remains
-responsible for creating the `articles`, `contacts`, and `sessions` tables and
-the private `article-bodies` container before the application revision starts.
-The separate connection-string development path provisions those resources
-for Azurite/local tests before running the same migration hook.
+The deployment Bicep remains responsible for creating the `articles`,
+`contacts`, and `sessions` tables and the private `article-bodies` container
+before the application revision starts. The connection-string development
+path provisions those resources explicitly for Azurite/local tests. Setting
+`ARTICLE_STORAGE_SCHEMA_MODE` with memory storage is rejected.

@@ -49,7 +49,7 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 	})
 
 	clock := &integrationArticleClock{now: time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)}
-	bundle, err := OpenFromConnectionString(context.Background(), connectionString, names, clock.Now)
+	bundle, err := OpenFromConnectionStringWithArticleSchemaMode(context.Background(), connectionString, names, ArticleSchemaCompat, clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +123,10 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 	if _, err = driver.Get(context.Background(), articlesPartition, rowKey); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GET migrated legacy row or unexpected error: %v", err)
 	}
+	compatPage, err := service.List(context.Background(), articles.ListOptions{Limit: 100})
+	if err != nil || len(compatPage.Items) != 100 || compatPage.NextCursor == "" {
+		t.Fatalf("compat mixed list = %d cursor=%t, %v", len(compatPage.Items), compatPage.NextCursor != "", err)
+	}
 	interrupted := &integrationInterruptedScanDriver{tableDriver: driver, failAt: 2}
 	if _, err = migrateLegacyArticleRows(context.Background(), interrupted); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("interrupted real migration error = %v", err)
@@ -142,6 +146,11 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 	if completedStartup.getCalls != 1 || completedStartup.pageCalls != 0 || completedStartup.addCalls != 0 {
 		t.Fatalf("completed real startup calls: gets=%d pages=%d adds=%d", completedStartup.getCalls, completedStartup.pageCalls, completedStartup.addCalls)
 	}
+	bundle, err = OpenFromConnectionStringWithArticleSchemaMode(context.Background(), connectionString, names, ArticleSchemaMigrate, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service = articles.NewService(bundle.Articles, bundle.Bodies, clock, integrationArticleIDs{})
 	loaded, err = service.Get(context.Background(), legacy.ID)
 	if err != nil {
 		t.Fatalf("Get migrated legacy: %v", err)
@@ -203,6 +212,33 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 	}
 	if len(seen) != 1005 || counted.pageCalls != 11 {
 		t.Fatalf("mixed paging saw %d articles in %d raw calls, want 1005 in 11", len(seen), counted.pageCalls)
+	}
+
+	late := legacy
+	late.ID, late.Slug, late.Title = "late-after-marker", "late-after-marker", "Titolo legacy tardivo"
+	late.Status = articles.StatusDraft
+	late.PublishedBody, late.Published, late.FirstPublishedAt, late.LastPublishedAt = nil, nil, nil, nil
+	late.CreatedAt, late.UpdatedAt, late.ETag = base.Add(-time.Hour), base.Add(-time.Hour), ""
+	if _, err = driver.Add(context.Background(), legacyArticleEntity(t, late)); err != nil {
+		t.Fatal(err)
+	}
+	markerResult, err := MigrateArticleRowsFromConnectionString(context.Background(), connectionString, names)
+	if err != nil || markerResult.Scanned != 0 || markerResult.Migrated != 0 {
+		t.Fatalf("marker fast path after late write = %#v, %v", markerResult, err)
+	}
+	if _, err = service.Get(context.Background(), late.ID); !errors.Is(err, articles.ErrNotFound) {
+		t.Fatalf("current-only repository exposed late legacy row: %v", err)
+	}
+	repair, err := RepairArticleRowsFromConnectionString(context.Background(), connectionString, names)
+	if err != nil || repair.Migrated != 1 || repair.Scanned <= 1000 {
+		t.Fatalf("repair after late legacy write = %#v, %v", repair, err)
+	}
+	repairedBundle, err := OpenFromConnectionStringWithArticleSchemaMode(context.Background(), connectionString, names, ArticleSchemaRepair, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired, err := repairedBundle.Articles.Get(context.Background(), late.ID); err != nil || repaired.ID != late.ID {
+		t.Fatalf("Get repaired late row = %#v, %v", repaired, err)
 	}
 }
 

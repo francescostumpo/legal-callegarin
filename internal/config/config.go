@@ -17,10 +17,15 @@ const (
 	developmentPublicBaseURL = "http://localhost:8080"
 	developmentSessionKey    = "development-session-key-32-bytes"
 	minimumSessionKeyLength  = 32
+
+	ArticleStorageSchemaCompat  = "compat"
+	ArticleStorageSchemaMigrate = "migrate"
+	ArticleStorageSchemaRepair  = "repair"
 )
 
 type Config struct {
 	Environment, HTTPAddress, PublicBaseURL, StorageMode string
+	ArticleStorageSchemaMode                             string
 	AzureStorageAccountURL, AzureStorageConnectionString string
 	AdminUsername, AdminPasswordHash                     string
 	SessionKey                                           []byte
@@ -37,6 +42,7 @@ func Load(getenv func(string) string) (Config, error) {
 		HTTPAddress:                  getenv("HTTP_ADDRESS"),
 		PublicBaseURL:                getenv("PUBLIC_BASE_URL"),
 		StorageMode:                  getenv("STORAGE_MODE"),
+		ArticleStorageSchemaMode:     getenv("ARTICLE_STORAGE_SCHEMA_MODE"),
 		AzureStorageAccountURL:       getenv("AZURE_STORAGE_ACCOUNT_URL"),
 		AzureStorageConnectionString: getenv("AZURE_STORAGE_CONNECTION_STRING"),
 		AdminUsername:                getenv("ADMIN_USERNAME"),
@@ -89,6 +95,9 @@ func applyDefaults(cfg *Config) error {
 	default:
 		return fmt.Errorf("APP_ENV must be one of development, test, or production")
 	}
+	if cfg.StorageMode == "azure" && cfg.ArticleStorageSchemaMode == "" {
+		cfg.ArticleStorageSchemaMode = ArticleStorageSchemaCompat
+	}
 
 	return nil
 }
@@ -96,6 +105,16 @@ func applyDefaults(cfg *Config) error {
 func validate(cfg Config) error {
 	if cfg.StorageMode != "memory" && cfg.StorageMode != "azure" {
 		return errors.New("STORAGE_MODE must be memory or azure")
+	}
+	if cfg.StorageMode != "azure" && cfg.ArticleStorageSchemaMode != "" {
+		return errors.New("ARTICLE_STORAGE_SCHEMA_MODE is only allowed when STORAGE_MODE=azure")
+	}
+	if cfg.StorageMode == "azure" {
+		switch cfg.ArticleStorageSchemaMode {
+		case ArticleStorageSchemaCompat, ArticleStorageSchemaMigrate, ArticleStorageSchemaRepair:
+		default:
+			return errors.New("ARTICLE_STORAGE_SCHEMA_MODE must be compat, migrate, or repair")
+		}
 	}
 	if cfg.Environment == productionEnvironment {
 		if cfg.StorageMode == "memory" {

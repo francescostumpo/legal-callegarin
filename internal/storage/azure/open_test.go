@@ -44,6 +44,14 @@ func TestOpenConstructsProductionBundleWithoutProvisioningRequests(t *testing.T)
 	}
 }
 
+func TestOpenRejectsUnknownArticleSchemaModeBeforeCreatingClients(t *testing.T) {
+	t.Parallel()
+
+	if _, err := OpenWithArticleSchemaMode(context.Background(), "https://example.blob.core.windows.net", DefaultResourceNames(), ArticleSchemaMode("automatic"), time.Now); err == nil || !strings.Contains(err.Error(), "article schema mode") {
+		t.Fatalf("OpenWithArticleSchemaMode() error = %v", err)
+	}
+}
+
 func TestAzureDependencyOutageDoesNotPreventStartupOrLiveness(t *testing.T) {
 	bundle, err := Open(context.Background(), "https://example.blob.core.windows.net", DefaultResourceNames(), time.Now)
 	if err != nil {

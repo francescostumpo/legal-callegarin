@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const maxArticlePageCursorLength = 512
+
 type articlePageCursor struct {
 	Page      int       `json:"page"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -21,6 +23,9 @@ func encodeArticlePageCursor(cursor articlePageCursor) string {
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 func decodeArticlePageCursor(value string) (articlePageCursor, error) {
+	if len(value) > maxArticlePageCursorLength {
+		return articlePageCursor{}, errors.New("cursor is too long")
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil || base64.RawURLEncoding.EncodeToString(raw) != value {
 		return articlePageCursor{}, errors.New("invalid cursor")

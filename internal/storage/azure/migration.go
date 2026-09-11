@@ -66,6 +66,50 @@ func MigrateArticleRowsFromConnectionString(ctx context.Context, connectionStrin
 	return migrateArticleRowsWithService(ctx, service, names)
 }
 
+// RepairArticleRows performs an operator-controlled full convergence scan.
+// Writers must be quiesced before it is invoked.
+func RepairArticleRows(ctx context.Context, accountURL string, names ResourceNames) (ArticleMigrationResult, error) {
+	if err := names.validate(); err != nil {
+		return ArticleMigrationResult{}, err
+	}
+	tableURL, _, err := storageEndpoints(accountURL)
+	if err != nil {
+		return ArticleMigrationResult{}, err
+	}
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return ArticleMigrationResult{}, errors.New("initialize Azure default credential for article repair")
+	}
+	service, err := aztables.NewServiceClient(tableURL, credential, &aztables.ClientOptions{ClientOptions: azureClientOptions()})
+	if err != nil {
+		return ArticleMigrationResult{}, errors.New("initialize Azure Table client for article repair")
+	}
+	return repairArticleRowsWithService(ctx, service, names)
+}
+
+func RepairArticleRowsFromConnectionString(ctx context.Context, connectionString string, names ResourceNames) (ArticleMigrationResult, error) {
+	if err := names.validate(); err != nil {
+		return ArticleMigrationResult{}, err
+	}
+	if connectionString == "" {
+		return ArticleMigrationResult{}, errors.New("azure storage connection string is required")
+	}
+	service, err := aztables.NewServiceClientFromConnectionString(connectionString, &aztables.ClientOptions{ClientOptions: azureClientOptions()})
+	if err != nil {
+		return ArticleMigrationResult{}, errors.New("initialize Azure Table client from connection string for article repair")
+	}
+	return repairArticleRowsWithService(ctx, service, names)
+}
+
+func repairArticleRowsWithService(ctx context.Context, service *aztables.ServiceClient, names ResourceNames) (ArticleMigrationResult, error) {
+	driver := &sdkTableDriver{client: service.NewClient(names.ArticlesTable), executor: defaultExecutor()}
+	result, err := repairLegacyArticleRows(ctx, driver)
+	if err != nil {
+		return result, fmt.Errorf("repair legacy Azure article rows: %w", err)
+	}
+	return result, nil
+}
+
 func migrateArticleRowsWithService(ctx context.Context, service *aztables.ServiceClient, names ResourceNames) (ArticleMigrationResult, error) {
 	driver := &sdkTableDriver{client: service.NewClient(names.ArticlesTable), executor: defaultExecutor()}
 	result, err := migrateLegacyArticleRows(ctx, driver)
@@ -76,13 +120,23 @@ func migrateArticleRowsWithService(ctx context.Context, service *aztables.Servic
 }
 
 func migrateLegacyArticleRows(ctx context.Context, table tableDriver) (ArticleMigrationResult, error) {
+	return convergeLegacyArticleRows(ctx, table, false)
+}
+
+func repairLegacyArticleRows(ctx context.Context, table tableDriver) (ArticleMigrationResult, error) {
+	return convergeLegacyArticleRows(ctx, table, true)
+}
+
+func convergeLegacyArticleRows(ctx context.Context, table tableDriver, forceScan bool) (ArticleMigrationResult, error) {
 	result := ArticleMigrationResult{}
-	complete, err := articleMigrationIsComplete(ctx, table)
-	if err != nil {
-		return result, err
-	}
-	if complete {
-		return result, nil
+	if !forceScan {
+		complete, err := articleMigrationIsComplete(ctx, table)
+		if err != nil {
+			return result, err
+		}
+		if complete {
+			return result, nil
+		}
 	}
 	for {
 		migratedThisPass := 0
