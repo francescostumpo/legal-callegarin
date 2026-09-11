@@ -2,6 +2,8 @@ package contracttest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -56,8 +58,9 @@ func SessionRepository(t *testing.T, factory func() auth.SessionRepository) {
 }
 
 func sessionFixture(tokenHash string, created time.Time) auth.Session {
+	digest := sha256.Sum256([]byte(tokenHash))
 	return auth.Session{
-		TokenHash:         tokenHash,
+		TokenHash:         hex.EncodeToString(digest[:]),
 		Username:          "admin",
 		CredentialVersion: "credential-v1",
 		CreatedAt:         created,

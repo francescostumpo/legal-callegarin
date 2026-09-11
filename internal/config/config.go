@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 )
 
 const (
@@ -18,10 +20,11 @@ const (
 )
 
 type Config struct {
-	Environment, HTTPAddress, PublicBaseURL, StorageMode, AzureAccountURL string
-	AdminUsername, AdminPasswordHash                                      string
-	SessionKey                                                            []byte
-	TrustedProxy                                                          bool
+	Environment, HTTPAddress, PublicBaseURL, StorageMode string
+	AzureStorageAccountURL, AzureStorageConnectionString string
+	AdminUsername, AdminPasswordHash                     string
+	SessionKey                                           []byte
+	TrustedProxy                                         bool
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -30,13 +33,17 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	cfg := Config{
-		Environment:       getenv("APP_ENV"),
-		HTTPAddress:       getenv("HTTP_ADDRESS"),
-		PublicBaseURL:     getenv("PUBLIC_BASE_URL"),
-		StorageMode:       getenv("STORAGE_MODE"),
-		AzureAccountURL:   getenv("AZURE_ACCOUNT_URL"),
-		AdminUsername:     getenv("ADMIN_USERNAME"),
-		AdminPasswordHash: getenv("ADMIN_PASSWORD_HASH"),
+		Environment:                  getenv("APP_ENV"),
+		HTTPAddress:                  getenv("HTTP_ADDRESS"),
+		PublicBaseURL:                getenv("PUBLIC_BASE_URL"),
+		StorageMode:                  getenv("STORAGE_MODE"),
+		AzureStorageAccountURL:       getenv("AZURE_STORAGE_ACCOUNT_URL"),
+		AzureStorageConnectionString: getenv("AZURE_STORAGE_CONNECTION_STRING"),
+		AdminUsername:                getenv("ADMIN_USERNAME"),
+		AdminPasswordHash:            getenv("ADMIN_PASSWORD_HASH"),
+	}
+	if getenv("AZURE_ACCOUNT_URL") != "" {
+		return Config{}, errors.New("AZURE_ACCOUNT_URL has been renamed to AZURE_STORAGE_ACCOUNT_URL")
 	}
 
 	if err := applyDefaults(&cfg); err != nil {
@@ -104,11 +111,35 @@ func validate(cfg Config) error {
 			return errors.New("ADMIN_PASSWORD_HASH is required in production")
 		}
 	}
-	if cfg.StorageMode == "azure" && cfg.AzureAccountURL == "" {
-		return errors.New("AZURE_ACCOUNT_URL is required when STORAGE_MODE=azure")
+	if cfg.StorageMode == "azure" {
+		if cfg.Environment == productionEnvironment && cfg.AzureStorageConnectionString != "" {
+			return errors.New("AZURE_STORAGE_CONNECTION_STRING is not allowed in production")
+		}
+		if cfg.AzureStorageAccountURL != "" && cfg.AzureStorageConnectionString != "" {
+			return errors.New("set only one of AZURE_STORAGE_ACCOUNT_URL or AZURE_STORAGE_CONNECTION_STRING")
+		}
+		if cfg.AzureStorageAccountURL == "" && cfg.AzureStorageConnectionString == "" {
+			return errors.New("AZURE_STORAGE_ACCOUNT_URL is required when STORAGE_MODE=azure without a development connection string")
+		}
+		if cfg.AzureStorageAccountURL != "" && !canonicalAzureStorageAccountURL(cfg.AzureStorageAccountURL) {
+			return errors.New("AZURE_STORAGE_ACCOUNT_URL must be a canonical HTTPS blob service origin")
+		}
 	}
 
 	return nil
+}
+
+func canonicalAzureStorageAccountURL(raw string) bool {
+	if raw == "" || strings.TrimSpace(raw) != raw {
+		return false
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Port() != "" || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return false
+	}
+	const suffix = ".blob.core.windows.net"
+	account := strings.TrimSuffix(parsed.Hostname(), suffix)
+	return account != parsed.Hostname() && account != "" && !strings.Contains(account, ".")
 }
 
 func loadSessionKey(environment, encoded string) ([]byte, error) {

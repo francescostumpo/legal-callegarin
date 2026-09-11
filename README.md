@@ -46,7 +46,8 @@ APP_ENV=development go run ./cmd/web
 ```
 
 The server listens on `:8080` by default. `GET /health/live` reports process
-liveness; other routes remain uninitialized in this foundation task.
+liveness and `GET /health/ready` checks the configured storage dependencies
+with a short deadline.
 
 `APP_ENV` must be `development`, `test`, or `production`. Test configuration
 must provide `SESSION_KEY_BASE64`. Production additionally requires
@@ -56,3 +57,9 @@ bytes. No literal session-key fallback is accepted outside development.
 `TRUSTED_PROXY` defaults to `false` and accepts only the exact values `true` or
 `false`; enable it only when every direct request reaches the application
 through a trusted reverse proxy that replaces forwarding headers.
+
+Azure mode uses `AZURE_STORAGE_ACCOUNT_URL` with a canonical
+`https://<account>.blob.core.windows.net` origin and `DefaultAzureCredential`.
+`AZURE_STORAGE_CONNECTION_STRING` is limited to development/test (for example,
+Azurite). The former `AZURE_ACCOUNT_URL` name is rejected explicitly. Storage
+connection strings and credentials must never be logged.

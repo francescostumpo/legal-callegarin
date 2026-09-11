@@ -13,6 +13,9 @@ import (
 
 	"github.com/francescostumpo/legal-callegarin/internal/app"
 	"github.com/francescostumpo/legal-callegarin/internal/config"
+	storagebundle "github.com/francescostumpo/legal-callegarin/internal/storage"
+	azurestorage "github.com/francescostumpo/legal-callegarin/internal/storage/azure"
+	memorystorage "github.com/francescostumpo/legal-callegarin/internal/storage/memory"
 	"github.com/francescostumpo/legal-callegarin/internal/webassets"
 )
 
@@ -32,7 +35,26 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	handler, err := app.New(app.Options{Config: cfg, Assets: webassets.Files, Logger: logger})
+	var bundle *storagebundle.Bundle
+	switch cfg.StorageMode {
+	case "memory":
+		bundle = memorystorage.NewBundle(time.Now)
+	case "azure":
+		storageContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if cfg.AzureStorageConnectionString != "" {
+			bundle, err = azurestorage.OpenFromConnectionString(storageContext, cfg.AzureStorageConnectionString, azurestorage.DefaultResourceNames(), time.Now)
+		} else {
+			bundle, err = azurestorage.Open(storageContext, cfg.AzureStorageAccountURL, azurestorage.DefaultResourceNames(), time.Now)
+		}
+		if err != nil {
+			return fmt.Errorf("initialize storage: %w", err)
+		}
+	default:
+		return fmt.Errorf("initialize storage: unsupported mode %q", cfg.StorageMode)
+	}
+
+	handler, err := app.New(app.Options{Config: cfg, Assets: webassets.Files, Logger: logger, Storage: bundle})
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)
 	}

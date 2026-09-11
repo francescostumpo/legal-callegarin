@@ -61,13 +61,13 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 
 	validSessionKey := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
 	validProduction := map[string]string{
-		"APP_ENV":             "production",
-		"PUBLIC_BASE_URL":     "https://example.test",
-		"STORAGE_MODE":        "azure",
-		"AZURE_ACCOUNT_URL":   "https://example.table.core.windows.net",
-		"ADMIN_USERNAME":      "admin",
-		"ADMIN_PASSWORD_HASH": "$argon2id$fixture",
-		"SESSION_KEY_BASE64":  validSessionKey,
+		"APP_ENV":                   "production",
+		"PUBLIC_BASE_URL":           "https://example.test",
+		"STORAGE_MODE":              "azure",
+		"AZURE_STORAGE_ACCOUNT_URL": "https://example.blob.core.windows.net",
+		"ADMIN_USERNAME":            "admin",
+		"ADMIN_PASSWORD_HASH":       "$argon2id$fixture",
+		"SESSION_KEY_BASE64":        validSessionKey,
 	}
 
 	tests := []struct {
@@ -97,8 +97,23 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		},
 		{
 			name:      "missing Azure account URL",
-			env:       withOverride(validProduction, "AZURE_ACCOUNT_URL", ""),
-			wantError: "AZURE_ACCOUNT_URL",
+			env:       withOverride(validProduction, "AZURE_STORAGE_ACCOUNT_URL", ""),
+			wantError: "AZURE_STORAGE_ACCOUNT_URL",
+		},
+		{
+			name:      "legacy Azure account URL is rejected",
+			env:       withOverride(validProduction, "AZURE_ACCOUNT_URL", "https://legacy.table.core.windows.net"),
+			wantError: "AZURE_ACCOUNT_URL has been renamed",
+		},
+		{
+			name:      "non canonical Azure account URL",
+			env:       withOverride(validProduction, "AZURE_STORAGE_ACCOUNT_URL", "https://example.table.core.windows.net/path"),
+			wantError: "AZURE_STORAGE_ACCOUNT_URL",
+		},
+		{
+			name:      "production connection string",
+			env:       withOverride(validProduction, "AZURE_STORAGE_CONNECTION_STRING", "secret-production-connection-string"),
+			wantError: "AZURE_STORAGE_CONNECTION_STRING is not allowed in production",
 		},
 		{
 			name:      "missing admin username",
@@ -147,6 +162,32 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsAzureConnectionStringOnlyOutsideProduction(t *testing.T) {
+	t.Parallel()
+
+	secret := "UseDevelopmentStorage=true"
+	encodedKey := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	for _, environment := range []string{"development", "test"} {
+		t.Run(environment, func(t *testing.T) {
+			env := map[string]string{
+				"APP_ENV":                         environment,
+				"STORAGE_MODE":                    "azure",
+				"AZURE_STORAGE_CONNECTION_STRING": secret,
+			}
+			if environment == "test" {
+				env["SESSION_KEY_BASE64"] = encodedKey
+			}
+			got, err := Load(mapGetenv(env))
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got.AzureStorageConnectionString != secret || got.AzureStorageAccountURL != "" {
+				t.Fatalf("Azure configuration = URL %q, connection string present %t", got.AzureStorageAccountURL, got.AzureStorageConnectionString != "")
+			}
+		})
+	}
+}
+
 func mapGetenv(values map[string]string) func(string) string {
 	return func(key string) string { return values[key] }
 }
@@ -167,7 +208,8 @@ func assertConfig(t *testing.T, got, want Config) {
 		got.HTTPAddress != want.HTTPAddress ||
 		got.PublicBaseURL != want.PublicBaseURL ||
 		got.StorageMode != want.StorageMode ||
-		got.AzureAccountURL != want.AzureAccountURL ||
+		got.AzureStorageAccountURL != want.AzureStorageAccountURL ||
+		got.AzureStorageConnectionString != want.AzureStorageConnectionString ||
 		got.AdminUsername != want.AdminUsername ||
 		got.AdminPasswordHash != want.AdminPasswordHash ||
 		got.TrustedProxy != want.TrustedProxy ||

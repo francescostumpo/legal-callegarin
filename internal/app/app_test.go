@@ -16,10 +16,60 @@ import (
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
 	"github.com/francescostumpo/legal-callegarin/internal/config"
 	"github.com/francescostumpo/legal-callegarin/internal/contacts"
+	storagebundle "github.com/francescostumpo/legal-callegarin/internal/storage"
 	"github.com/francescostumpo/legal-callegarin/internal/storage/memory"
 	publicweb "github.com/francescostumpo/legal-callegarin/internal/web/public"
 	"github.com/francescostumpo/legal-callegarin/internal/webassets"
 )
+
+type readinessProbe struct {
+	err         error
+	hasDeadline bool
+}
+
+func (probe *readinessProbe) Ready(ctx context.Context) error {
+	_, probe.hasDeadline = ctx.Deadline()
+	return probe.err
+}
+
+func TestHealthReadinessIsDependencyAwareAndLivenessIsProcessOnly(t *testing.T) {
+	t.Parallel()
+	probe := &readinessProbe{err: errors.New("dependency unavailable")}
+	handler, err := New(Options{
+		Config:  config.Config{PublicBaseURL: "https://studio.example.test"},
+		Assets:  webassets.Files,
+		Storage: &storagebundle.Bundle{Readiness: probe},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ready := httptest.NewRecorder()
+	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if ready.Code != http.StatusServiceUnavailable || !probe.hasDeadline {
+		t.Fatalf("readiness = status %d, deadline %t", ready.Code, probe.hasDeadline)
+	}
+	live := httptest.NewRecorder()
+	handler.ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+	if live.Code != http.StatusOK {
+		t.Fatalf("liveness status = %d", live.Code)
+	}
+	probe.err = nil
+	ready = httptest.NewRecorder()
+	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if ready.Code != http.StatusOK {
+		t.Fatalf("healthy readiness status = %d", ready.Code)
+	}
+}
+
+func TestNewRejectsAzureModeWithoutCoherentStorageBundle(t *testing.T) {
+	t.Parallel()
+	for _, bundle := range []*storagebundle.Bundle{nil, {Readiness: &readinessProbe{}}} {
+		_, err := New(Options{Config: config.Config{StorageMode: "azure", PublicBaseURL: "https://studio.example.test"}, Assets: webassets.Files, Storage: bundle})
+		if err == nil {
+			t.Fatalf("New(Storage: %#v) error = nil, want Azure storage bundle error", bundle)
+		}
+	}
+}
 
 func TestHandler(t *testing.T) {
 	t.Parallel()

@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,7 +34,7 @@ type SessionRepository interface {
 }
 
 func (session Session) Validate() error {
-	if strings.TrimSpace(session.TokenHash) == "" || strings.TrimSpace(session.Username) == "" || strings.TrimSpace(session.CredentialVersion) == "" {
+	if !validSessionTokenHash(session.TokenHash) || strings.TrimSpace(session.Username) == "" || strings.TrimSpace(session.CredentialVersion) == "" {
 		return fmt.Errorf("%w: token hash, username, and credential version are required", ErrValidation)
 	}
 	if session.CreatedAt.IsZero() || !session.ExpiresAt.Equal(session.CreatedAt.Add(8*time.Hour)) {
@@ -42,4 +44,12 @@ func (session Session) Validate() error {
 		return fmt.Errorf("%w: revocation cannot precede creation", ErrValidation)
 	}
 	return nil
+}
+
+func validSessionTokenHash(value string) bool {
+	if len(value) != sha256.Size*2 || value != strings.ToLower(value) {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size
 }
