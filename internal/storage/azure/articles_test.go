@@ -249,6 +249,9 @@ func TestLegacyArticleMigrationIsIdempotentAndResumesAfterInterruption(t *testin
 	if _, err := migrateLegacyArticleRows(context.Background(), interrupted); err == nil {
 		t.Fatal("migration succeeded despite injected interruption")
 	}
+	if _, err := driver.Get(context.Background(), articlesPartition, articleMigrationMarkerRowKey); err != ErrNotFound {
+		t.Fatalf("failed migration persisted completion marker: %v", err)
+	}
 	result, err := migrateLegacyArticleRows(context.Background(), driver)
 	if err != nil || result.Migrated != 2 {
 		t.Fatalf("resumed migration = %#v, %v", result, err)
@@ -262,6 +265,57 @@ func TestLegacyArticleMigrationIsIdempotentAndResumesAfterInterruption(t *testin
 		if _, err = driver.Get(context.Background(), articlesPartition, id); err != ErrNotFound {
 			t.Fatalf("legacy row %q remains: %v", id, err)
 		}
+	}
+}
+
+func TestCompletedArticleMigrationUsesOneMarkerReadAndScansNothing(t *testing.T) {
+	driver := newMemoryTableDriver()
+	base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	for index := range 205 {
+		article := outcomeArticle(fmt.Sprintf("cold-start-%03d", index), fmt.Sprintf("cold-start-%03d", index))
+		article.CreatedAt = base.Add(time.Duration(index) * time.Minute)
+		article.UpdatedAt, article.DraftBody.SavedAt = article.CreatedAt, article.CreatedAt
+		encoded := legacyArticleEntity(t, article)
+		if index%2 != 0 {
+			var err error
+			encoded, err = marshalArticleEntity(article)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := driver.Add(context.Background(), encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := &migrationCountingDriver{tableDriver: driver}
+	result, err := migrateLegacyArticleRows(context.Background(), first)
+	if err != nil || result.Migrated != 103 || result.Scanned == 0 || first.listPages < 3 || first.adds != 1 {
+		t.Fatalf("initial migration = %#v calls=%#v, %v", result, first, err)
+	}
+	second := &migrationCountingDriver{tableDriver: driver}
+	result, err = migrateLegacyArticleRows(context.Background(), second)
+	if err != nil || result.Migrated != 0 || result.Scanned != 0 {
+		t.Fatalf("completed migration = %#v, %v", result, err)
+	}
+	if second.gets != 1 || second.listPages != 0 || second.adds != 0 {
+		t.Fatalf("completed startup calls: gets=%d pages=%d adds=%d", second.gets, second.listPages, second.adds)
+	}
+}
+
+func TestArticleMigrationReconcilesUnknownMarkerCommit(t *testing.T) {
+	driver := newMemoryTableDriver()
+	article := outcomeArticle("marker-unknown", "marker-unknown")
+	if _, err := driver.Add(context.Background(), legacyArticleEntity(t, article)); err != nil {
+		t.Fatal(err)
+	}
+	unknown := &unknownMarkerAddDriver{memoryTableDriver: driver}
+	result, err := migrateLegacyArticleRows(context.Background(), unknown)
+	if err != nil || result.Migrated != 1 || !unknown.failedAfterMarkerAdd {
+		t.Fatalf("marker reconciliation = %#v driver=%#v, %v", result, unknown, err)
+	}
+	result, err = migrateLegacyArticleRows(context.Background(), driver)
+	if err != nil || result.Scanned != 0 || result.Migrated != 0 {
+		t.Fatalf("marker fast path = %#v, %v", result, err)
 	}
 }
 
@@ -280,22 +334,23 @@ func TestLegacyArticleMigrationReconcilesCommitUnknownAndDuplicateRows(t *testin
 		t.Fatalf("legacy row remains after reconciled commit: %v", err)
 	}
 
+	duplicateDriver := newMemoryTableDriver()
 	duplicate := outcomeArticle("legacy-duplicate", "legacy-duplicate")
-	if _, err = driver.Add(context.Background(), legacyArticleEntity(t, duplicate)); err != nil {
+	if _, err = duplicateDriver.Add(context.Background(), legacyArticleEntity(t, duplicate)); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := marshalArticleEntity(duplicate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = driver.Add(context.Background(), encoded); err != nil {
+	if _, err = duplicateDriver.Add(context.Background(), encoded); err != nil {
 		t.Fatal(err)
 	}
-	result, err = migrateLegacyArticleRows(context.Background(), driver)
+	result, err = migrateLegacyArticleRows(context.Background(), duplicateDriver)
 	if err != nil || result.Migrated != 1 {
 		t.Fatalf("duplicate reconciliation = %#v, %v", result, err)
 	}
-	if _, err = driver.Get(context.Background(), articlesPartition, duplicate.ID); err != ErrNotFound {
+	if _, err = duplicateDriver.Get(context.Background(), articlesPartition, duplicate.ID); err != ErrNotFound {
 		t.Fatalf("duplicate legacy row remains: %v", err)
 	}
 }
@@ -337,6 +392,46 @@ type interruptingMigrationDriver struct {
 	transactions int
 	failBeforeAt int
 	failAfterAt  int
+}
+
+type migrationCountingDriver struct {
+	tableDriver
+	gets      int
+	adds      int
+	listPages int
+}
+
+func (driver *migrationCountingDriver) Get(ctx context.Context, partition, row string) (tableEntity, error) {
+	driver.gets++
+	return driver.tableDriver.Get(ctx, partition, row)
+}
+
+func (driver *migrationCountingDriver) Add(ctx context.Context, entity []byte) (string, error) {
+	driver.adds++
+	return driver.tableDriver.Add(ctx, entity)
+}
+
+func (driver *migrationCountingDriver) ListPage(ctx context.Context, filter string, top int32, continuation *tableContinuation) ([]tableEntity, *tableContinuation, error) {
+	driver.listPages++
+	return driver.tableDriver.ListPage(ctx, filter, top, continuation)
+}
+
+type unknownMarkerAddDriver struct {
+	*memoryTableDriver
+	failedAfterMarkerAdd bool
+}
+
+func (driver *unknownMarkerAddDriver) Add(ctx context.Context, entity []byte) (string, error) {
+	_, row, err := entityKey(entity)
+	if err != nil {
+		return "", err
+	}
+	etag, err := driver.memoryTableDriver.Add(ctx, entity)
+	if err == nil && row == articleMigrationMarkerRowKey && !driver.failedAfterMarkerAdd {
+		driver.failedAfterMarkerAdd = true
+		return "", context.DeadlineExceeded
+	}
+	return etag, err
 }
 
 func (driver *interruptingMigrationDriver) Transaction(ctx context.Context, actions []tableAction) error {

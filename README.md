@@ -70,12 +70,22 @@ Azurite). The former `AZURE_ACCOUNT_URL` name is rejected explicitly. Storage
 connection strings and credentials must never be logged.
 
 Production startup is non-provisioning. Before the HTTP listener starts, an
-explicit, idempotent schema hook scans the existing article rows in bounded
-pages and moves legacy direct-ID rows to reverse-time RowKeys with conditional
-same-partition transactions. A failed or interrupted migration aborts startup
-and is safe to rerun; normal reads, including `GET`, never migrate data. The
-deployment Bicep remains responsible for creating the `articles`, `contacts`,
-and `sessions` tables and the private `article-bodies` container before the
-application revision starts. The separate connection-string development path
-provisions those resources for Azurite/local tests before running the same
-migration hook.
+explicit, idempotent schema hook checks a durable completion marker. Without
+the marker it scans existing article rows in bounded pages, moves legacy
+direct-ID rows to reverse-time RowKeys with conditional same-partition
+transactions, verifies a complete pass, and only then creates the marker. A
+failed or interrupted migration aborts startup and is safe to rerun; completed
+startups perform one point read and no table scan. Normal reads, including
+`GET`, never migrate data.
+
+The marker rollout has a deployment gate: before the marker-bearing revision
+receives traffic, every serving revision must already write reverse-time keys
+and read both legacy and current layouts. Rollback must not cross that
+dual-reader/current-writer floor. Do not run an older direct-ID writer after
+the marker exists; if that gate is violated, stop the legacy writer, remove the
+`schema:article-row-key:v1` marker under operator control, and restart the
+current revision to force a new verified scan. The deployment Bicep remains
+responsible for creating the `articles`, `contacts`, and `sessions` tables and
+the private `article-bodies` container before the application revision starts.
+The separate connection-string development path provisions those resources
+for Azurite/local tests before running the same migration hook.

@@ -1089,6 +1089,7 @@ describe("article console", () => {
             : "Testo ammesso codice vietato",
       },
     })
+    expect(editor).toHaveTextContent("Testo ammesso")
     expect(screen.getByText("Modifiche non salvate")).toBeInTheDocument()
     await userEvent.click(screen.getByRole("button", { name: "Crea bozza" }))
     await waitFor(() =>
@@ -1106,6 +1107,7 @@ describe("article console", () => {
     expect(String(create?.[1]?.body)).not.toContain('"html"')
     const submitted = JSON.parse(String(create?.[1]?.body))
     const submittedTypes = JSON.stringify(submitted.body.document)
+    expect(submittedTypes).toContain("Testo ammesso")
     expect(submittedTypes).not.toContain('"type":"image"')
     expect(submittedTypes).not.toContain('"type":"code"')
     expect(submittedTypes).not.toContain('"type":"codeBlock"')
@@ -1366,7 +1368,7 @@ describe("article console", () => {
                     content: [
                       {
                         type: "paragraph",
-                        content: [{ type: "text", text: "Corpo locale" }],
+                        content: [{ type: "text", text: "Corpo server" }],
                       },
                     ],
                   },
@@ -1397,12 +1399,23 @@ describe("article console", () => {
       await screen.findByDisplayValue("Titolo articolo")
       await user.clear(screen.getByLabelText("Titolo"))
       await user.type(screen.getByLabelText("Titolo"), "Titolo locale")
+      const bodyEditor = document.querySelector(".ProseMirror")
+      if (!(bodyEditor instanceof HTMLElement))
+        throw new Error("missing article body editor")
+      fireEvent.paste(bodyEditor, {
+        clipboardData: {
+          types: ["text/plain"],
+          getData: (type: string) =>
+            type === "text/plain" ? "Corpo modificato localmente" : "",
+        },
+      })
+      expect(bodyEditor).toHaveTextContent("Corpo modificato localmente")
       await user.click(screen.getByRole("button", { name: "Salva bozza" }))
       expect(await screen.findByRole("status")).toHaveTextContent(
         failure.message,
       )
       expect(screen.getByDisplayValue("Titolo locale")).toBeInTheDocument()
-      expect(screen.getByText("Corpo locale")).toBeInTheDocument()
+      expect(bodyEditor).toHaveTextContent("Corpo modificato localmente")
       expect(screen.getByText("Modifiche non salvate")).toBeInTheDocument()
 
       const save = screen.getByRole("button", { name: "Salva bozza" })
@@ -1429,9 +1442,16 @@ describe("article console", () => {
       expect(new Headers(saveCalls[0]?.[1]?.headers).get("If-Match")).toBe(
         '"etag-1"',
       )
+      expect(String(saveCalls[0]?.[1]?.body)).toContain(
+        "Corpo modificato localmente",
+      )
       if (!failure.locks)
         expect(new Headers(saveCalls[1]?.[1]?.headers).get("If-Match")).toBe(
           '"etag-1"',
+        )
+      if (!failure.locks)
+        expect(String(saveCalls[1]?.[1]?.body)).toContain(
+          "Corpo modificato localmente",
         )
     })
   }

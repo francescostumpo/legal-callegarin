@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -9,6 +10,17 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/data/aztables"
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
 )
+
+const (
+	articleMigrationMarkerEntityType = "schemaMigration"
+	articleMigrationMarkerRowKey     = "schema:article-row-key:v1"
+	articleMigrationName             = "articles-reverse-time-v1"
+)
+
+type articleMigrationMarker struct {
+	entityHeader
+	Migration string `json:"migration"`
+}
 
 // ArticleMigrationResult reports the bounded, explicit legacy-row migration.
 // A zero Migrated count means the article table already uses current keys.
@@ -65,6 +77,13 @@ func migrateArticleRowsWithService(ctx context.Context, service *aztables.Servic
 
 func migrateLegacyArticleRows(ctx context.Context, table tableDriver) (ArticleMigrationResult, error) {
 	result := ArticleMigrationResult{}
+	complete, err := articleMigrationIsComplete(ctx, table)
+	if err != nil {
+		return result, err
+	}
+	if complete {
+		return result, nil
+	}
 	for {
 		migratedThisPass := 0
 		var continuation *tableContinuation
@@ -111,9 +130,60 @@ func migrateLegacyArticleRows(ctx context.Context, table tableDriver) (ArticleMi
 			continuation = next
 		}
 		if migratedThisPass == 0 {
+			if err := persistArticleMigrationMarker(ctx, table); err != nil {
+				return result, err
+			}
 			return result, nil
 		}
 	}
+}
+
+func articleMigrationIsComplete(ctx context.Context, table tableDriver) (bool, error) {
+	entity, err := table.Get(ctx, articlesPartition, articleMigrationMarkerRowKey)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var marker articleMigrationMarker
+	if err := json.Unmarshal(entity.Value, &marker); err != nil {
+		return false, fmt.Errorf("decode article migration marker: %w", err)
+	}
+	if marker.PartitionKey != articlesPartition || marker.RowKey != articleMigrationMarkerRowKey ||
+		marker.EntityType != articleMigrationMarkerEntityType || marker.SchemaVersion != storageSchemaVersion ||
+		marker.Migration != articleMigrationName {
+		return false, errors.New("invalid article migration marker")
+	}
+	return true, nil
+}
+
+func persistArticleMigrationMarker(ctx context.Context, table tableDriver) error {
+	encoded, err := json.Marshal(articleMigrationMarker{
+		entityHeader: entityHeader{
+			PartitionKey:  articlesPartition,
+			RowKey:        articleMigrationMarkerRowKey,
+			EntityType:    articleMigrationMarkerEntityType,
+			SchemaVersion: storageSchemaVersion,
+		},
+		Migration: articleMigrationName,
+	})
+	if err != nil {
+		return fmt.Errorf("encode article migration marker: %w", err)
+	}
+	if _, err = table.Add(ctx, encoded); err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrConflict) || mutationOutcomeMayBeUnknown(err) {
+		complete, reconcileErr := articleMigrationIsComplete(ctx, table)
+		if reconcileErr == nil && complete {
+			return nil
+		}
+		if reconcileErr != nil {
+			return fmt.Errorf("reconcile article migration marker after %v: %w", err, reconcileErr)
+		}
+	}
+	return fmt.Errorf("persist article migration marker: %w", err)
 }
 
 func migrateLegacyArticleRow(ctx context.Context, table tableDriver, article articles.Article, legacyETag, legacyRowKey, targetRowKey string) error {

@@ -74,6 +74,46 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 	if _, err = driver.Add(context.Background(), legacySlug); err != nil {
 		t.Fatal(err)
 	}
+	base := clock.now.Add(time.Hour)
+	actions := make([]tableAction, 0, maxTransactionOperations)
+	legacyRows := 1
+	flush := func() {
+		t.Helper()
+		if len(actions) == 0 {
+			return
+		}
+		if err := submitTransaction(context.Background(), driver, actions); err != nil {
+			t.Fatalf("seed article transaction: %v", err)
+		}
+		actions = actions[:0]
+	}
+	for index := range 1004 {
+		item := legacy
+		item.ID = fmt.Sprintf("mixed-live-%04d", index)
+		item.Slug = item.ID
+		item.Title = fmt.Sprintf("Titolo misto %04d", index)
+		item.Status = articles.StatusDraft
+		item.PublishedBody, item.Published, item.FirstPublishedAt, item.LastPublishedAt = nil, nil, nil, nil
+		item.CreatedAt = base.Add(time.Duration(index) * time.Minute)
+		item.UpdatedAt = item.CreatedAt
+		item.ETag = ""
+		var encoded []byte
+		if index%200 == 0 {
+			encoded = legacyArticleEntity(t, item)
+			legacyRows++
+		} else if encoded, err = marshalArticleEntity(item); err != nil {
+			t.Fatal(err)
+		}
+		_, seededRowKey, keyErr := entityKey(encoded)
+		if keyErr != nil {
+			t.Fatal(keyErr)
+		}
+		actions = append(actions, tableAction{Kind: tableAdd, PartitionKey: articlesPartition, RowKey: seededRowKey, Entity: encoded})
+		if len(actions) == maxTransactionOperations {
+			flush()
+		}
+	}
+	flush()
 	service := articles.NewService(bundle.Articles, bundle.Bodies, clock, integrationArticleIDs{})
 	loaded, err := service.Get(context.Background(), legacy.ID)
 	if err != nil || loaded.ETag != storedETag {
@@ -83,9 +123,24 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 	if _, err = driver.Get(context.Background(), articlesPartition, rowKey); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GET migrated legacy row or unexpected error: %v", err)
 	}
+	interrupted := &integrationInterruptedScanDriver{tableDriver: driver, failAt: 2}
+	if _, err = migrateLegacyArticleRows(context.Background(), interrupted); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("interrupted real migration error = %v", err)
+	}
+	if _, err = driver.Get(context.Background(), articlesPartition, articleMigrationMarkerRowKey); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("interrupted real migration persisted marker: %v", err)
+	}
 	migration, err := MigrateArticleRowsFromConnectionString(context.Background(), connectionString, names)
-	if err != nil || migration.Migrated != 1 {
+	if err != nil || migration.Migrated != legacyRows || migration.Scanned <= 1000 {
 		t.Fatalf("initial legacy migration = %#v, %v", migration, err)
+	}
+	completedStartup := &integrationCountingTableDriver{tableDriver: driver}
+	startupResult, err := migrateLegacyArticleRows(context.Background(), completedStartup)
+	if err != nil || startupResult.Migrated != 0 || startupResult.Scanned != 0 {
+		t.Fatalf("completed real migration = %#v, %v", startupResult, err)
+	}
+	if completedStartup.getCalls != 1 || completedStartup.pageCalls != 0 || completedStartup.addCalls != 0 {
+		t.Fatalf("completed real startup calls: gets=%d pages=%d adds=%d", completedStartup.getCalls, completedStartup.pageCalls, completedStartup.addCalls)
 	}
 	loaded, err = service.Get(context.Background(), legacy.ID)
 	if err != nil {
@@ -124,50 +179,6 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 		t.Fatalf("migrated lifecycle row missing: %v", err)
 	}
 
-	base := clock.now.Add(time.Hour)
-	actions := make([]tableAction, 0, maxTransactionOperations)
-	legacyRows := 0
-	flush := func() {
-		t.Helper()
-		if len(actions) == 0 {
-			return
-		}
-		if err := submitTransaction(context.Background(), driver, actions); err != nil {
-			t.Fatalf("seed article transaction: %v", err)
-		}
-		actions = actions[:0]
-	}
-	for index := range 1004 {
-		item := legacy
-		item.ID = fmt.Sprintf("mixed-live-%04d", index)
-		item.Slug = item.ID
-		item.Title = fmt.Sprintf("Titolo misto %04d", index)
-		item.Status = articles.StatusDraft
-		item.PublishedBody, item.Published, item.FirstPublishedAt, item.LastPublishedAt = nil, nil, nil, nil
-		item.CreatedAt = base.Add(time.Duration(index) * time.Minute)
-		item.UpdatedAt = item.CreatedAt
-		item.ETag = ""
-		var encoded []byte
-		if index%200 == 0 {
-			encoded = legacyArticleEntity(t, item)
-			legacyRows++
-		} else if encoded, err = marshalArticleEntity(item); err != nil {
-			t.Fatal(err)
-		}
-		_, seededRowKey, keyErr := entityKey(encoded)
-		if keyErr != nil {
-			t.Fatal(keyErr)
-		}
-		actions = append(actions, tableAction{Kind: tableAdd, PartitionKey: articlesPartition, RowKey: seededRowKey, Entity: encoded})
-		if len(actions) == maxTransactionOperations {
-			flush()
-		}
-	}
-	flush()
-	migration, err = MigrateArticleRowsFromConnectionString(context.Background(), connectionString, names)
-	if err != nil || migration.Migrated != legacyRows {
-		t.Fatalf("mixed migration = %#v, want %d: %v", migration, legacyRows, err)
-	}
 	counted := &integrationCountingTableDriver{tableDriver: driver}
 	repository := newArticleMetadataRepository(counted)
 	cursor := ""
@@ -193,19 +204,41 @@ func TestAzuriteLegacyArticleLifecycleAndMixedPaging(t *testing.T) {
 	if len(seen) != 1005 || counted.pageCalls != 11 {
 		t.Fatalf("mixed paging saw %d articles in %d raw calls, want 1005 in 11", len(seen), counted.pageCalls)
 	}
-	migration, err = MigrateArticleRowsFromConnectionString(context.Background(), connectionString, names)
-	if err != nil || migration.Migrated != 0 {
-		t.Fatalf("idempotent real migration = %#v, %v", migration, err)
-	}
 }
 
 type integrationCountingTableDriver struct {
 	tableDriver
 	pageCalls int
+	getCalls  int
+	addCalls  int
+}
+
+func (driver *integrationCountingTableDriver) Get(ctx context.Context, partition, row string) (tableEntity, error) {
+	driver.getCalls++
+	return driver.tableDriver.Get(ctx, partition, row)
+}
+
+func (driver *integrationCountingTableDriver) Add(ctx context.Context, entity []byte) (string, error) {
+	driver.addCalls++
+	return driver.tableDriver.Add(ctx, entity)
 }
 
 func (driver *integrationCountingTableDriver) ListPage(ctx context.Context, filter string, top int32, continuation *tableContinuation) ([]tableEntity, *tableContinuation, error) {
 	driver.pageCalls++
+	return driver.tableDriver.ListPage(ctx, filter, top, continuation)
+}
+
+type integrationInterruptedScanDriver struct {
+	tableDriver
+	pageCalls int
+	failAt    int
+}
+
+func (driver *integrationInterruptedScanDriver) ListPage(ctx context.Context, filter string, top int32, continuation *tableContinuation) ([]tableEntity, *tableContinuation, error) {
+	driver.pageCalls++
+	if driver.pageCalls == driver.failAt {
+		return nil, nil, context.DeadlineExceeded
+	}
 	return driver.tableDriver.ListPage(ctx, filter, top, continuation)
 }
 

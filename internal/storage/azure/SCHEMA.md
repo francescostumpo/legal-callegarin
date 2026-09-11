@@ -12,6 +12,7 @@ return and compare the exact service ETag.
 | --- | --- | --- | --- |
 | `articles` | `articles` | reverse Unix-nanoseconds plus inverse article ID | `article` |
 | `articles` | `articles` | `slug:<normalized-slug>` | `slug` |
+| `articles` | `articles` | `schema:article-row-key:v1` | `schemaMigration` |
 | `contacts` | `contacts` | reverse Unix-nanoseconds plus contact ID | `contact` |
 | `sessions` | `sessions` | lowercase SHA-256 token hash | `session` |
 
@@ -28,8 +29,22 @@ article ID and moves each one with a conditional same-partition add+delete
 transaction. It preserves the article ID, metadata, body references, and slug
 records. A retry reconciles both committed-but-unacknowledged transactions and
 the safe intermediate state where identical old and new rows coexist. A
-conflicting target is left untouched and fails startup. After a verified
-migration, listing accepts current rows only; ordinary reads never write.
+conflicting target is left untouched and fails startup. Only after a complete
+pass finds no remaining legacy rows does the hook conditionally create the
+`schema:article-row-key:v1` marker. Marker creation reconciles a duplicate or
+committed-but-unacknowledged add. A valid marker makes later startups a single
+point read with zero rows scanned; its distinct entity type is excluded from
+article listing. After a verified migration, listing accepts current rows
+only; ordinary reads never write.
+
+The deployment contract prevents legacy rows from appearing behind a completed
+marker: all serving revisions must be dual-reader/current-writer before the
+marker-bearing revision starts, and rollback must stay at or above that floor.
+An older direct-ID writer must never run concurrently or after marker creation.
+If this contract is breached, stop that writer, delete the marker under
+operator control, and restart the current revision so the full migration runs
+again. This explicit rollout gate keeps normal startup constant-time without
+silently accepting late legacy writes.
 
 Article bodies are immutable JSON blobs named
 `articles/{articleID}/{version}.json`. Uploads use `If-None-Match: *` and
