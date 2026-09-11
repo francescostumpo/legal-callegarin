@@ -376,7 +376,12 @@ function ContactList({ client }: { client: AdminClient }) {
       requestController.current?.abort()
       const controller = new AbortController()
       requestController.current = controller
-      setList((current) => ({ ...current, loading: true, error: undefined }))
+      if (append) {
+        setList((current) => ({ ...current, loading: true, error: undefined }))
+      } else {
+        consumedCursors.current = new Set()
+        setList({ loading: true, items: [], nextCursor: "" })
+      }
       const seenCursors = append
         ? new Set(consumedCursors.current)
         : new Set<string>()
@@ -404,9 +409,9 @@ function ContactList({ client }: { client: AdminClient }) {
           if (data.nextCursor && seenCursors.has(data.nextCursor)) {
             consumedCursors.current = seenCursors
             setList((current) => ({
-              ...current,
               loading: false,
-              nextCursor: "",
+              items: append ? current.items : [],
+              nextCursor: append ? cursor : "",
               error: "Impossibile continuare: paginazione non valida",
             }))
             return
@@ -432,8 +437,9 @@ function ContactList({ client }: { client: AdminClient }) {
           return
         }
         setList((current) => ({
-          ...current,
           loading: false,
+          items: append ? current.items : [],
+          nextCursor: append ? cursor : "",
           error: "Impossibile caricare i contatti",
         }))
       }

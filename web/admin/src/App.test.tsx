@@ -509,6 +509,108 @@ describe("admin shell", () => {
     ).toHaveLength(3)
   })
 
+  it("clears old results and their cursor when a replacement query fails", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    const old = contactFixture({ id: "old", name: "Old Filter Result" })
+    let resolveReplacement: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return Promise.resolve(
+          jsonResponse({ username: "admin", csrfToken: "csrf" }),
+        )
+      }
+      if (path === "/api/admin/contacts") {
+        return Promise.resolve(
+          jsonResponse({ items: [old], nextCursor: "old-cursor" }),
+        )
+      }
+      if (path === "/api/admin/contacts?q=nuova") {
+        return new Promise<Response>((resolve) => {
+          resolveReplacement = resolve
+        })
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+
+    expect(await screen.findByText("Old Filter Result")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Carica altri" }),
+    ).toBeInTheDocument()
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Cerca per nome o email" }),
+      { target: { value: "nuova" } },
+    )
+    await waitFor(() => expect(resolveReplacement).toBeTypeOf("function"))
+
+    expect(screen.queryByText("Old Filter Result")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Carica altri" }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Ricerca dei contatti in corso…",
+    )
+
+    resolveReplacement!(
+      jsonResponse({ error: "contacts temporarily unavailable" }, 503),
+    )
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Impossibile caricare i contatti",
+    )
+    expect(screen.queryByText("Old Filter Result")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Carica altri" }),
+    ).not.toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.some(([path]) =>
+        String(path).includes("cursor=old-cursor"),
+      ),
+    ).toBe(false)
+  })
+
+  it("preserves loaded contacts and a safe retry cursor after load-more failure", async () => {
+    window.history.replaceState({}, "", "/admin/contatti")
+    const existing = contactFixture({ id: "existing", name: "Retry Existing" })
+    let loadMoreAttempts = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return jsonResponse({ username: "admin", csrfToken: "csrf" })
+      }
+      if (path === "/api/admin/contacts") {
+        return jsonResponse({ items: [existing], nextCursor: "retry-cursor" })
+      }
+      if (path === "/api/admin/contacts?cursor=retry-cursor") {
+        loadMoreAttempts++
+        if (loadMoreAttempts === 1) {
+          return jsonResponse({ error: "temporary storage failure" }, 503)
+        }
+        return jsonResponse({
+          items: [contactFixture({ id: "retried", name: "Retry Result" })],
+          nextCursor: "",
+        })
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<App />)
+
+    expect(await screen.findByText("Retry Existing")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Carica altri" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Impossibile caricare i contatti",
+    )
+    expect(screen.getByText("Retry Existing")).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole("button", { name: "Carica altri" }))
+    expect(await screen.findByText("Retry Result")).toBeInTheDocument()
+    expect(screen.getByText("Retry Existing")).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    expect(loadMoreAttempts).toBe(2)
+  })
+
   it("opens a new contact with an explicit read mutation and uses CSRF and If-Match", async () => {
     window.history.replaceState({}, "", "/admin/contatti/contact-1")
     const created = contactFixture({ state: "new" })
