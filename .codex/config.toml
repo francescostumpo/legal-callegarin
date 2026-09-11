@@ -1,0 +1,19 @@
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+
+[features]
+multi_agent = true
+
+[agents]
+
+[agents.luna_explorer]
+description = "Read-only repository explorer that gathers evidence for Sol before planning or implementation."
+config_file = "./agents/luna-explorer.toml"
+
+[agents.luna_implementer]
+description = "Implementation agent that executes one approved, bounded task at a time."
+config_file = "./agents/luna-implementer.toml"
+
+[agents.luna_task_reviewer]
+description = "Independent read-only reviewer that validates each completed task against its specification."
+config_file = "./agents/luna-task-reviewer.toml"
