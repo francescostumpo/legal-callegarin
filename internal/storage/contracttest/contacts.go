@@ -3,6 +3,7 @@ package contracttest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -126,6 +127,59 @@ func ContactRepository(t *testing.T, factory func() contacts.Repository) {
 		page, err := repository.List(ctx, contacts.ListOptions{Query: "SEARCH PERSON", Limit: 101})
 		if err != nil || len(page.Items) != 100 || page.NextCursor == "" {
 			t.Fatalf("bounded search List() len = %d, cursor = %q, error = %v", len(page.Items), page.NextCursor, err)
+		}
+	})
+
+	contactPaginationLimits(t, factory)
+}
+
+func contactPaginationLimits(t *testing.T, factory func() contacts.Repository) {
+	t.Helper()
+
+	newPopulatedRepository := func(t *testing.T) contacts.Repository {
+		t.Helper()
+		repository := factory()
+		ctx := context.Background()
+		base := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+		for index := range 105 {
+			id := fmt.Sprintf("limit-%03d", index)
+			fixture := contactFixture(id, "Limit Person "+strconv.Itoa(index), base.Add(time.Duration(index)*time.Second))
+			if _, err := repository.Create(ctx, fixture); err != nil {
+				t.Fatalf("Create(%q) error = %v", id, err)
+			}
+		}
+		return repository
+	}
+
+	t.Run("pagination limit zero defaults to 25", func(t *testing.T) {
+		repository := newPopulatedRepository(t)
+		ctx := context.Background()
+		page, err := repository.List(ctx, contacts.ListOptions{Limit: 0})
+		if err != nil {
+			t.Fatalf("List(Limit: 0) error = %v", err)
+		}
+		if len(page.Items) != 25 || page.Items[0].ID != "limit-104" || page.Items[24].ID != "limit-080" || page.NextCursor == "" {
+			t.Fatalf("List(Limit: 0) = %#v", page)
+		}
+		next, err := repository.List(ctx, contacts.ListOptions{Limit: 0, Cursor: page.NextCursor})
+		if err != nil || len(next.Items) != 25 || next.Items[0].ID != "limit-079" {
+			t.Fatalf("List(default limit, next cursor) = %#v, %v", next, err)
+		}
+	})
+
+	t.Run("pagination limit above 100 is capped", func(t *testing.T) {
+		repository := newPopulatedRepository(t)
+		ctx := context.Background()
+		page, err := repository.List(ctx, contacts.ListOptions{Limit: 101})
+		if err != nil {
+			t.Fatalf("List(Limit: 101) error = %v", err)
+		}
+		if len(page.Items) != 100 || page.Items[0].ID != "limit-104" || page.Items[99].ID != "limit-005" || page.NextCursor == "" {
+			t.Fatalf("List(Limit: 101) = %#v", page)
+		}
+		next, err := repository.List(ctx, contacts.ListOptions{Limit: 101, Cursor: page.NextCursor})
+		if err != nil || len(next.Items) != 5 || next.Items[0].ID != "limit-004" || next.Items[4].ID != "limit-000" || next.NextCursor != "" {
+			t.Fatalf("List(capped limit, next cursor) = %#v, %v", next, err)
 		}
 	})
 }

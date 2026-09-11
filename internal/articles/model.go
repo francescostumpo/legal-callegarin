@@ -147,9 +147,15 @@ func (article Article) Validate() error {
 	if article.FirstPublishedAt != nil && article.FirstPublishedAt.Before(article.CreatedAt) {
 		return validationError("first publication cannot precede creation")
 	}
+	if article.FirstPublishedAt != nil && article.FirstPublishedAt.After(article.UpdatedAt) {
+		return validationError("first publication cannot follow update")
+	}
 	if article.LastPublishedAt != nil {
 		if article.FirstPublishedAt == nil || article.LastPublishedAt.Before(*article.FirstPublishedAt) {
 			return validationError("last publication cannot precede first publication")
+		}
+		if article.LastPublishedAt.After(article.UpdatedAt) {
+			return validationError("last publication cannot follow update")
 		}
 	}
 	return nil

@@ -70,6 +70,21 @@ func TestArticleValidate(t *testing.T) {
 		{name: "published without body", mutate: func(article *Article) { article.Status, article.PublishedBody = StatusPublished, nil }},
 		{name: "published without first timestamp", mutate: func(article *Article) { article.Status, article.FirstPublishedAt = StatusPublished, nil }},
 		{name: "withdrawn without published body", mutate: func(article *Article) { article.Status, article.PublishedBody = StatusWithdrawn, nil }},
+		{
+			name: "first publication after update",
+			mutate: func(article *Article) {
+				publishedAt := article.UpdatedAt.Add(time.Second)
+				article.FirstPublishedAt = &publishedAt
+				article.LastPublishedAt = &publishedAt
+			},
+		},
+		{
+			name: "last publication after update",
+			mutate: func(article *Article) {
+				lastPublishedAt := article.UpdatedAt.Add(time.Second)
+				article.LastPublishedAt = &lastPublishedAt
+			},
+		},
 	}
 
 	valid := validArticle()
