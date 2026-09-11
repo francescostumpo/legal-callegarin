@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
 	"github.com/francescostumpo/legal-callegarin/internal/config"
+	"github.com/francescostumpo/legal-callegarin/internal/contacts"
 	"github.com/francescostumpo/legal-callegarin/internal/storage/memory"
 	publicweb "github.com/francescostumpo/legal-callegarin/internal/web/public"
 	"github.com/francescostumpo/legal-callegarin/internal/webassets"
@@ -65,6 +68,101 @@ func TestHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewComposesDevelopmentContactFormWithInjectedClockAndSigningKey(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	handler, err := New(Options{
+		Config: config.Config{
+			Environment:   "development",
+			PublicBaseURL: "https://studio.example.test",
+			StorageMode:   "memory",
+			SessionKey:    []byte("configuration-key-that-must-not-win"),
+		},
+		Assets:            webassets.Files,
+		SessionSigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		RateClock:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	get := httptest.NewRecorder()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "https://studio.example.test/contatti", nil))
+	tokenMatch := regexp.MustCompile(`name="started" value="([^"]+)"`).FindStringSubmatch(get.Body.String())
+	if len(tokenMatch) != 2 {
+		t.Fatalf("contact GET lacks signed timestamp: %q", get.Body.String())
+	}
+	now = now.Add(3 * time.Second)
+	form := url.Values{
+		"name": {"Mario Rossi"}, "email": {"mario@example.test"}, "phone": {""},
+		"message": {"Messaggio sufficientemente lungo"}, "privacy": {"accepted"},
+		"website": {""}, "started": {tokenMatch[1]},
+	}
+	request := httptest.NewRequest(http.MethodPost, "https://studio.example.test/contatti", strings.NewReader(form.Encode()))
+	request.RemoteAddr = "192.0.2.2:4000"
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "https://studio.example.test")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("contact POST status = %d, want 303; body=%q", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("contact POST Set-Cookie = %q", response.Header().Get("Set-Cookie"))
+	}
+}
+
+func TestNewInjectsContactService(t *testing.T) {
+	t.Parallel()
+
+	service := &appContactService{}
+	now := time.Date(2026, 9, 11, 12, 0, 10, 0, time.UTC)
+	handler, err := New(Options{
+		Config:            config.Config{PublicBaseURL: "https://studio.example.test"},
+		Assets:            webassets.Files,
+		ContactService:    service,
+		SessionSigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		RateClock:         func() time.Time { return now },
+		TrustedProxy:      true,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	get := httptest.NewRecorder()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "https://studio.example.test/contatti", nil))
+	token := regexp.MustCompile(`name="started" value="([^"]+)"`).FindStringSubmatch(get.Body.String())[1]
+	now = now.Add(3 * time.Second)
+	form := url.Values{
+		"name": {"Mario Rossi"}, "email": {"mario@example.test"}, "phone": {""},
+		"message": {"Messaggio sufficientemente lungo"}, "privacy": {"accepted"},
+		"website": {""}, "started": {token},
+	}
+	request := httptest.NewRequest(http.MethodPost, "https://studio.example.test/contatti", strings.NewReader(form.Encode()))
+	request.RemoteAddr = "192.0.2.2:4000"
+	request.Header.Set("X-Forwarded-For", "203.0.113.5")
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "https://studio.example.test")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || service.calls != 1 || service.submission.ConsentVersion == "" {
+		t.Fatalf("contact injection = status %d calls %d submission %#v", response.Code, service.calls, service.submission)
+	}
+}
+
+type appContactService struct {
+	contacts.ContactService
+	calls      int
+	submission contacts.Submission
+}
+
+func (service *appContactService) Submit(_ context.Context, submission contacts.Submission) (contacts.Contact, error) {
+	service.calls++
+	service.submission = submission
+	return contacts.Contact{}, nil
 }
 
 func TestNewRejectsInvalidPublicAssets(t *testing.T) {

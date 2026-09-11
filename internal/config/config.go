@@ -21,6 +21,7 @@ type Config struct {
 	Environment, HTTPAddress, PublicBaseURL, StorageMode, AzureAccountURL string
 	AdminUsername, AdminPasswordHash                                      string
 	SessionKey                                                            []byte
+	TrustedProxy                                                          bool
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -50,6 +51,12 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.SessionKey = sessionKey
+
+	trustedProxy, err := loadTrustedProxy(getenv("TRUSTED_PROXY"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.TrustedProxy = trustedProxy
 
 	return cfg, nil
 }
@@ -121,4 +128,15 @@ func loadSessionKey(environment, encoded string) ([]byte, error) {
 	}
 
 	return key, nil
+}
+
+func loadTrustedProxy(raw string) (bool, error) {
+	switch raw {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	default:
+		return false, errors.New("TRUSTED_PROXY must be true or false")
+	}
 }

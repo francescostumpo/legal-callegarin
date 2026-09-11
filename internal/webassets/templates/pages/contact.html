@@ -1,0 +1,259 @@
+{{define "content"}}
+<header class="page-hero">
+  <div class="page-hero__media" aria-hidden="true">
+    {{template "editorial-picture" .HeroImage}}
+  </div>
+  <div class="page-hero__overlay"></div>
+  <div class="page-hero__content shell">
+    <p class="eyebrow">{{.Eyebrow}}</p>
+    <h1>{{.Heading}}</h1>
+    <p>{{.Lead}}</p>
+  </div>
+</header>
+
+<div class="development-notice shell" role="note">
+  DA VALIDARE CON IL PROFESSIONISTA — recapiti, informativa e formulazioni
+  legali sono contenuti di sviluppo.
+</div>
+
+<section
+  class="section shell contact-layout"
+  aria-labelledby="contact-form-heading"
+>
+  <div class="contact-details content-section">
+    <p class="eyebrow">Recapiti diretti</p>
+    <h2>Contatta lo studio</h2>
+    <ul>
+      <li>Telefono: DATO DA CONFERMARE</li>
+      <li>Email: DATO DA CONFERMARE</li>
+      <li>PEC: DATO DA CONFERMARE</li>
+      <li>Indirizzo e orari: DATO DA CONFERMARE</li>
+    </ul>
+    <p>
+      Se l’invio non riesce, puoi riprovare oppure usare uno dei recapiti
+      diretti dopo la loro conferma.
+    </p>
+  </div>
+
+  <div class="contact-form-panel">
+    <p class="eyebrow">Richiesta di contatto</p>
+    <h2 id="contact-form-heading">Descrivi brevemente la richiesta</h2>
+
+    {{if .Success}}
+    <div class="form-success" role="status">
+      <h3>Richiesta ricevuta</h3>
+      <p>Il messaggio è stato registrato correttamente.</p>
+    </div>
+    {{end}} {{if .GlobalError}}
+    <div
+      id="error-summary"
+      class="form-error-summary"
+      role="alert"
+      tabindex="-1"
+    >
+      <h3>Non è stato possibile inviare la richiesta</h3>
+      <p>{{.GlobalError}}</p>
+    </div>
+    {{end}} {{if .StorageFailure}}
+    <div
+      id="error-summary"
+      class="form-error-summary"
+      role="alert"
+      tabindex="-1"
+    >
+      <h3>Il messaggio non è stato registrato</h3>
+      <p>
+        Riprova tra poco. In alternativa usa i recapiti diretti, al momento
+        indicati come DATO DA CONFERMARE. Nessuna conferma di invio è stata
+        generata.
+      </p>
+    </div>
+    {{end}} {{if .ErrorSummary}}
+    <div
+      id="error-summary"
+      class="form-error-summary"
+      role="alert"
+      tabindex="-1"
+    >
+      <h3>Controlla i dati inseriti</h3>
+      <ul>
+        {{range .ErrorSummary}}
+        <li><a href="#{{.Field}}">{{.Message}}</a></li>
+        {{end}}
+      </ul>
+    </div>
+    {{end}}
+
+    <form class="contact-form" action="/contatti" method="post" novalidate>
+      <div class="form-field">
+        <label for="name">Nome e cognome</label>
+        <input
+          id="name"
+          name="name"
+          type="text"
+          value="{{.Form.Name}}"
+          autocomplete="name"
+          maxlength="120"
+          required
+          {{if
+          .NameError}}
+          aria-invalid="true"
+          aria-describedby="name-error"
+          {{end}}
+        />
+        {{with .NameError}}
+        <p id="name-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-field">
+        <label for="email">Email</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          value="{{.Form.Email}}"
+          autocomplete="email"
+          maxlength="254"
+          required
+          {{if
+          .EmailError}}
+          aria-invalid="true"
+          aria-describedby="email-error"
+          {{end}}
+        />
+        {{with .EmailError}}
+        <p id="email-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-field">
+        <label for="phone">Telefono <span>(facoltativo)</span></label>
+        <input
+          id="phone"
+          name="phone"
+          type="tel"
+          value="{{.Form.Phone}}"
+          autocomplete="tel"
+          maxlength="40"
+          {{if
+          .PhoneError}}
+          aria-invalid="true"
+          aria-describedby="phone-error"
+          {{end}}
+        />
+        {{with .PhoneError}}
+        <p id="phone-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-field">
+        <label for="message">Messaggio breve</label>
+        <textarea
+          id="message"
+          name="message"
+          rows="7"
+          maxlength="2000"
+          required
+          {{if
+          .MessageError}}
+          aria-invalid="true"
+          aria-describedby="message-help message-error"
+          {{else}}
+          aria-describedby="message-help"
+          {{end}}
+        >
+{{.Form.Message}}</textarea>
+        <p id="message-help" class="field-help">
+          Ti chiediamo di non inviare documenti né dati sensibili non necessari.
+        </p>
+        {{with .MessageError}}
+        <p id="message-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-checkbox">
+        <input
+          id="privacy"
+          name="privacy"
+          type="checkbox"
+          value="accepted"
+          required
+          {{if
+          .Form.Privacy}}
+          checked
+          {{end}}
+          {{if
+          .PrivacyError}}
+          aria-invalid="true"
+          aria-describedby="privacy-error"
+          {{end}}
+        />
+        <label for="privacy">
+          Confermo di aver letto l’<a href="/privacy-cookie-policy"
+            >informativa privacy</a
+          >.
+        </label>
+        {{with .PrivacyError}}
+        <p id="privacy-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-honeypot" aria-hidden="true">
+        <label for="website">Sito web</label>
+        <input
+          id="website"
+          name="website"
+          type="text"
+          value=""
+          tabindex="-1"
+          autocomplete="off"
+        />
+      </div>
+      <input type="hidden" name="started" value="{{.FormToken}}" />
+
+      <p class="contact-caution">
+        L’invio non costituisce conferimento di incarico. Non inviare documenti
+        o dati sensibili non necessari.
+      </p>
+      <button class="button button--primary" type="submit">
+        Invia la richiesta
+      </button>
+    </form>
+  </div>
+</section>
+
+<section
+  class="section section--stone"
+  aria-labelledby="contact-privacy-heading"
+>
+  <div class="shell reading-column content-section">
+    <p class="eyebrow">Prima informativa</p>
+    <h2 id="contact-privacy-heading">Come saranno trattati i dati</h2>
+    <p>
+      DA VALIDARE CON IL PROFESSIONISTA — Titolare del trattamento e canale per
+      esercitare i diritti: DATO DA CONFERMARE.
+    </p>
+    <p>
+      DA VALIDARE CON IL PROFESSIONISTA — finalità: rispondere alla richiesta;
+      base giuridica: misure precontrattuali richieste dall’interessato;
+      destinatari e responsabili: fornitori tecnici strettamente necessari,
+      inclusa l’infrastruttura Azure nell’Unione europea (regione Italy North).
+      I dati hanno accesso limitato alle persone autorizzate.
+    </p>
+    <p>
+      DA VALIDARE CON IL PROFESSIONISTA — le richieste sono sottoposte a
+      revisione entro 24 mesi: la scadenza segnala una verifica e non comporta
+      cancellazione automatica. Una cancellazione manuale resta recuperabile per
+      30 giorni prima della rimozione definitiva.
+    </p>
+    <p>
+      DA VALIDARE CON IL PROFESSIONISTA — puoi esercitare i diritti previsti
+      dalla normativa attraverso il canale DATO DA CONFERMARE. Consulta l’<a
+        href="/privacy-cookie-policy"
+        >informativa privacy completa</a
+      >.
+    </p>
+  </div>
+</section>
+{{end}}

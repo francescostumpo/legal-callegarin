@@ -118,7 +118,11 @@ func pageCatalog(images map[string]EditorialImage) map[string]PageData {
 		"/privacy-cookie-policy": {
 			Title: "Privacy e cookie policy", Description: "Informazioni sul trattamento dei dati e sull'uso dei cookie.", Path: "/privacy-cookie-policy", Kind: pageKindPrivacyPolicy,
 			Eyebrow: "Informazioni", Heading: "Privacy e cookie policy", Lead: "DA VALIDARE CON IL PROFESSIONISTA — informativa legale di sviluppo, non destinata alla pubblicazione.", HeroImage: images["approach-library"],
-			Sections: []ContentSection{{Heading: "Sito pubblico", Paragraphs: []string{"Le pagine pubbliche non impostano cookie, non usano strumenti di analisi e non richiedono risorse da servizi terzi."}}, {Heading: "Titolare e contatti", Paragraphs: []string{"DATO DA CONFERMARE — identità, recapiti del titolare e canali per l'esercizio dei diritti."}}, {Heading: "Trattamenti", Paragraphs: []string{"DA VALIDARE CON IL PROFESSIONISTA — finalità, basi giuridiche, destinatari, conservazione e diritti saranno completati prima della pubblicazione."}}},
+			Sections: []ContentSection{
+				{Heading: "Sito pubblico", Paragraphs: []string{"Le pagine pubbliche non impostano cookie, non usano strumenti di analisi e non richiedono risorse da servizi terzi. Non è quindi mostrato alcun banner cookie."}},
+				{Heading: "Titolare e contatti", Paragraphs: []string{"DA VALIDARE CON IL PROFESSIONISTA — Titolare del trattamento, recapiti e canale per l'esercizio dei diritti: DATO DA CONFERMARE."}},
+				{Heading: "Richieste di contatto", Paragraphs: []string{"DA VALIDARE CON IL PROFESSIONISTA — finalità: rispondere alle richieste; base giuridica: misure precontrattuali richieste dall'interessato; destinatari e responsabili: fornitori tecnici necessari, inclusa l'infrastruttura Azure nell'Unione europea, regione Italy North; accesso limitato alle persone autorizzate.", "DA VALIDARE CON IL PROFESSIONISTA — revisione operativa entro 24 mesi senza cancellazione automatica; dopo una richiesta di cancellazione manuale, recuperabilità limitata a 30 giorni prima della rimozione definitiva.", "DA VALIDARE CON IL PROFESSIONISTA — diritti e relativo canale di esercizio: DATO DA CONFERMARE."}},
+			},
 		},
 	}
 

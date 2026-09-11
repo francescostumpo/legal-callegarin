@@ -53,3 +53,6 @@ must provide `SESSION_KEY_BASE64`. Production additionally requires
 `PUBLIC_BASE_URL`, Azure storage mode and account URL, `ADMIN_USERNAME`,
 `ADMIN_PASSWORD_HASH`, and a base64 session key that decodes to at least 32
 bytes. No literal session-key fallback is accepted outside development.
+`TRUSTED_PROXY` defaults to `false` and accepts only the exact values `true` or
+`false`; enable it only when every direct request reaches the application
+through a trusted reverse proxy that replaces forwarding headers.

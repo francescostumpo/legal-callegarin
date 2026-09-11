@@ -634,6 +634,125 @@ h3 {
   padding-left: 1.25rem;
 }
 
+.contact-layout {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.contact-details {
+  align-self: start;
+}
+
+.contact-form-panel {
+  min-width: 0;
+  padding: var(--space-5);
+  border: var(--border);
+  background: var(--color-charcoal-raised);
+}
+
+.contact-form,
+.form-field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.contact-form {
+  gap: var(--space-4);
+}
+
+.form-field label,
+.form-checkbox label {
+  font-weight: 650;
+}
+
+.form-field label span,
+.field-help,
+.contact-caution {
+  color: var(--color-ivory-muted);
+  font-size: 0.92rem;
+}
+
+.form-field input,
+.form-field textarea {
+  width: 100%;
+  padding: 0.8rem 0.9rem;
+  border: var(--border);
+  border-radius: 0;
+  background: var(--color-charcoal);
+  color: var(--color-ivory);
+  font: inherit;
+}
+
+.form-field textarea {
+  resize: vertical;
+}
+
+.form-field input[aria-invalid="true"],
+.form-field textarea[aria-invalid="true"],
+.form-checkbox input[aria-invalid="true"] {
+  border-color: #e0a28f;
+}
+
+.form-checkbox {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.form-checkbox input {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 0.2rem;
+}
+
+.form-checkbox .field-error {
+  grid-column: 2;
+}
+
+.field-help,
+.field-error,
+.contact-caution {
+  margin: 0;
+}
+
+.field-error {
+  color: #f0b5a3;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.form-error-summary,
+.form-success {
+  margin-bottom: var(--space-5);
+  padding: var(--space-4);
+  border-inline-start: 3px solid #e0a28f;
+  background: rgb(224 162 143 / 9%);
+}
+
+.form-success {
+  border-inline-start-color: var(--color-copper-light);
+  background: rgb(181 123 82 / 10%);
+}
+
+.form-error-summary h3,
+.form-success h3 {
+  margin-bottom: var(--space-2);
+}
+
+.form-error-summary p,
+.form-success p {
+  margin-bottom: 0;
+}
+
+.form-honeypot {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
 .consultation-callout {
   border-block: var(--border);
   background: var(--color-charcoal-raised);
@@ -689,7 +808,8 @@ h3 {
 
   .split-layout,
   .section-heading,
-  .consultation-callout__inner {
+  .consultation-callout__inner,
+  .contact-layout {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: start;
   }

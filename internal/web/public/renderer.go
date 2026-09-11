@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/francescostumpo/legal-callegarin/internal/contacts"
 )
 
 type Renderer struct {
@@ -19,17 +22,23 @@ type Renderer struct {
 	standard     *template.Template
 	articleIndex *template.Template
 	article      *template.Template
+	contact      *template.Template
 	pages        map[string]PageData
 	images       map[string]EditorialImage
 	articles     ArticleReader
 	cache        *htmlCache
 	assets       *assetCatalog
+	contactForm  *contactHandler
 }
 
 type rendererOptions struct {
-	articles ArticleReader
-	now      func() time.Time
-	events   *ArticleEventSink
+	articles      ArticleReader
+	now           func() time.Time
+	events        *ArticleEventSink
+	contacts      contacts.ContactService
+	contactKey    []byte
+	contactLogger *slog.Logger
+	trustedProxy  bool
 }
 
 type RendererOption func(*rendererOptions)
@@ -40,6 +49,29 @@ func WithArticleReader(reader ArticleReader) RendererOption {
 
 func WithArticleEventSink(events *ArticleEventSink) RendererOption {
 	return func(options *rendererOptions) { options.events = events }
+}
+
+func WithContactService(service contacts.ContactService, signingKey []byte) RendererOption {
+	return func(options *rendererOptions) {
+		options.contacts = service
+		options.contactKey = append([]byte(nil), signingKey...)
+	}
+}
+
+func WithContactClock(now func() time.Time) RendererOption {
+	return func(options *rendererOptions) {
+		if now != nil {
+			options.now = now
+		}
+	}
+}
+
+func WithContactLogger(logger *slog.Logger) RendererOption {
+	return func(options *rendererOptions) { options.contactLogger = logger }
+}
+
+func WithContactTrustedProxy(trusted bool) RendererOption {
+	return func(options *rendererOptions) { options.trustedProxy = trusted }
 }
 
 type assetManifest struct {
@@ -86,6 +118,10 @@ func NewRenderer(files fs.FS, publicBaseURL string, optionFunctions ...RendererO
 	if err != nil {
 		return nil, fmt.Errorf("parse article templates: %w", err)
 	}
+	contact, err := parsePageTemplate(files, assets, "templates/pages/contact.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse contact templates: %w", err)
+	}
 	images, err := loadEditorialImages(files, assets)
 	if err != nil {
 		return nil, err
@@ -106,9 +142,17 @@ func NewRenderer(files fs.FS, publicBaseURL string, optionFunctions ...RendererO
 		standard:     standard,
 		articleIndex: articleIndex,
 		article:      article,
+		contact:      contact,
 		pages:        pageCatalog(images), images: images, articles: options.articles,
 		cache:  newHTMLCache(options.now, publicCacheMaxEntries, publicCacheMaxBytes, publicCacheTTL),
 		assets: assets,
+	}
+	if options.contacts != nil {
+		signer, err := newContactSigner(options.contactKey)
+		if err != nil {
+			return nil, err
+		}
+		renderer.contactForm = newContactHandler(renderer, options.contacts, signer, options.now, options.contactLogger, options.trustedProxy)
 	}
 	options.events.subscribe(renderer)
 	return renderer, nil
@@ -127,7 +171,10 @@ func RegisterRoutes(mux *http.ServeMux, renderer *Renderer, _ fs.FS) error {
 		if path == "/" {
 			pattern = "GET /{$}"
 		}
-		if path == "/sentenze-e-riflessioni" {
+		if path == "/contatti" && renderer.contactForm != nil {
+			mux.HandleFunc(pattern, renderer.contactForm.get)
+			mux.HandleFunc("POST /contatti", renderer.contactForm.post)
+		} else if path == "/sentenze-e-riflessioni" {
 			mux.HandleFunc(pattern, renderer.articleIndexHandler())
 		} else {
 			mux.HandleFunc(pattern, renderer.pageHandler(path))

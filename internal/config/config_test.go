@@ -31,12 +31,14 @@ func TestLoadDefaults(t *testing.T) {
 			env: map[string]string{
 				"APP_ENV":            "test",
 				"SESSION_KEY_BASE64": validSessionKey,
+				"TRUSTED_PROXY":      "true",
 			},
 			want: Config{
-				Environment: "test",
-				HTTPAddress: ":8080",
-				StorageMode: "memory",
-				SessionKey:  []byte("0123456789abcdef0123456789abcdef"),
+				Environment:  "test",
+				HTTPAddress:  ":8080",
+				StorageMode:  "memory",
+				SessionKey:   []byte("0123456789abcdef0123456789abcdef"),
+				TrustedProxy: true,
 			},
 		},
 	}
@@ -123,6 +125,11 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 			env:       withOverride(validProduction, "SESSION_KEY_BASE64", base64.StdEncoding.EncodeToString([]byte("too short"))),
 			wantError: "32 bytes",
 		},
+		{
+			name:      "trusted proxy is not canonical boolean",
+			env:       withOverride(validProduction, "TRUSTED_PROXY", "TRUE"),
+			wantError: "TRUSTED_PROXY",
+		},
 	}
 
 	for _, tt := range tests {
@@ -163,6 +170,7 @@ func assertConfig(t *testing.T, got, want Config) {
 		got.AzureAccountURL != want.AzureAccountURL ||
 		got.AdminUsername != want.AdminUsername ||
 		got.AdminPasswordHash != want.AdminPasswordHash ||
+		got.TrustedProxy != want.TrustedProxy ||
 		string(got.SessionKey) != string(want.SessionKey) {
 		t.Fatalf("Load() = %#v, want %#v", got, want)
 	}
