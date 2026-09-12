@@ -1,12 +1,20 @@
 CONTAINER_ENGINE ?= docker
 SBOM_OUTPUT ?= artifacts/sbom.cdx.json
 SEVERITY ?= HIGH,CRITICAL
+ACTIONLINT_IMAGE := rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 SYFT_IMAGE := anchore/syft:v1.51.1-nonroot@sha256:277f11d9e3dd8a6853f6e102156c79578d0d9adffe563db613b4397377bbbc0a
 TRIVY_IMAGE := ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
 
-export CONTAINER_ENGINE IMAGE SBOM_OUTPUT SEVERITY SYFT_IMAGE TRIVY_IMAGE
+export ACTIONLINT_IMAGE CONTAINER_ENGINE IMAGE SBOM_OUTPUT SEVERITY SYFT_IMAGE TRIVY_IMAGE
 
-.PHONY: build check container-smoke sbom scan workflow-policy
+.PHONY: actionlint build check container-smoke sbom scan workflow-policy
+
+actionlint:
+	"$(CONTAINER_ENGINE)" run --rm --network none --read-only \
+		--cap-drop ALL --security-opt no-new-privileges \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
+		--mount "type=bind,src=$(CURDIR),dst=/repo,readonly" \
+		--workdir /repo "$(ACTIONLINT_IMAGE)" -no-color
 
 build:
 	npm run build
