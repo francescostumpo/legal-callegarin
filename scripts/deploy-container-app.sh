@@ -117,7 +117,21 @@ const assertObject = (value, what) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`malformed ${what}`);
   return value;
 };
-const read = file => assertObject(JSON.parse(fs.readFileSync(file, 'utf8')), 'JSON response');
+const read = file => {
+  let source;
+  try {
+    source = fs.readFileSync(file, 'utf8');
+  } catch {
+    throw new Error('could not read JSON response');
+  }
+  let value;
+  try {
+    value = JSON.parse(source);
+  } catch {
+    throw new Error('malformed JSON response');
+  }
+  return assertObject(value, 'JSON response');
+};
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const fail = message => { console.error(`deployment failed: ${message}`); process.exit(1); };
 const exactKeys = (object, keys, what) => {
@@ -236,8 +250,15 @@ try {
     for (const revision of value.items) assertRevisionIdentity(revision, revision.id, revision.name);
     if (value.nextLink === null) process.exit(0);
     if (typeof value.nextLink !== 'string' || !value.nextLink || /[\u0000-\u001f\u007f]/.test(value.nextLink)) throw new Error('revision nextLink is malformed');
-    const url = new URL(value.nextLink);
-    if (url.protocol !== 'https:' || url.hostname !== 'management.azure.com' || url.port || url.username || url.password || url.hash || decodeURIComponent(url.pathname).toLowerCase() !== expectedPath.toLowerCase()) throw new Error('revision nextLink escapes the revisions collection');
+    let url;
+    let normalizedPath;
+    try {
+      url = new URL(value.nextLink);
+      normalizedPath = decodeURIComponent(url.pathname);
+    } catch {
+      throw new Error('revision nextLink is malformed');
+    }
+    if (url.protocol !== 'https:' || url.hostname !== 'management.azure.com' || url.port || url.username || url.password || url.hash || normalizedPath.toLowerCase() !== expectedPath.toLowerCase()) throw new Error('revision nextLink escapes the revisions collection');
     const versions = url.searchParams.getAll('api-version');
     if (versions.length !== 1 || versions[0] !== '2026-01-01') throw new Error('revision nextLink changes the pinned API version');
     const sorted = [...url.searchParams.entries()].sort(([ak,av],[bk,bv]) => ak.localeCompare(bk) || av.localeCompare(bv));
@@ -329,7 +350,7 @@ fetch_revision_list() {
 http_check() {
   local url=$1 kind=$2 expected=${3:-} token=$4
   local headers="$work_dir/headers-$token" body="$work_dir/body-$token" status
-  status=$(curl --silent --show-error --connect-timeout 10 --max-time 30 --request GET --dump-header "$headers" --output "$body" --write-out '%{http_code}' "$url") || return 1
+  status=$(curl --disable --no-location --silent --show-error --connect-timeout 10 --max-time 30 --request GET --dump-header "$headers" --output "$body" --write-out '%{http_code}' "$url") || return 1
   json_tool smoke "$headers" "$body" "$status" "$kind" "$expected"
 }
 

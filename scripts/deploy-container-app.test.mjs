@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const script = resolve('scripts/deploy-container-app.sh');
@@ -114,8 +115,18 @@ else if (args[0] === 'rest') {
   const url = new URL(option('--url'));
   const query = option('--query');
   const page2 = url.searchParams.has('$skiptoken');
-  if (url.pathname.toLowerCase() === appPath.toLowerCase()) output(appDoc());
+  if (url.pathname.toLowerCase() === appPath.toLowerCase()) {
+    if (scenario === 'malformed-pre-json') {
+      process.stdout.write('{"value":LEAKME}\n');
+      process.exit(0);
+    }
+    output(appDoc());
+  }
   else if (url.pathname.toLowerCase() === revisionsPath.toLowerCase()) {
+    if (scenario === 'malformed-post-json' && state.copied) {
+      process.stdout.write('{"value":LEAKME}\n');
+      process.exit(0);
+    }
     const all = listItems();
     if (scenario === 'pagination') {
       output(page2 ? {items:all.slice(1),nextLink:null} : {items:all.slice(0,1),nextLink:'https://management.azure.com' + revisionsPath + '?api-version=2026-01-01&$skiptoken=two'});
@@ -123,6 +134,8 @@ else if (args[0] === 'rest') {
       output(page2 ? {items:[revision(prior)],nextLink:null} : {items:[revision(prior)],nextLink:'https://management.azure.com' + revisionsPath + '?api-version=2026-01-01&$skiptoken=two'});
     } else if (scenario === 'pagination-offhost') {
       output({items:all.slice(0,1),nextLink:'https://evil.invalid' + revisionsPath + '?api-version=2026-01-01&$skiptoken=two'});
+    } else if (scenario === 'pagination-malformed-url') {
+      output({items:all.slice(0,1),nextLink:'LEAKME'});
     } else if (scenario === 'pagination-overflow') {
       const page = Number(url.searchParams.get('$skiptoken') || '0');
       output({items:page === 0 ? [revision(prior)] : [],nextLink:'https://management.azure.com' + revisionsPath + '?api-version=2026-01-01&$skiptoken=' + (page + 1)});
@@ -194,6 +207,30 @@ function runCase(scenario = 'success', args = baseArgs) {
   return {...result,calls,finalState,tempEntries};
 }
 
+async function runCaseAsync(scenario = 'success', args = baseArgs) {
+  const root = mkdtempSync(join(tmpdir(), 'deploy-test-'));
+  const bin = join(root, 'bin'); const responses = join(root, 'responses');
+  mkdirSync(bin); mkdirSync(responses);
+  const log = join(root, 'calls.log'); const state = join(root, 'state.json');
+  writeFileSync(log, ''); writeFileSync(state, JSON.stringify({copied:false,promoted:false,rolledBack:false,rollbackAttempted:false}));
+  for (const [name, source] of [['az',fakeAz],['curl',fakeCurl],['sleep',fakeSleep]]) {
+    const path = join(bin,name); writeFileSync(path,source); chmodSync(path,0o755);
+  }
+  const env = {...process.env,PATH:`${bin}:${process.env.PATH}`,TMPDIR:responses,TEST_SCENARIO:scenario,TEST_LOG:log,TEST_STATE:state};
+  let stdout = ''; let stderr = '';
+  const status = await new Promise((resolveStatus,reject) => {
+    const child = spawn('bash',[script,...args],{env});
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data',chunk=>{stdout += chunk;}); child.stderr.on('data',chunk=>{stderr += chunk;});
+    child.once('error',reject); child.once('close',resolveStatus);
+  });
+  const calls = readFileSync(log,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
+  const finalState = JSON.parse(readFileSync(state,'utf8'));
+  const tempEntries = readdirSync(responses);
+  rmSync(root,{recursive:true,force:true});
+  return {status,signal:null,stdout,stderr,calls,finalState,tempEntries,error:undefined};
+}
+
 const mutations = result => result.calls.filter(call => call[0] === 'az' && call.includes('containerapp'));
 const curls = result => result.calls.filter(call => call[0] === 'curl');
 
@@ -217,7 +254,7 @@ test('successful rollout paginates, smokes, promotes exact digest, and keeps pri
   assert.deepEqual(mutationCalls[0],['az','containerapp','revision','copy','--subscription',subscription,'--resource-group',rg,'--name',app,'--from-revision',prior,'--container-name',app,'--image',digest,'--revision-suffix','deploy-test','--set-env-vars','ARTICLE_STORAGE_SCHEMA_MODE=migrate','--output','none']);
   assert.deepEqual(mutationCalls[1],['az','containerapp','ingress','traffic','set','--subscription',subscription,'--resource-group',rg,'--name',app,'--revision-weight',`${candidate}=100`,`${prior}=0`,'--output','none']);
   assert.equal(curls(result).length,6);
-  assert.ok(curls(result).every(call=>!call.includes('--location')));
+  assert.ok(curls(result).every(call=>call[1]==='--disable' && call[2]==='--no-location'));
   const copyIndex = result.calls.indexOf(mutationCalls[0]);
   const promoteIndex = result.calls.indexOf(mutationCalls[1]);
   const candidateCurlIndexes = curls(result).slice(0,3).map(call=>result.calls.indexOf(call));
@@ -231,6 +268,61 @@ test('successful rollout paginates, smokes, promotes exact digest, and keeps pri
   for (const call of result.calls.filter(call=>call[0]==='az')) {
     assert.ok(!call.some(value=>forbiddenTokens.has(String(value).toLowerCase())),JSON.stringify(call));
   }
+});
+
+test('malformed response JSON never leaks response fragments before or after mutation', async () => {
+  const sentinel = 'LEAKME';
+  const production = readFileSync(script,'utf8');
+  const helper = production.match(/json_tool\(\) \{\n  node - "\$@" <<'NODE'\n([\s\S]*?)\nNODE\n\}/)?.[1];
+  assert.ok(helper,'production JSON helper must remain extractable for leak regression tests');
+  const executableHelper = helper.replace(/const fail = message => \{ console\.error\([^;]+; process\.exit\(1\); \};/,'const fail = message => { throw new Error(message); };');
+  assert.notEqual(executableHelper,helper,'test harness must replace only the helper exit adapter');
+  const helperFunction = new Function('require','process','URL','structuredClone','Buffer',executableHelper);
+  const invokeHelper = args => {
+    try {
+      helperFunction(createRequire(import.meta.url),{argv:['node','-',...args],stdout:{write(){}}},URL,structuredClone,Buffer);
+    } catch (error) {
+      return error;
+    }
+    assert.fail('JSON helper unexpectedly accepted malformed input');
+  };
+  const parserRoot = mkdtempSync(join(tmpdir(),'deploy-parser-test-'));
+  const malformedFile = join(parserRoot,'malformed.json');
+  writeFileSync(malformedFile,'{"value":LEAKME}\n');
+  const parserError = invokeHelper(['account',malformedFile,subscription]);
+  assert.equal(parserError.message,'malformed JSON response');
+  assert.ok(!parserError.message.includes(sentinel));
+
+  const pageFile = join(parserRoot,'page.json');
+  writeFileSync(pageFile,JSON.stringify({items:[],nextLink:sentinel}));
+  const nextLinkError = invokeHelper(['page-next',pageFile,`/subscriptions/${subscription}/resourceGroups/${rg}/providers/Microsoft.App/containerApps/${app}/revisions`]);
+  assert.equal(nextLinkError.message,'revision nextLink is malformed');
+  assert.ok(!nextLinkError.message.includes(sentinel));
+  rmSync(parserRoot,{recursive:true,force:true});
+
+  const pre = await runCaseAsync('malformed-pre-json');
+  assert.equal(pre.error,undefined,JSON.stringify(pre.error));
+  assert.notEqual(pre.status,0);
+  assert.equal(mutations(pre).length,0);
+  assert.equal(curls(pre).length,0);
+  assert.ok(!`${pre.stdout}${pre.stderr}`.includes(sentinel));
+
+  const post = await runCaseAsync('malformed-post-json');
+  assert.equal(post.error,undefined,JSON.stringify(post.error));
+  assert.notEqual(post.status,0);
+  assert.equal(post.finalState.rolledBack,true);
+  assert.ok(mutations(post).some(call=>call.includes(`${prior}=100`)));
+  assert.ok(!mutations(post).some(call=>call.includes(`${candidate}=100`)));
+  assert.ok(!`${post.stdout}${post.stderr}`.includes(sentinel));
+  assert.deepEqual(post.tempEntries,[]);
+
+  const nextLink = await runCaseAsync('pagination-malformed-url');
+  assert.equal(nextLink.error,undefined,JSON.stringify(nextLink.error));
+  assert.notEqual(nextLink.status,0);
+  assert.equal(mutations(nextLink).length,0);
+  assert.equal(curls(nextLink).length,0);
+  assert.ok(!`${nextLink.stdout}${nextLink.stderr}`.includes(sentinel));
+  assert.deepEqual(nextLink.tempEntries,[]);
 });
 
 test('unsafe preflight states fail before mutation and before curl', () => {
