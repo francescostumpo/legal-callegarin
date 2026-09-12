@@ -25,6 +25,7 @@ var errAdminResponseTooLarge = errors.New("admin response exceeds buffer limit")
 type responseMetrics interface {
 	responseStatus() int
 	responseOverflowed() bool
+	responseOutcome() string
 }
 
 // boundedAdminResponse deliberately does not implement streaming, hijacking,
@@ -36,6 +37,7 @@ type boundedAdminResponse struct {
 	status   int
 	maxBytes int64
 	overflow bool
+	outcome  string
 }
 
 func newBoundedAdminResponse(initial http.Header, maxBytes int64) *boundedAdminResponse {
@@ -70,7 +72,14 @@ func (response *boundedAdminResponse) responseStatus() int {
 
 func (response *boundedAdminResponse) responseOverflowed() bool { return response.overflow }
 
+func (response *boundedAdminResponse) responseOutcome() string { return response.outcome }
+
+func (response *boundedAdminResponse) setResponseOutcome(outcome string) {
+	response.outcome = outcome
+}
+
 func (response *boundedAdminResponse) commit(destination http.ResponseWriter) {
+	markResponseOutcome(destination, response.outcome)
 	copyHeaders(destination.Header(), response.header)
 	destination.WriteHeader(response.responseStatus())
 	if response.body.Len() > 0 {
@@ -92,7 +101,8 @@ func recoverPanics(next http.Handler, logger *slog.Logger, adminResponseLimit in
 			return
 		}
 
-		buffered := newBoundedAdminResponse(response.Header(), adminResponseLimit)
+		safeHeaders := response.Header().Clone()
+		buffered := newBoundedAdminResponse(safeHeaders, adminResponseLimit)
 		panicked := false
 		func() {
 			defer func() {
@@ -105,10 +115,10 @@ func recoverPanics(next http.Handler, logger *slog.Logger, adminResponseLimit in
 		switch {
 		case panicked:
 			logger.Error("request panic recovered", "request_id", RequestIDFromContext(request.Context()))
-			writeAtomicFailure(response, request, buffered.header, http.StatusInternalServerError, "internal_error", "Si è verificato un errore. Riprova più tardi.", renderError)
+			writeAtomicFailure(response, request, safeFailureHeaders(buffered.header), http.StatusInternalServerError, "internal_error", "Si è verificato un errore. Riprova più tardi.", renderError)
 		case buffered.responseOverflowed():
 			logger.Error("response exceeded buffer", "request_id", RequestIDFromContext(request.Context()))
-			writeAtomicFailure(response, request, buffered.header, http.StatusInternalServerError, "response_too_large", "Risposta temporaneamente non disponibile.", renderError)
+			writeAtomicFailure(response, request, safeFailureHeaders(buffered.header), http.StatusInternalServerError, "response_too_large", "Risposta temporaneamente non disponibile.", renderError)
 		default:
 			buffered.commit(response)
 		}
@@ -134,7 +144,10 @@ func accessLog(next http.Handler, logger *slog.Logger, now func() time.Time, tru
 		defer func() {
 			panicValue := recover()
 			status := metrics.responseStatus()
-			outcome := "completed"
+			outcome := metrics.responseOutcome()
+			if outcome == "" {
+				outcome = "completed"
+			}
 			if metrics.responseOverflowed() {
 				status = http.StatusInternalServerError
 				outcome = "response_too_large"
@@ -168,8 +181,9 @@ func accessLog(next http.Handler, logger *slog.Logger, now func() time.Time, tru
 // preserves the underlying writer's exact optional-interface set and exposes
 // Unwrap for ResponseController.
 type responseCapture struct {
-	mu     sync.Mutex
-	status int
+	mu      sync.Mutex
+	status  int
+	outcome string
 }
 
 func newCaptureResponseWriter(response http.ResponseWriter) (http.ResponseWriter, *responseCapture) {
@@ -224,6 +238,18 @@ func (capture *responseCapture) responseStatus() int {
 }
 
 func (*responseCapture) responseOverflowed() bool { return false }
+
+func (capture *responseCapture) responseOutcome() string {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return capture.outcome
+}
+
+func (capture *responseCapture) setResponseOutcome(outcome string) {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	capture.outcome = outcome
+}
 
 func applySecurityHeaders(header http.Header, path string, production bool, nonce string) {
 	csp := "default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self'"
@@ -282,6 +308,26 @@ func copyHeaders(destination, source http.Header) {
 	}
 }
 
+func safeFailureHeaders(source http.Header) http.Header {
+	safe := make(http.Header)
+	for _, name := range []string{
+		"Cache-Control",
+		"Content-Security-Policy",
+		"Permissions-Policy",
+		"Referrer-Policy",
+		"Strict-Transport-Security",
+		"X-Content-Type-Options",
+		"X-Frame-Options",
+		"X-Request-ID",
+		"X-Robots-Tag",
+	} {
+		if values := source.Values(name); len(values) != 0 {
+			safe[http.CanonicalHeaderKey(name)] = append([]string(nil), values...)
+		}
+	}
+	return safe
+}
+
 func adminPath(path string) bool {
 	return path == "/admin" || strings.HasPrefix(path, "/admin/") || path == "/api/admin" || strings.HasPrefix(path, "/api/admin/")
 }
@@ -291,6 +337,7 @@ func apiPath(path string) bool {
 }
 
 func writeErrorResponse(response http.ResponseWriter, request *http.Request, status int, code, message string, renderError func(http.ResponseWriter, *http.Request, int, string, string)) {
+	markResponseOutcome(response, code)
 	if apiPath(request.URL.Path) {
 		WriteAPIError(response, request, status, code, message, nil)
 		return
@@ -305,6 +352,23 @@ func writeErrorResponse(response http.ResponseWriter, request *http.Request, sta
 	_, _ = io.WriteString(response, "<!doctype html><html lang=\"it\"><title>Errore</title><main><h1>Richiesta non disponibile</h1></main></html>")
 }
 
+func markResponseOutcome(response http.ResponseWriter, outcome string) {
+	if outcome == "" {
+		return
+	}
+	for response != nil {
+		if marker, ok := response.(interface{ setResponseOutcome(string) }); ok {
+			marker.setResponseOutcome(outcome)
+			return
+		}
+		unwrapper, ok := response.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		response = unwrapper.Unwrap()
+	}
+}
+
 func clientHash(request *http.Request, trustedProxyHops int, key []byte) string {
 	identity, err := clientinfo.Resolve(request, trustedProxyHops)
 	if err != nil {
@@ -316,19 +380,38 @@ func clientHash(request *http.Request, trustedProxyHops int, key []byte) string 
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:9])
 }
 
-func timeout(next http.Handler, duration time.Duration, renderError func(http.ResponseWriter, *http.Request, int, string, string)) http.Handler {
+type timeoutResult struct {
+	panicked bool
+}
+
+func timeout(next http.Handler, duration time.Duration, responseLimit int64, logger *slog.Logger, renderError func(http.ResponseWriter, *http.Request, int, string, string)) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		ctx, cancel := context.WithTimeout(request.Context(), duration)
 		defer cancel()
-		buffered := newBoundedAdminResponse(response.Header(), defaultAdminResponseLimit)
-		done := make(chan struct{})
+		safeHeaders := response.Header().Clone()
+		buffered := newBoundedAdminResponse(safeHeaders, responseLimit)
+		done := make(chan timeoutResult, 1)
 		go func() {
-			defer close(done)
+			result := timeoutResult{}
+			defer func() {
+				if recover() != nil {
+					result.panicked = true
+				}
+				done <- result
+			}()
 			next.ServeHTTP(buffered, request.WithContext(ctx))
 		}()
 		select {
-		case <-done:
+		case result := <-done:
+			if result.panicked {
+				logger.Error("request panic recovered", "request_id", RequestIDFromContext(request.Context()), "outcome", "internal_error")
+				markResponseOutcome(response, "internal_error")
+				writeAtomicFailure(response, request, safeHeaders, http.StatusInternalServerError, "internal_error", "Si è verificato un errore. Riprova più tardi.", renderError)
+				return
+			}
 			if buffered.responseOverflowed() {
+				logger.Error("response exceeded buffer", "request_id", RequestIDFromContext(request.Context()), "outcome", "response_too_large")
+				markResponseOutcome(response, "response_too_large")
 				writeErrorResponse(response, request, http.StatusInternalServerError, "response_too_large", "Risposta temporaneamente non disponibile.", renderError)
 				return
 			}

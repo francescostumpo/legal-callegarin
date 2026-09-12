@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/contacts"
+	webmiddleware "github.com/francescostumpo/legal-callegarin/internal/web/middleware"
 )
 
 type dashboardDTO struct {
@@ -60,7 +61,7 @@ type contactPageDTO struct {
 
 func (handler *handler) dashboardGET(response http.ResponseWriter, request *http.Request) {
 	if handler.contacts == nil {
-		writeJSONError(response, http.StatusServiceUnavailable, "contacts temporarily unavailable")
+		writeContactError(response, http.StatusServiceUnavailable, "contacts_unavailable", "Contatti temporaneamente non disponibili.")
 		return
 	}
 	summary, err := handler.contacts.Dashboard(request.Context())
@@ -76,7 +77,7 @@ func (handler *handler) dashboardGET(response http.ResponseWriter, request *http
 
 func (handler *handler) purgeDuePOST(response http.ResponseWriter, request *http.Request) {
 	if handler.contacts == nil {
-		writeJSONError(response, http.StatusServiceUnavailable, "contacts temporarily unavailable")
+		writeContactError(response, http.StatusServiceUnavailable, "contacts_unavailable", "Contatti temporaneamente non disponibili.")
 		return
 	}
 	purged, err := handler.contacts.PurgeDue(request.Context(), handler.now().UTC())
@@ -89,12 +90,12 @@ func (handler *handler) purgeDuePOST(response http.ResponseWriter, request *http
 
 func (handler *handler) contactsGET(response http.ResponseWriter, request *http.Request) {
 	if handler.contacts == nil {
-		writeJSONError(response, http.StatusServiceUnavailable, "contacts temporarily unavailable")
+		writeContactError(response, http.StatusServiceUnavailable, "contacts_unavailable", "Contatti temporaneamente non disponibili.")
 		return
 	}
 	options, err := parseContactListOptions(request.URL.Query())
 	if err != nil {
-		writeJSONError(response, http.StatusBadRequest, "invalid contact query")
+		writeContactError(response, http.StatusBadRequest, "contact_query_invalid", "Controlla i filtri dei contatti.")
 		return
 	}
 	page, err := handler.contacts.List(request.Context(), options)
@@ -111,7 +112,7 @@ func (handler *handler) contactsGET(response http.ResponseWriter, request *http.
 
 func (handler *handler) contactGET(response http.ResponseWriter, request *http.Request) {
 	if handler.contacts == nil {
-		writeJSONError(response, http.StatusServiceUnavailable, "contacts temporarily unavailable")
+		writeContactError(response, http.StatusServiceUnavailable, "contacts_unavailable", "Contatti temporaneamente non disponibili.")
 		return
 	}
 	contact, err := handler.contacts.Get(request.Context(), request.PathValue("id"))
@@ -124,7 +125,7 @@ func (handler *handler) contactGET(response http.ResponseWriter, request *http.R
 
 func (handler *handler) contactPOST(response http.ResponseWriter, request *http.Request) {
 	if handler.contacts == nil {
-		writeJSONError(response, http.StatusServiceUnavailable, "contacts temporarily unavailable")
+		writeContactError(response, http.StatusServiceUnavailable, "contacts_unavailable", "Contatti temporaneamente non disponibili.")
 		return
 	}
 	action := request.PathValue("action")
@@ -134,7 +135,11 @@ func (handler *handler) contactPOST(response http.ResponseWriter, request *http.
 	}
 	expectedETag, status, err := parseIfMatch(request.Header.Get("If-Match"))
 	if err != nil {
-		writeJSONError(response, status, "valid If-Match header required")
+		if status == http.StatusPreconditionRequired {
+			writeContactError(response, status, "contact_precondition_required", "Ricarica il contatto prima di riprovare.")
+		} else {
+			writeContactError(response, status, "contact_precondition_invalid", "La versione del contatto non è valida. Ricarica e riprova.")
+		}
 		return
 	}
 	id := request.PathValue("id")
@@ -275,7 +280,7 @@ func contactDetail(contact contacts.Contact) contactDetailDTO {
 
 func writeContact(response http.ResponseWriter, contact contacts.Contact) {
 	if contact.ETag == "" {
-		writeJSONError(response, http.StatusServiceUnavailable, "contact temporarily unavailable")
+		writeContactError(response, http.StatusServiceUnavailable, "contact_unavailable", "Contatto temporaneamente non disponibile.")
 		return
 	}
 	response.Header().Set("ETag", formatETag(contact.ETag))
@@ -285,14 +290,22 @@ func writeContact(response http.ResponseWriter, contact contacts.Contact) {
 func writeContactServiceError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, contacts.ErrNotFound):
-		writeJSONError(response, http.StatusNotFound, "contact not found")
-	case errors.Is(err, contacts.ErrConflict), errors.Is(err, contacts.ErrInvalidTransition):
-		writeJSONError(response, http.StatusConflict, "contact changed; reload and retry")
+		writeContactError(response, http.StatusNotFound, "contact_not_found", "Contatto non trovato.")
+	case errors.Is(err, contacts.ErrConflict):
+		writeContactError(response, http.StatusConflict, "contact_conflict", "Il contatto è stato modificato. Ricarica i dati prima di riprovare.")
+	case errors.Is(err, contacts.ErrInvalidTransition):
+		writeContactError(response, http.StatusConflict, "contact_invalid_transition", "Questa operazione non è disponibile nello stato corrente del contatto.")
+	case errors.Is(err, contacts.ErrCommitUnknown):
+		writeContactError(response, http.StatusServiceUnavailable, "contact_commit_unknown", "L’esito della modifica non è certo. Ricarica il contatto prima di riprovare.")
 	case errors.Is(err, contacts.ErrValidation):
-		writeJSONError(response, http.StatusBadRequest, "invalid contact request")
+		writeContactError(response, http.StatusBadRequest, "contact_validation", "Controlla i dati del contatto.")
 	default:
-		writeJSONError(response, http.StatusServiceUnavailable, "contacts temporarily unavailable")
+		writeContactError(response, http.StatusServiceUnavailable, "contacts_unavailable", "Contatti temporaneamente non disponibili.")
 	}
+}
+
+func writeContactError(response http.ResponseWriter, status int, code, message string) {
+	webmiddleware.WriteAPIErrorResponse(response, status, code, message, nil)
 }
 
 func writeJSON(response http.ResponseWriter, status int, value any) {

@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -164,6 +165,68 @@ func TestHandlerTimeoutReturnsAtomicNestedAPIError(t *testing.T) {
 	}
 }
 
+func TestHandlerTimeoutRecoversWorkerPanicsAsAtomicRouteErrors(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		path string
+		api  bool
+	}{
+		{name: "public HTML", path: "/boom"},
+		{name: "admin API", path: "/api/admin/boom", api: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			options := Options{
+				PublicBaseURL:  "https://studio.example.test",
+				SessionKey:     []byte("0123456789abcdef0123456789abcdef"),
+				HandlerTimeout: time.Second,
+				RequestID:      func() string { return "request-worker-panic" },
+				Logger:         slog.New(slog.NewJSONHandler(&logs, nil)),
+				ErrorRenderer: func(response http.ResponseWriter, request *http.Request, status int, _, _ string) {
+					response.WriteHeader(status)
+					_, _ = response.Write([]byte("designed error " + RequestIDFromContext(request.Context())))
+				},
+			}
+			if testCase.api {
+				options.Authenticator = &authenticatorStub{session: auth.Session{Username: "admin"}}
+			}
+			handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				response.Header().Set("X-Partial-Secret", "must-be-discarded")
+				response.WriteHeader(http.StatusOK)
+				_, _ = response.Write([]byte("partial-secret"))
+				panic("panic-secret")
+			}), options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodGet, "https://studio.example.test"+testCase.path, nil)
+			if testCase.api {
+				request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "raw"})
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusInternalServerError || response.Header().Get("X-Partial-Secret") != "" || strings.Contains(response.Body.String(), "partial-secret") || strings.Contains(response.Body.String(), "panic-secret") || !strings.Contains(response.Body.String(), "request-worker-panic") {
+				t.Fatalf("worker panic response = status %d body %q", response.Code, response.Body.String())
+			}
+			if testCase.api && (!strings.Contains(response.Body.String(), `"code":"internal_error"`) || response.Header().Get("Content-Type") != "application/json; charset=utf-8") {
+				t.Fatalf("API worker panic response = headers %#v body %q", response.Header(), response.Body.String())
+			}
+			if !testCase.api && response.Body.String() != "designed error request-worker-panic" {
+				t.Fatalf("HTML worker panic body = %q", response.Body.String())
+			}
+			completionLogged := false
+			for _, line := range strings.Split(logs.String(), "\n") {
+				if strings.Contains(line, `"msg":"request completed"`) && strings.Contains(line, `"status":500`) && strings.Contains(line, `"outcome":"internal_error"`) {
+					completionLogged = true
+				}
+			}
+			if !completionLogged || strings.Contains(logs.String(), "secret") {
+				t.Fatalf("worker panic logs = %s", logs.String())
+			}
+		})
+	}
+}
+
 func TestDefaultSecurityHeadersAreExplicitAndDoNotEmitDevelopmentHSTS(t *testing.T) {
 	handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {}), Options{
 		SessionKey:    []byte("0123456789abcdef0123456789abcdef"),
@@ -222,6 +285,52 @@ func TestAPIPanicUsesNestedSafeErrorWithRequestID(t *testing.T) {
 	}
 	if response.Code != http.StatusInternalServerError || payload.Error.Code != "internal_error" || payload.Error.RequestID != "request-panic" || payload.Error.Fields == nil || strings.Contains(response.Body.String(), "secret") {
 		t.Fatalf("panic response = status %d payload %#v", response.Code, payload)
+	}
+}
+
+func TestAuthenticationStorageFailureNegotiatesHTMLAndNestedAPI(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		path string
+		api  bool
+	}{
+		{name: "admin shell", path: "/admin"},
+		{name: "admin nested HTML", path: "/admin/articoli/article-1"},
+		{name: "article preview", path: "/admin/preview/articles/article-1"},
+		{name: "admin API", path: "/api/admin/session", api: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			called := false
+			handler, err := New(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }), Options{
+				Authenticator: &authenticatorStub{err: errors.New("storage-secret")},
+				SessionKey:    []byte("0123456789abcdef0123456789abcdef"),
+				PublicBaseURL: "https://studio.example.test",
+				RequestID:     func() string { return "request-auth-storage" },
+				ErrorRenderer: func(response http.ResponseWriter, request *http.Request, status int, code, _ string) {
+					response.Header().Set("Cache-Control", "no-store")
+					response.Header().Set("Content-Type", "text/html; charset=utf-8")
+					response.WriteHeader(status)
+					_, _ = response.Write([]byte("designed " + code + " " + RequestIDFromContext(request.Context())))
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodGet, "https://studio.example.test"+testCase.path, nil)
+			request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "raw"})
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if called || response.Code != http.StatusServiceUnavailable || response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Body.String(), "request-auth-storage") || strings.Contains(response.Body.String(), "storage-secret") {
+				t.Fatalf("auth storage response = called %t status %d headers %#v body %q", called, response.Code, response.Header(), response.Body.String())
+			}
+			if testCase.api {
+				if response.Header().Get("Content-Type") != "application/json; charset=utf-8" || !strings.Contains(response.Body.String(), `"code":"authentication_unavailable"`) {
+					t.Fatalf("API auth storage response = headers %#v body %q", response.Header(), response.Body.String())
+				}
+			} else if response.Header().Get("Content-Type") != "text/html; charset=utf-8" || response.Body.String() != "designed authentication_unavailable request-auth-storage" {
+				t.Fatalf("HTML auth storage response = headers %#v body %q", response.Header(), response.Body.String())
+			}
+		})
 	}
 }
 

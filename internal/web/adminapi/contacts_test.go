@@ -302,6 +302,50 @@ func TestContactAPIMutationAuthCSRFAndErrorMapping(t *testing.T) {
 	}
 }
 
+func TestAdminContactErrorsUseActionSpecificNestedContract(t *testing.T) {
+	stub := &adminContactServiceStub{}
+	handler := newContactAPIHandler(t, stub)
+	tests := []struct {
+		name    string
+		err     error
+		etag    string
+		status  int
+		code    string
+		message string
+	}{
+		{name: "not found", err: contacts.ErrNotFound, etag: `"ZXRhZw"`, status: http.StatusNotFound, code: "contact_not_found", message: "Contatto non trovato."},
+		{name: "conflict", err: contacts.ErrConflict, etag: `"ZXRhZw"`, status: http.StatusConflict, code: "contact_conflict", message: "Il contatto è stato modificato. Ricarica i dati prima di riprovare."},
+		{name: "precondition required", status: http.StatusPreconditionRequired, code: "contact_precondition_required", message: "Ricarica il contatto prima di riprovare."},
+		{name: "commit unknown", err: contacts.ErrCommitUnknown, etag: `"ZXRhZw"`, status: http.StatusServiceUnavailable, code: "contact_commit_unknown", message: "L’esito della modifica non è certo. Ricarica il contatto prima di riprovare."},
+		{name: "storage unavailable", err: errors.New("storage private detail"), etag: `"ZXRhZw"`, status: http.StatusServiceUnavailable, code: "contacts_unavailable", message: "Contatti temporaneamente non disponibili."},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			stub.mutationErr = testCase.err
+			response := serveAdminAPI(t, handler, http.MethodPost, "/api/admin/contacts/contact-1/read", testCase.etag, true, true)
+			var payload struct {
+				Error struct {
+					Code      string            `json:"code"`
+					Message   string            `json:"message"`
+					RequestID string            `json:"requestId"`
+					Fields    map[string]string `json:"fields"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode %q: %v", response.Body.String(), err)
+			}
+			if response.Code != testCase.status || payload.Error.Code != testCase.code || payload.Error.Message != testCase.message || payload.Error.RequestID == "" || payload.Error.RequestID != response.Header().Get("X-Request-ID") || payload.Error.Fields == nil || len(payload.Error.Fields) != 0 {
+				t.Fatalf("contact error = status %d headers %#v payload %#v", response.Code, response.Header(), payload)
+			}
+			for _, forbidden := range []string{"articolo", "article", "private detail"} {
+				if strings.Contains(strings.ToLower(response.Body.String()), forbidden) {
+					t.Fatalf("contact error contains %q: %s", forbidden, response.Body.String())
+				}
+			}
+		})
+	}
+}
+
 func TestAdminNestedFallbackAndAPIMissesStayScoped(t *testing.T) {
 	handler := newContactAPIHandler(t, &adminContactServiceStub{})
 	spa := serveAdminAPI(t, handler, http.MethodGet, "/admin/contatti/contact-1", "", true, false)

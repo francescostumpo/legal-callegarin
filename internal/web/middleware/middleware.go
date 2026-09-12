@@ -96,10 +96,10 @@ func New(next http.Handler, options Options) (http.Handler, error) {
 	handler := next
 	handler = csrf(handler, options.SessionKey)
 	handler = origin(handler, expectedOrigin)
-	handler = authenticate(handler, options.Authenticator, options.Now)
+	handler = authenticate(handler, options.Authenticator, options.Now, options.ErrorRenderer)
 	handler = bodyLimit(handler, options.MaxBodyBytes)
 	if options.HandlerTimeout > 0 {
-		handler = timeout(handler, options.HandlerTimeout, options.ErrorRenderer)
+		handler = timeout(handler, options.HandlerTimeout, options.MaxAdminResponseBytes, options.Logger, options.ErrorRenderer)
 	}
 	if options.Environment == "production" {
 		handler = canonicalRedirect(handler, base, options.TrustedProxyHops)
@@ -215,7 +215,7 @@ func bodyLimit(next http.Handler, limit int64) http.Handler {
 	})
 }
 
-func authenticate(next http.Handler, authenticator Authenticator, now func() time.Time) http.Handler {
+func authenticate(next http.Handler, authenticator Authenticator, now func() time.Time, renderError func(http.ResponseWriter, *http.Request, int, string, string)) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if !protectedPath(request.URL.Path) {
 			next.ServeHTTP(response, request)
@@ -230,7 +230,8 @@ func authenticate(next http.Handler, authenticator Authenticator, now func() tim
 				return
 			}
 			if !errors.Is(err, auth.ErrUnauthenticated) {
-				WriteAPIError(response, request, http.StatusServiceUnavailable, "authentication_unavailable", "Autenticazione temporaneamente non disponibile.", nil)
+				response.Header().Set("Cache-Control", "no-store")
+				writeErrorResponse(response, request, http.StatusServiceUnavailable, "authentication_unavailable", "Autenticazione temporaneamente non disponibile.", renderError)
 				return
 			}
 			ClearSessionCookie(response, now())
@@ -291,6 +292,7 @@ type APIError struct {
 }
 
 func WriteAPIError(response http.ResponseWriter, request *http.Request, status int, code, message string, fields map[string]string) {
+	markResponseOutcome(response, code)
 	requestID := ""
 	if request != nil {
 		requestID = RequestIDFromContext(request.Context())
