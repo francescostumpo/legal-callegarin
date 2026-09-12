@@ -139,14 +139,24 @@ test("the local container smoke is bounded, hardened, and cleans only its own co
   ])
 
   assert.match(script, /^set -eu$/m)
-  assert.match(script, /SMOKE_CONTAINER=legal-callegarin-smoke/)
+  assert.match(script, /SMOKE_CONTAINER=legal-callegarin-smoke-\$\$/)
+  assert.match(script, /SMOKE_CONTAINER_ID=$/m)
+  assert.match(script, /SMOKE_COMMIT=\$\(git rev-parse HEAD\)/)
+  assert.match(script, /git status --porcelain --untracked-files=all/)
+  assert.doesNotMatch(script, /9084831/)
   assert.match(
     script,
-    /docker build .*--build-arg VERSION=local-test .*--build-arg COMMIT=9084831/,
+    /docker build .*--build-arg VERSION=local-test .*--build-arg COMMIT="\$SMOKE_COMMIT"/,
   )
   assert.match(
     script,
-    /docker run[\s\S]*--read-only[\s\S]*--cap-drop ALL[\s\S]*--security-opt no-new-privileges/,
+    /docker create[\s\S]*--read-only[\s\S]*--cap-drop ALL[\s\S]*--security-opt no-new-privileges/,
+  )
+  assert.match(script, /SMOKE_CONTAINER_ID=\$\(docker create/)
+  assert.match(script, /docker start "\$SMOKE_CONTAINER_ID"/)
+  assert.ok(
+    script.indexOf("SMOKE_CONTAINER_ID=$(docker create") <
+      script.indexOf('docker start "$SMOKE_CONTAINER_ID"'),
   )
   assert.match(script, /-p 127\.0\.0\.1:18080:8080/)
   assert.match(script, /APP_ENV=development/)
@@ -157,12 +167,10 @@ test("the local container smoke is bounded, hardened, and cleans only its own co
   assert.match(script, /SESSION_KEY_BASE64=/)
   assert.match(script, /PUBLIC_BASE_URL=\$SMOKE_ORIGIN/)
   assert.match(script, /trap cleanup EXIT INT TERM/)
-  assert.match(script, /docker rm -f "\$SMOKE_CONTAINER"/)
-  assert.ok(
-    script.indexOf('docker container inspect "$SMOKE_CONTAINER"') <
-      script.indexOf("trap cleanup EXIT INT TERM"),
-    "cleanup trap must not own a pre-existing container",
-  )
+  assert.match(script, /if \[ -n "\$SMOKE_CONTAINER_ID" \]; then/)
+  assert.match(script, /docker rm -f "\$SMOKE_CONTAINER_ID"/)
+  assert.doesNotMatch(script, /docker rm -f "\$SMOKE_CONTAINER"/)
+  assert.doesNotMatch(script, /docker container inspect "\$SMOKE_CONTAINER"/)
   assert.doesNotMatch(
     script,
     /docker (?:system )?prune|docker rm -f \$\(|docker rm -f `|docker login|docker push/,
@@ -186,19 +194,23 @@ test("the local container smoke is bounded, hardened, and cleans only its own co
   assert.match(script, /X-Frame-Options/i)
   assert.match(script, /Set-Cookie/i)
   assert.match(script, /public_asset=.*site-\[0-9a-f\]/)
-  assert.match(script, /curl -fsS "\$SMOKE_ORIGIN\$public_asset"/)
-  assert.doesNotMatch(script, /curl -fsS "\$SMOKE_ORIGIN\/assets\/site\.css"/)
+  const curlLines = script
+    .split("\n")
+    .filter((line) => /(^|\s)curl(?:\s|$)/.test(line))
+  assert.deepEqual(curlLines, ['  curl --connect-timeout 2 --max-time 5 "$@"'])
+  assert.match(script, /http -fsS "\$SMOKE_ORIGIN\$public_asset"/)
   assert.match(script, /started=.*name="started"/)
   assert.match(script, /test "\$login_status" = 303/)
   assert.match(script, /session_cookie=.*Set-Cookie/)
   assert.match(script, /admin_asset=.*\/admin\/assets\/index-/)
   assert.match(
     script,
-    /curl -fsS -H "Cookie: \$session_cookie" "\$SMOKE_ORIGIN\$admin_asset"/,
+    /http -fsS -H "Cookie: \$session_cookie" "\$SMOKE_ORIGIN\$admin_asset"/,
   )
   assert.match(script, /\"requestId\":\"\[\^\"\]\+\"/)
   assert.match(script, /\"fields\":\{\}/)
-  assert.match(script, /docker stop .*"\$SMOKE_CONTAINER"/)
+  assert.match(script, /docker stop .*"\$SMOKE_CONTAINER_ID"/)
+  assert.match(script, /grep .*commit.*SMOKE_COMMIT/)
   assert.match(
     makefile,
     /^container-smoke:\n\t\.\/scripts\/container-smoke\.sh/m,
