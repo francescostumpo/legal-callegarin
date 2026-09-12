@@ -54,6 +54,15 @@ func TestNewComposesProtectedAdminRoutes(t *testing.T) {
 	if login.Code != http.StatusOK || login.Header().Get("Content-Security-Policy") == "" {
 		t.Fatalf("admin login = %d headers=%#v", login.Code, login.Header())
 	}
+	stylesheetMatch := regexp.MustCompile(`<link rel="stylesheet" href="(/assets/site-[0-9a-f]{12}\.css)">`).FindStringSubmatch(login.Body.String())
+	if len(stylesheetMatch) != 2 {
+		t.Fatalf("admin login lacks fingerprinted stylesheet: %q", login.Body.String())
+	}
+	stylesheet := httptest.NewRecorder()
+	handler.ServeHTTP(stylesheet, httptest.NewRequest(http.MethodGet, "https://studio.example.test"+stylesheetMatch[1], nil))
+	if stylesheet.Code != http.StatusOK || stylesheet.Header().Get("Content-Type") != "text/css; charset=utf-8" || stylesheet.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("admin login stylesheet = %d headers=%#v", stylesheet.Code, stylesheet.Header())
+	}
 }
 
 func TestNewWiresAuthenticatedContactAPIAndNestedAdminFallback(t *testing.T) {

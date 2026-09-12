@@ -217,6 +217,16 @@ function AdminShell({
 
   return (
     <div className="admin-shell">
+      <a
+        className="admin-skip-link"
+        href="#contenuto"
+        onClick={(event) => {
+          event.preventDefault()
+          document.getElementById("contenuto")?.focus()
+        }}
+      >
+        Salta al contenuto
+      </a>
       <header className="topbar">
         <Link className="wordmark" to="/">
           Callegarin <span>amministrazione</span>
@@ -234,7 +244,9 @@ function AdminShell({
         <span className="operator">{username}</span>
       </header>
       <aside className="desktop-sidebar">
-        <Navigation client={client} onNavigate={() => undefined} />
+        <nav aria-label="Navigazione amministrazione">
+          <Navigation client={client} onNavigate={() => undefined} />
+        </nav>
       </aside>
       {mobileOpen ? (
         <div className="mobile-overlay" role="presentation">
@@ -257,7 +269,7 @@ function AdminShell({
           </nav>
         </div>
       ) : null}
-      <main className="workspace" id="contenuto">
+      <main className="workspace" id="contenuto" tabIndex={-1}>
         <Outlet />
       </main>
       <button className="logout" onClick={() => void logout()} type="button">
@@ -289,6 +301,7 @@ function Navigation({
 }
 
 function Dashboard({ client }: { client: AdminClient }) {
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [state, setState] = useState<{
     loading: boolean
     data?: DashboardDTO
@@ -325,13 +338,25 @@ function Dashboard({ client }: { client: AdminClient }) {
     return () => {
       active = false
     }
-  }, [client])
+  }, [client, loadAttempt])
+
+  const retry = () => {
+    setState({ loading: true })
+    setLoadAttempt((attempt) => attempt + 1)
+  }
 
   return (
     <section>
       <PageHeading eyebrow="Console riservata" title="Panoramica" />
       {state.loading ? <p>Caricamento panoramica…</p> : null}
-      {state.error ? <p role="alert">{state.error}</p> : null}
+      {state.error ? (
+        <div>
+          <p role="alert">{state.error}</p>
+          <button onClick={retry} type="button">
+            Riprova
+          </button>
+        </div>
+      ) : null}
       {state.data ? (
         <>
           {state.data.new > 0 ? (

@@ -185,6 +185,110 @@ describe("admin shell", () => {
     expect(attempts).toBe(2)
   })
 
+  it("retries a failed dashboard load in place", async () => {
+    window.history.replaceState({}, "", "/admin")
+    let dashboardAttempts = 0
+    let purgeAttempts = 0
+    let resolveRetry: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === "/api/admin/session") {
+        return Promise.resolve(
+          jsonResponse({ username: "admin", csrfToken: "csrf" }),
+        )
+      }
+      if (path === "/api/admin/contacts/purge-due") {
+        purgeAttempts++
+        return Promise.resolve(jsonResponse({ purged: 0 }))
+      }
+      if (path === "/api/admin/dashboard") {
+        dashboardAttempts++
+        if (dashboardAttempts === 1) {
+          return Promise.resolve(
+            jsonResponse({ error: "dashboard unavailable" }, 503),
+          )
+        }
+        return new Promise<Response>((resolve) => {
+          resolveRetry = resolve
+        })
+      }
+      throw new Error(`unexpected fetch ${path}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<App />)
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Impossibile caricare la panoramica",
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Riprova" }))
+    await waitFor(() => expect(resolveRetry).toBeTypeOf("function"))
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    expect(screen.getByText("Caricamento panoramica…")).toBeInTheDocument()
+
+    resolveRetry!(
+      jsonResponse({
+        new: 3,
+        read: 2,
+        archived: 1,
+        deletionScheduled: 0,
+        retentionReview: 1,
+        purged: 0,
+      }),
+    )
+    expect(await screen.findByText("3 nuovi contatti")).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("Caricamento panoramica…"),
+    ).not.toBeInTheDocument()
+    expect(dashboardAttempts).toBe(2)
+    expect(purgeAttempts).toBe(2)
+    expect(window.location.pathname).toBe("/admin")
+  })
+
+  it("provides an identified navigation and a functional skip link", async () => {
+    window.history.replaceState({}, "", "/admin")
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input)
+        if (path === "/api/admin/session") {
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        }
+        if (path === "/api/admin/contacts/purge-due") {
+          return jsonResponse({ purged: 0 })
+        }
+        if (path === "/api/admin/dashboard") {
+          return jsonResponse({
+            new: 0,
+            read: 0,
+            archived: 0,
+            deletionScheduled: 0,
+            retentionReview: 0,
+            purged: 0,
+          })
+        }
+        throw new Error(`unexpected fetch ${path}`)
+      }),
+    )
+
+    render(<App />)
+
+    expect(
+      await screen.findByRole("navigation", {
+        name: "Navigazione amministrazione",
+      }),
+    ).toBeInTheDocument()
+    const skipLink = screen.getByRole("link", { name: "Salta al contenuto" })
+    const workspace = screen.getByRole("main")
+    expect(skipLink).toHaveAttribute("href", "#contenuto")
+    expect(workspace).toHaveAttribute("id", "contenuto")
+    expect(workspace).toHaveAttribute("tabindex", "-1")
+
+    fireEvent.click(skipLink)
+    expect(workspace).toHaveFocus()
+  })
+
   it("shows useful loading, empty, error, bounded debounced search, and filters", async () => {
     window.history.replaceState({}, "", "/admin/contatti")
     let resolveList: ((response: Response) => void) | undefined

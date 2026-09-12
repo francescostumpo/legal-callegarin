@@ -71,11 +71,13 @@ type handler struct {
 	trustedProxyHops int
 	limiter          *loginLimiter
 	template         *template.Template
+	loginStylesheet  string
 }
 
 type loginView struct {
-	Token string
-	Error string
+	Token      string
+	Error      string
+	Stylesheet string
 }
 
 func New(options Options) (http.Handler, error) {
@@ -107,6 +109,13 @@ func New(options Options) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("admin login template: %w", err)
 	}
+	loginStylesheet := ""
+	if options.Renderer != nil {
+		loginStylesheet, err = options.Renderer.PublicAssetURL("site.css")
+		if err != nil {
+			return nil, fmt.Errorf("admin login stylesheet: %w", err)
+		}
+	}
 	configuredUsernameKey := keyedValue(options.SessionKey, "callegarin/admin-login-username/v1", normalizeUsername(options.ConfiguredUsername))
 	instance := &handler{
 		credentials:      options.Credentials,
@@ -123,6 +132,7 @@ func New(options Options) (http.Handler, error) {
 		trustedProxyHops: options.TrustedProxyHops,
 		limiter:          newLoginLimiter(options.LoginCapacity, 3*time.Minute, time.Hour, options.MaxBuckets, configuredUsernameKey),
 		template:         loginTemplate,
+		loginStylesheet:  loginStylesheet,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /admin/login", instance.loginGET)
@@ -267,7 +277,7 @@ func (handler *handler) renderLogin(response http.ResponseWriter, status int, me
 	setPrivateAdminHeaders(response)
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	response.WriteHeader(status)
-	_ = handler.template.Execute(response, loginView{Token: handler.newFormToken(), Error: message})
+	_ = handler.template.Execute(response, loginView{Token: handler.newFormToken(), Error: message, Stylesheet: handler.loginStylesheet})
 }
 
 func serveAdminIndex(response http.ResponseWriter, index []byte) {
@@ -401,10 +411,10 @@ func setPrivateAdminHeaders(response http.ResponseWriter) {
 
 const loginPage = `<!doctype html>
 <html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Accesso amministrazione</title></head><body><main><h1>Accesso amministrazione</h1>
+<title>Accesso amministrazione</title>{{if .Stylesheet}}<link rel="stylesheet" href="{{.Stylesheet}}">{{end}}</head><body><main class="section shell reading-column"><h1>Accesso amministrazione</h1>
 {{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
-<form method="post" action="/admin/login">
+<form method="post" action="/admin/login"><div class="contact-form">
 <input type="hidden" name="started" value="{{.Token}}">
-<label>Nome utente <input name="username" autocomplete="username" maxlength="128" required></label>
-<label>Password <input type="password" name="password" autocomplete="current-password" maxlength="1024" required></label>
-<button type="submit">Accedi</button></form></main></body></html>`
+<label class="form-field">Nome utente <input name="username" autocomplete="username" maxlength="128" required></label>
+<label class="form-field">Password <input type="password" name="password" autocomplete="current-password" maxlength="1024" required></label>
+<button class="button button--primary" type="submit">Accedi</button></div></form></main></body></html>`

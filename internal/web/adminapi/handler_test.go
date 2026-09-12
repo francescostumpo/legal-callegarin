@@ -18,6 +18,8 @@ import (
 
 	"github.com/francescostumpo/legal-callegarin/internal/auth"
 	webmiddleware "github.com/francescostumpo/legal-callegarin/internal/web/middleware"
+	publicweb "github.com/francescostumpo/legal-callegarin/internal/web/public"
+	"github.com/francescostumpo/legal-callegarin/internal/webassets"
 )
 
 type verifierStub struct {
@@ -59,6 +61,28 @@ func TestLoginGETIsServerRenderedNoStoreAndSetsNoCookie(t *testing.T) {
 	}
 	if response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("X-Robots-Tag") != "noindex, nofollow" || response.Header().Get("Set-Cookie") != "" {
 		t.Fatalf("login headers = %#v at %v", response.Header(), now)
+	}
+}
+
+func TestLoginGETUsesSharedAccessibleFormStyles(t *testing.T) {
+	handler, _, _, _ := newTestHandler(t)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin/login", nil))
+	body := response.Body.String()
+
+	for _, want := range []string{
+		`<main class="section shell reading-column">`,
+		`<form method="post" action="/admin/login"><div class="contact-form">`,
+		`<label class="form-field">Nome utente`,
+		`<label class="form-field">Password`,
+		`<button class="button button--primary" type="submit">Accedi</button>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("login body missing %q: %q", want, body)
+		}
+	}
+	if !regexp.MustCompile(`<link rel="stylesheet" href="/assets/site-[0-9a-f]{12}\.css">`).MatchString(body) {
+		t.Fatalf("login body missing fingerprinted stylesheet: %q", body)
 	}
 }
 
@@ -316,10 +340,15 @@ func newTestHandler(t *testing.T) (http.Handler, *verifierStub, *sessionsStub, t
 		"admin/dist/assets/index-test.js": {Data: []byte("console.log('stub')")},
 	}
 	var assetFS fs.FS = assets
+	renderer, err := publicweb.NewRenderer(webassets.Files, "https://studio.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := New(Options{
 		Credentials:        verifier,
 		ConfiguredUsername: "admin",
 		Sessions:           sessions,
+		Renderer:           renderer,
 		Assets:             assetFS,
 		SessionKey:         []byte("0123456789abcdef0123456789abcdef"),
 		PublicBaseURL:      "https://studio.example.test",

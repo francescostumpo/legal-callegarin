@@ -44,6 +44,14 @@ type rendererOptions struct {
 
 type RendererOption func(*rendererOptions)
 
+// PublicAssetURL resolves a logical public asset name to its content-fingerprinted URL.
+func (renderer *Renderer) PublicAssetURL(logical string) (string, error) {
+	if renderer == nil || renderer.assets == nil {
+		return "", fmt.Errorf("public renderer is not initialized")
+	}
+	return renderer.assets.publicURL(logical)
+}
+
 func WithArticleReader(reader ArticleReader) RendererOption {
 	return func(options *rendererOptions) { options.articles = reader }
 }
