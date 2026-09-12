@@ -28,6 +28,23 @@ param additionalTags object = {}
 @description('Days to retain prior Blob versions and snapshots. Current blobs are never age-deleted.')
 param priorVersionRetentionDays int = 30
 
+@description('Email receiver for operational Azure Monitor alerts.')
+param alertEmailAddress string
+
+@minValue(30)
+@maxValue(730)
+@description('Log Analytics data retention in days.')
+param logRetentionDays int = 30
+
+@minValue(1)
+@maxValue(1024)
+@description('Rolling 24-hour billable log-usage alert threshold in MB.')
+param logUsageAlertThresholdMb int = 100
+
+@minValue(1)
+@description('Storage used-capacity alert threshold in bytes.')
+param storageUsedCapacityAlertThresholdBytes int = 5368709120
+
 @description('Immutable lowercase private GHCR image digest.')
 param imageReference string
 
@@ -68,6 +85,11 @@ var validatedProjectPrefix = empty(invalidProjectPrefixCharacters)
   ? projectPrefix
   : fail('projectPrefix must contain only lowercase letters and numbers.')
 var storageAccountName = '${validatedProjectPrefix}${environment}${uniqueString(resourceGroup().id)}'
+var logAnalyticsWorkspaceName = '${validatedProjectPrefix}-${environment}-logs'
+var actionGroupName = '${validatedProjectPrefix}-${environment}-ops'
+var actionGroupShortName = '${take(validatedProjectPrefix, 5)}${take(environment, 3)}ag'
+var storageUsedCapacityAlertName = '${validatedProjectPrefix}-${environment}-storage-capacity'
+var logUsageAlertName = '${validatedProjectPrefix}-${environment}-log-usage'
 var managedEnvironmentName = '${validatedProjectPrefix}-${environment}-env'
 var containerAppName = '${validatedProjectPrefix}-${environment}-app'
 
@@ -81,11 +103,30 @@ module storage './modules/storage.bicep' = {
   }
 }
 
+module observability './modules/observability.bicep' = {
+  name: 'observability'
+  params: {
+    location: location
+    logAnalyticsWorkspaceName: logAnalyticsWorkspaceName
+    actionGroupName: actionGroupName
+    actionGroupShortName: actionGroupShortName
+    alertEmailAddress: alertEmailAddress
+    storageAccountId: storage.outputs.storageAccountId
+    storageUsedCapacityAlertName: storageUsedCapacityAlertName
+    logUsageAlertName: logUsageAlertName
+    logRetentionDays: logRetentionDays
+    logUsageAlertThresholdMb: logUsageAlertThresholdMb
+    storageUsedCapacityAlertThresholdBytes: storageUsedCapacityAlertThresholdBytes
+    tags: commonTags
+  }
+}
+
 module platform './modules/platform.bicep' = {
   name: 'platform'
   params: {
     location: location
     managedEnvironmentName: managedEnvironmentName
+    logAnalyticsWorkspaceName: observability.outputs.logAnalyticsWorkspaceName
     tags: commonTags
   }
 }
@@ -124,6 +165,14 @@ output articlesTableName string = storage.outputs.articlesTableName
 output contactsTableName string = storage.outputs.contactsTableName
 output sessionsTableName string = storage.outputs.sessionsTableName
 output articleBodiesContainerName string = storage.outputs.articleBodiesContainerName
+output logAnalyticsWorkspaceId string = observability.outputs.logAnalyticsWorkspaceId
+output logAnalyticsWorkspaceName string = observability.outputs.logAnalyticsWorkspaceName
+output monitorActionGroupId string = observability.outputs.actionGroupId
+output monitorActionGroupName string = observability.outputs.actionGroupName
+output storageUsedCapacityAlertId string = observability.outputs.storageUsedCapacityAlertId
+output storageUsedCapacityAlertName string = observability.outputs.storageUsedCapacityAlertName
+output logUsageAlertId string = observability.outputs.logUsageAlertId
+output logUsageAlertName string = observability.outputs.logUsageAlertName
 output managedEnvironmentId string = platform.outputs.managedEnvironmentId
 output managedEnvironmentName string = platform.outputs.managedEnvironmentName
 output managedEnvironmentDefaultDomain string = platform.outputs.defaultDomain

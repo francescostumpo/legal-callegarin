@@ -78,15 +78,19 @@ test("the resource-group entry point has bounded deterministic naming and safe o
       "adminPasswordHash",
       "adminUsername",
       "additionalTags",
+      "alertEmailAddress",
       "environment",
       "ghcrToken",
       "ghcrUsername",
       "imageReference",
       "location",
+      "logRetentionDays",
+      "logUsageAlertThresholdMb",
       "priorVersionRetentionDays",
       "projectPrefix",
       "publicBaseUrl",
       "sessionKeyBase64",
+      "storageUsedCapacityAlertThresholdBytes",
     ].sort(),
   )
   assert.equal(template.parameters.location.defaultValue, "italynorth")
@@ -103,6 +107,28 @@ test("the resource-group entry point has bounded deterministic naming and safe o
   assert.equal(template.parameters.priorVersionRetentionDays.defaultValue, 30)
   assert.equal(template.parameters.priorVersionRetentionDays.minValue, 1)
   assert.equal(template.parameters.priorVersionRetentionDays.maxValue, 365)
+  assert.equal(template.parameters.alertEmailAddress.type, "string")
+  assert.equal("defaultValue" in template.parameters.alertEmailAddress, false)
+  assert.equal(template.parameters.logRetentionDays.type, "int")
+  assert.equal(template.parameters.logRetentionDays.defaultValue, 30)
+  assert.equal(template.parameters.logRetentionDays.minValue, 30)
+  assert.equal(template.parameters.logRetentionDays.maxValue, 730)
+  assert.equal(template.parameters.logUsageAlertThresholdMb.type, "int")
+  assert.equal(template.parameters.logUsageAlertThresholdMb.defaultValue, 100)
+  assert.equal(template.parameters.logUsageAlertThresholdMb.minValue, 1)
+  assert.equal(template.parameters.logUsageAlertThresholdMb.maxValue, 1024)
+  assert.equal(
+    template.parameters.storageUsedCapacityAlertThresholdBytes.type,
+    "int",
+  )
+  assert.equal(
+    template.parameters.storageUsedCapacityAlertThresholdBytes.defaultValue,
+    5368709120,
+  )
+  assert.equal(
+    template.parameters.storageUsedCapacityAlertThresholdBytes.minValue,
+    1,
+  )
 
   for (const parameter of [
     "ghcrToken",
@@ -136,6 +162,10 @@ test("the resource-group entry point has bounded deterministic naming and safe o
     /variables\('validatedProjectPrefix'\).*parameters\('environment'\).*uniqueString\(resourceGroup\(\)\.id\)/,
   )
   assert.equal(
+    template.variables.actionGroupShortName,
+    "[format('{0}{1}ag', take(variables('validatedProjectPrefix'), 5), take(parameters('environment'), 3))]",
+  )
+  assert.equal(
     deployment.properties.parameters.tags.value,
     "[variables('commonTags')]",
   )
@@ -160,7 +190,15 @@ test("the resource-group entry point has bounded deterministic naming and safe o
       "managedEnvironmentId",
       "managedEnvironmentName",
       "managedEnvironmentStaticIp",
+      "logAnalyticsWorkspaceId",
+      "logAnalyticsWorkspaceName",
+      "monitorActionGroupId",
+      "monitorActionGroupName",
+      "logUsageAlertId",
+      "logUsageAlertName",
       "sessionsTableName",
+      "storageUsedCapacityAlertId",
+      "storageUsedCapacityAlertName",
       "storageAccountId",
       "storageAccountName",
     ].sort(),
@@ -172,11 +210,179 @@ test("the resource-group entry point has bounded deterministic naming and safe o
   )
 })
 
-test("the platform module is a minimal stable Consumption environment", () => {
+test("the observability module has the exact bounded logging and alert contract", () => {
+  const template = compileBicep("infra/modules/observability.bicep")
+
+  assert.deepEqual(Object.keys(template.parameters).sort(), [
+    "actionGroupName",
+    "actionGroupShortName",
+    "alertEmailAddress",
+    "location",
+    "logAnalyticsWorkspaceName",
+    "logRetentionDays",
+    "logUsageAlertName",
+    "logUsageAlertThresholdMb",
+    "storageAccountId",
+    "storageUsedCapacityAlertName",
+    "storageUsedCapacityAlertThresholdBytes",
+    "tags",
+  ])
+  assert.equal(template.parameters.actionGroupShortName.maxLength, 12)
+  assert.equal(template.parameters.logRetentionDays.minValue, 30)
+  assert.equal(template.parameters.logRetentionDays.maxValue, 730)
+  assert.equal(template.parameters.logUsageAlertThresholdMb.minValue, 1)
+  assert.equal(template.parameters.logUsageAlertThresholdMb.maxValue, 1024)
+  assert.equal(
+    template.parameters.storageUsedCapacityAlertThresholdBytes.minValue,
+    1,
+  )
+
+  const workspace = oneResource(
+    template,
+    "Microsoft.OperationalInsights/workspaces",
+  )
+  assert.equal(workspace.apiVersion, "2025-07-01")
+  assert.equal(workspace.name, "[parameters('logAnalyticsWorkspaceName')]")
+  assert.equal(workspace.location, "[parameters('location')]")
+  assert.equal(workspace.tags, "[parameters('tags')]")
+  assert.deepEqual(workspace.properties, {
+    features: {
+      disableLocalAuth: false,
+      enableLogAccessUsingOnlyResourcePermissions: true,
+    },
+    publicNetworkAccessForIngestion: "Enabled",
+    publicNetworkAccessForQuery: "Enabled",
+    retentionInDays: "[parameters('logRetentionDays')]",
+    sku: { name: "PerGB2018" },
+    workspaceCapping: { dailyQuotaGb: 1 },
+  })
+
+  const actionGroup = oneResource(template, "Microsoft.Insights/actionGroups")
+  assert.equal(actionGroup.apiVersion, "2023-01-01")
+  assert.equal(actionGroup.location, "global")
+  assert.equal(actionGroup.tags, "[parameters('tags')]")
+  assert.deepEqual(actionGroup.properties, {
+    emailReceivers: [
+      {
+        emailAddress: "[parameters('alertEmailAddress')]",
+        name: "operational-alerts",
+        useCommonAlertSchema: true,
+      },
+    ],
+    enabled: true,
+    groupShortName: "[parameters('actionGroupShortName')]",
+  })
+
+  const capacityAlert = oneResource(template, "Microsoft.Insights/metricAlerts")
+  assert.equal(capacityAlert.apiVersion, "2026-01-01")
+  assert.equal(capacityAlert.location, "global")
+  assert.equal(capacityAlert.tags, "[parameters('tags')]")
+  assert.equal(capacityAlert.properties.enabled, true)
+  assert.equal(capacityAlert.properties.severity, 2)
+  assert.equal(capacityAlert.properties.autoMitigate, true)
+  assert.equal(capacityAlert.properties.evaluationFrequency, "PT1H")
+  assert.equal(capacityAlert.properties.windowSize, "PT1H")
+  assert.deepEqual(capacityAlert.properties.scopes, [
+    "[parameters('storageAccountId')]",
+  ])
+  assert.equal(
+    capacityAlert.properties.targetResourceType,
+    "Microsoft.Storage/storageAccounts",
+  )
+  assert.equal(
+    capacityAlert.properties.targetResourceRegion,
+    "[parameters('location')]",
+  )
+  assert.deepEqual(capacityAlert.properties.criteria, {
+    "odata.type":
+      "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+    allOf: [
+      {
+        criterionType: "StaticThresholdCriterion",
+        dimensions: [],
+        metricName: "UsedCapacity",
+        metricNamespace: "Microsoft.Storage/storageAccounts",
+        name: "UsedCapacity",
+        operator: "GreaterThan",
+        skipMetricValidation: false,
+        threshold: "[parameters('storageUsedCapacityAlertThresholdBytes')]",
+        timeAggregation: "Average",
+      },
+    ],
+  })
+
+  const logUsageAlert = oneResource(
+    template,
+    "Microsoft.Insights/scheduledQueryRules",
+  )
+  assert.equal(logUsageAlert.apiVersion, "2026-03-01")
+  assert.equal(logUsageAlert.location, "[parameters('location')]")
+  assert.equal(logUsageAlert.kind, "LogAlert")
+  assert.equal(logUsageAlert.tags, "[parameters('tags')]")
+  assert.equal(logUsageAlert.properties.enabled, true)
+  assert.equal(logUsageAlert.properties.severity, 2)
+  assert.equal(logUsageAlert.properties.autoMitigate, true)
+  assert.equal(logUsageAlert.properties.evaluationFrequency, "PT1H")
+  assert.equal(logUsageAlert.properties.windowSize, "P1D")
+  assert.deepEqual(logUsageAlert.properties.scopes, [
+    "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]",
+  ])
+  assert.deepEqual(logUsageAlert.properties.actions, {
+    actionGroups: [
+      "[resourceId('Microsoft.Insights/actionGroups', parameters('actionGroupName'))]",
+    ],
+  })
+  assert.equal(logUsageAlert.properties.criteria.allOf.length, 1)
+  const logCondition = logUsageAlert.properties.criteria.allOf[0]
+  assert.equal(logCondition.criterionType, "StaticThresholdCriterion")
+  assert.deepEqual(logCondition.dimensions, [])
+  assert.equal(logCondition.metricMeasureColumn, "BillableMb")
+  assert.equal(logCondition.operator, "GreaterThan")
+  assert.equal(
+    logCondition.threshold,
+    "[parameters('logUsageAlertThresholdMb')]",
+  )
+  assert.equal(logCondition.timeAggregation, "Total")
+  assert.deepEqual(logCondition.failingPeriods, {
+    minFailingPeriodsToAlert: 1,
+    numberOfEvaluationPeriods: 1,
+  })
+  assert.match(logCondition.query, /Usage\s*\n\s*\| where IsBillable == true/)
+  assert.match(logCondition.query, /summarize BillableMb = sum\(Quantity\)/)
+
+  const actionGroupId =
+    "[resourceId('Microsoft.Insights/actionGroups', parameters('actionGroupName'))]"
+  assert.deepEqual(capacityAlert.properties.actions, [{ actionGroupId }])
+  assert.deepEqual(outputNames(template), [
+    "actionGroupId",
+    "actionGroupName",
+    "logAnalyticsWorkspaceId",
+    "logAnalyticsWorkspaceName",
+    "logUsageAlertId",
+    "logUsageAlertName",
+    "storageUsedCapacityAlertId",
+    "storageUsedCapacityAlertName",
+  ])
+  assert.equal(resourcesOf(template).length, 4)
+
+  const serialized = JSON.stringify(template)
+  assert.doesNotMatch(
+    serialized,
+    /Microsoft\.Insights\/components|ApplicationInsights|browserTelemetry|clientAnalytics|UserAssigned|roleAssignments|budgets/i,
+  )
+  assert.doesNotMatch(serialized, /@(?:\d{4}-\d{2}-\d{2}-preview|preview)/i)
+  assert.doesNotMatch(
+    JSON.stringify(template.outputs),
+    /"(?:customerId|sharedKey|emailAddress|query|password|secret|token)"/i,
+  )
+})
+
+test("the platform module sends app logs to the workspace without a key parameter", () => {
   const template = compileBicep("infra/modules/platform.bicep")
 
   assert.deepEqual(Object.keys(template.parameters).sort(), [
     "location",
+    "logAnalyticsWorkspaceName",
     "managedEnvironmentName",
     "tags",
   ])
@@ -185,7 +391,17 @@ test("the platform module is a minimal stable Consumption environment", () => {
   assert.equal(environment.name, "[parameters('managedEnvironmentName')]")
   assert.equal(environment.location, "[parameters('location')]")
   assert.equal(environment.tags, "[parameters('tags')]")
-  assert.deepEqual(environment.properties, {})
+  assert.deepEqual(environment.properties, {
+    appLogsConfiguration: {
+      destination: "log-analytics",
+      logAnalyticsConfiguration: {
+        customerId:
+          "[reference(resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName')), '2025-07-01').customerId]",
+        sharedKey:
+          "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName')), '2025-07-01').primarySharedKey]",
+      },
+    },
+  })
   assert.equal(resourcesOf(template).length, 1)
   assert.deepEqual(outputNames(template), [
     "customDomainVerificationId",
@@ -196,9 +412,16 @@ test("the platform module is a minimal stable Consumption environment", () => {
   ])
 
   const serialized = JSON.stringify(template)
+  assert.equal(
+    serialized.split("listKeys(").length - 1,
+    1,
+    "the runtime ARM expression is the only workspace-key lookup",
+  )
+  assert.doesNotMatch(serialized, /"sharedKey":"\[parameters/i)
+  assert.doesNotMatch(serialized, /securestring/i)
   assert.doesNotMatch(
     serialized,
-    /logAnalytics|appLogsConfiguration|workloadProfiles|vnetConfiguration|dapr|zoneRedundant|privateEndpoint/i,
+    /workloadProfiles|vnetConfiguration|dapr|zoneRedundant|privateEndpoint/i,
   )
   assert.doesNotMatch(serialized, /@(?:\d{4}-\d{2}-\d{2}-preview|preview)/i)
 })
@@ -523,12 +746,31 @@ test("the identity module grants only the two required Storage data roles", () =
   assert.doesNotMatch(serialized, /@(?:\d{4}-\d{2}-\d{2}-preview|preview)/i)
 })
 
-test("main composes platform, app, and account-scoped identity without secret outputs", () => {
+test("main composes observability before platform without leaking operational secrets", () => {
   const template = compileBicep("infra/main.bicep")
+  const observability = deploymentByName(template, "observability")
   const platform = deploymentByName(template, "platform")
   const app = deploymentByName(template, "container-app")
   const identity = deploymentByName(template, "storage-identity")
 
+  assert.equal(
+    observability.properties.parameters.storageAccountId.value,
+    "[reference(resourceId('Microsoft.Resources/deployments', 'storage'), '2025-04-01').outputs.storageAccountId.value]",
+  )
+  assert.equal(
+    observability.properties.parameters.alertEmailAddress.value,
+    "[parameters('alertEmailAddress')]",
+  )
+  assert.equal(
+    platform.properties.parameters.logAnalyticsWorkspaceName.value,
+    "[reference(resourceId('Microsoft.Resources/deployments', 'observability'), '2025-04-01').outputs.logAnalyticsWorkspaceName.value]",
+  )
+  assert.deepEqual(observability.dependsOn, [
+    "[resourceId('Microsoft.Resources/deployments', 'storage')]",
+  ])
+  assert.deepEqual(platform.dependsOn, [
+    "[resourceId('Microsoft.Resources/deployments', 'observability')]",
+  ])
   assert.equal(
     app.properties.parameters.managedEnvironmentId.value,
     "[reference(resourceId('Microsoft.Resources/deployments', 'platform'), '2025-04-01').outputs.managedEnvironmentId.value]",
@@ -550,7 +792,17 @@ test("main composes platform, app, and account-scoped identity without secret ou
       .filter(({ type }) => type === "Microsoft.Resources/deployments")
       .map(({ name }) => name)
       .sort(),
-    ["container-app", "platform", "storage", "storage-identity"],
+    [
+      "container-app",
+      "observability",
+      "platform",
+      "storage",
+      "storage-identity",
+    ],
+  )
+  assert.deepEqual(
+    observability.properties.template,
+    compileBicep("infra/modules/observability.bicep"),
   )
   assert.deepEqual(
     platform.properties.template,
@@ -578,6 +830,10 @@ test("main composes platform, app, and account-scoped identity without secret ou
       "Microsoft.App/managedEnvironments@2026-01-01",
       "Microsoft.Authorization/roleAssignments@2022-04-01",
       "Microsoft.Authorization/roleAssignments@2022-04-01",
+      "Microsoft.Insights/actionGroups@2023-01-01",
+      "Microsoft.Insights/metricAlerts@2026-01-01",
+      "Microsoft.Insights/scheduledQueryRules@2026-03-01",
+      "Microsoft.OperationalInsights/workspaces@2025-07-01",
       "Microsoft.Storage/storageAccounts@2026-04-01",
       "Microsoft.Storage/storageAccounts/blobServices@2026-04-01",
       "Microsoft.Storage/storageAccounts/blobServices/containers@2026-04-01",
@@ -591,15 +847,16 @@ test("main composes platform, app, and account-scoped identity without secret ou
   const serialized = JSON.stringify(template)
   assert.doesNotMatch(
     serialized,
-    /Microsoft\.(?:OperationalInsights|Insights|ContainerRegistry|KeyVault|Sql|DocumentDB|Cache|Cdn|Network\/privateEndpoints)/i,
+    /Microsoft\.(?:Insights\/components|ContainerRegistry|KeyVault|Sql|DocumentDB|Cache|Cdn|Network\/privateEndpoints)/i,
   )
   assert.doesNotMatch(
     serialized,
-    /listKeys|connectionString|sharedAccessSignature|sasToken|UserAssigned|workloadProfiles|workloadProfileName|vnetConfiguration|zoneRedundant/i,
+    /connectionString|sharedAccessSignature|sasToken|UserAssigned|workloadProfiles|workloadProfileName|vnetConfiguration|zoneRedundant|browserTelemetry|clientAnalytics/i,
   )
+  assert.equal(serialized.split("listKeys(").length - 1, 1)
   assert.doesNotMatch(
     JSON.stringify(template.outputs),
-    /password|secret|token|hash/i,
+    /password|secret|token|hash|customerId|sharedKey|email|query/i,
   )
 })
 
