@@ -54,9 +54,10 @@ must provide `SESSION_KEY_BASE64`. Production additionally requires
 `PUBLIC_BASE_URL`, Azure storage mode and account URL, `ADMIN_USERNAME`,
 `ADMIN_PASSWORD_HASH`, and a base64 session key that decodes to at least 32
 bytes. No literal session-key fallback is accepted outside development.
-`TRUSTED_PROXY` defaults to `false` and accepts only the exact values `true` or
-`false`; enable it only when every direct request reaches the application
-through a trusted reverse proxy that replaces forwarding headers.
+`TRUSTED_PROXY_HOPS` defaults to `0` and accepts only canonical integer values
+from 0–3. In production behind Azure Container Apps, it must be exactly `1` so
+only the single platform proxy hop is trusted. The obsolete `TRUSTED_PROXY`
+variable is rejected.
 
 Generate the administrator password hash offline with `go run ./cmd/adminhash`.
 See [administrator password recovery](docs/password-recovery.md) for the safe
@@ -84,3 +85,14 @@ The deployment Bicep remains responsible for creating the `articles`,
 before the application revision starts. The connection-string development
 path provisions those resources explicitly for Azurite/local tests. Setting
 `ARTICLE_STORAGE_SCHEMA_MODE` with memory storage is rejected.
+
+## Azure deployment orientation
+
+Keep infrastructure bootstrap, the one-time custom-domain operation, and
+routine CI application rollouts separate. Start with the
+[Azure operations runbook](docs/operations.md), copy the reviewed
+[main parameter example](infra/main.example.bicepparam) to an ignored local
+file for bootstrap, and use the
+[custom-domain parameter example](infra/custom-domain.example.bicepparam) only
+for the DNS-verified domain phase. Routine CI rollouts are not full
+infrastructure deployments.

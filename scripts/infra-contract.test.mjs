@@ -813,6 +813,170 @@ test("the operations guide documents non-enforcing budget governance and fallbac
   assert.match(operations, /non sono state\s+eseguite dal Task 11C2/i)
 })
 
+test("the operations guide keeps domain operations explicit, complete, and secret-safe", () => {
+  const operations = readFileSync(
+    new URL("docs/operations.md", repositoryRoot),
+    "utf8",
+  )
+
+  assert.match(
+    operations,
+    /comandi.*operator-only.*non sono stati eseguiti dal Task 11/is,
+  )
+  assert.match(
+    operations,
+    /mutazione.*autorizzazione esplicita.*revisione.*ambito.*parametr/is,
+  )
+  assert.match(
+    operations,
+    /(?:un solo|esattamente un) gruppo di risorse.*Italy North/is,
+  )
+  assert.match(operations, /infra\/main\.local\.bicepparam/)
+  assert.match(operations, /infra\/main\.example\.bicepparam/)
+  assert.match(operations, /customDomainApex\s*=\s*''/)
+  assert.match(operations, /monthlyBudgetAmount\s*=\s*0/)
+  assert.match(
+    operations,
+    /GHCR_TOKEN.*ADMIN_PASSWORD_HASH.*SESSION_KEY_BASE64/is,
+  )
+  assert.match(
+    operations,
+    /mai.*(?:file|argomenti).*output.*log.*ticket.*chat/is,
+  )
+  assert.match(operations, /build-params[^\n]*--stdout[^\n]*>\/dev\/null/)
+  assert.match(operations, /infrastruttura iniziale.*permessi.*più ampi/is)
+  assert.match(operations, /rollout.*CI.*non.*deployment.*infrastruttur/is)
+
+  for (const record of [
+    /A\s*\|\s*`?@`?.*static IP/is,
+    /TXT\s*\|\s*`?asuid`?.*verification ID/is,
+    /CNAME\s*\|\s*`?www`?.*Container App FQDN/is,
+    /TXT\s*\|\s*`?asuid\.www`?.*verification ID/is,
+  ]) {
+    assert.match(operations, record)
+  }
+  assert.match(operations, /0 issue "digicert\.com"/)
+  assert.match(
+    operations,
+    /CNAME.*direttamente.*Container App FQDN.*(?:non|senza).*(?:proxy|intermediar)/is,
+  )
+  assert.match(operations, /manten.*(?:A|CNAME).*TXT.*CAA.*rinnov/is)
+  assert.match(operations, /dig @1\.1\.1\.1/)
+  assert.match(operations, /dig @8\.8\.8\.8/)
+  assert.match(operations, /più resolver.*prima.*custom-domain/is)
+  assert.match(
+    operations,
+    /DNS.*puntare.*Azure Container Apps.*prima.*certificat/is,
+  )
+  assert.match(operations, /Pending.*diversi minuti/is)
+
+  assert.match(operations, /infra\/custom-domain\.local\.bicepparam/)
+  assert.match(operations, /infra\/custom-domain\.example\.bicepparam/)
+  assert.match(
+    operations,
+    /digest.*GHCR.*admin.*sessione.*nomi.*origine canonica.*coincid/is,
+  )
+  assert.match(
+    operations,
+    /contratto completo.*valori obsoleti.*configurazione runtime/is,
+  )
+  assert.match(operations, /az bicep build --file infra\/custom-domain\.bicep/)
+  assert.match(operations, /az deployment group what-if/)
+  assert.match(operations, /az deployment group create/)
+
+  assert.match(operations, /provisioningState.*apex.*www.*Succeeded/is)
+  assert.match(operations, /SniEnabled.*apex.*www/is)
+  assert.match(operations, /TLS.*apex.*www/is)
+  assert.match(operations, /308.*percorso.*query/is)
+  assert.match(operations, /pagina pubblica.*Set-Cookie/is)
+  assert.match(operations, /browser privato.*login.*admin/is)
+  assert.match(operations, /\/health\/live.*\/health\/ready/is)
+  assert.match(operations, /subito.*apex.*infra\/main\.local\.bicepparam/is)
+  assert.match(
+    operations,
+    /futur.*main\.bicep.*non vuoto.*entrambi.*SNI.*due.*certificate ID/is,
+  )
+  assert.match(
+    operations,
+    /mai.*(?:riusare|usare).*bootstrap.*customDomainApex\s*=\s*''/is,
+  )
+
+  assert.match(
+    operations,
+    /Pending.*(?:A|CNAME).*TXT.*CAA.*propagazione.*idempotent/is,
+  )
+  assert.match(operations, /Disabled.*rimanere.*binding finale.*blocc/is)
+  assert.match(operations, /mai.*Container App PUT.*(?:scheletric|parziale)/is)
+  assert.match(
+    operations,
+    /mai.*(?:rimuovere|reindirizzare).*DNS.*TLS\s+sostitutivo.*pronto/is,
+  )
+  assert.match(
+    operations,
+    /rollback.*dominio.*deployment completo.*binding vuot/is,
+  )
+  assert.match(
+    operations,
+    /eliminazione.*certificat.*separata.*dopo.*binding.*rimoss/is,
+  )
+  assert.match(
+    operations,
+    /hostname.*generat.*ACA.*health.*percorso.*recupero/is,
+  )
+  assert.match(operations, /redirect.*host canonico.*rotte pubbliche/is)
+
+  assert.match(
+    operations,
+    /GHCR.*(?:solo|soltanto).*scope PAT.*`read:packages`.*rotazion/is,
+  )
+  assert.doesNotMatch(operations, /package-read/i)
+  assert.match(operations, /docs\/password-recovery\.md/)
+  assert.match(operations, /session-key.*invalida.*tutte.*session/is)
+  assert.match(
+    operations,
+    /stesso digest.*immutabile.*precedente revisione sana.*rollback/is,
+  )
+  assert.match(
+    operations,
+    /provider.*what-if.*issuance.*renewal.*propagazione\s+DNS.*TLS.*alert.*cost.*non verificat/is,
+  )
+
+  assert.doesNotMatch(
+    operations,
+    /--parameters\s+(?:ghcrToken|adminPasswordHash|sessionKeyBase64)\s*=/i,
+  )
+  assert.doesNotMatch(operations, /\bset\s+-x\b/)
+  assert.doesNotMatch(
+    operations,
+    /(?:echo|printf)[^\n]*(?:GHCR_TOKEN|ADMIN_PASSWORD_HASH|SESSION_KEY_BASE64)/i,
+  )
+  assert.doesNotMatch(operations, /az containerapp update|az resource update/i)
+  assert.doesNotMatch(
+    operations,
+    /Task 11 (?:ha|aveva) (?:eseguito|distribuito|deployato)/i,
+  )
+})
+
+test("README documents the bounded proxy contract and points to both deployment entry points", () => {
+  const readme = readFileSync(new URL("README.md", repositoryRoot), "utf8")
+
+  assert.match(readme, /TRUSTED_PROXY_HOPS.*(?:default|predefinit).*`0`/is)
+  assert.match(readme, /(?:interi canonici|canonical integer).*0[–-]3/is)
+  assert.match(
+    readme,
+    /(?:produzione|production).*Azure Container Apps.*(?:esattamente|exactly).*`1`/is,
+  )
+  assert.match(readme, /TRUSTED_PROXY.*obsolet.*(?:rifiutat|rejected)/is)
+  assert.match(readme, /docs\/operations\.md/)
+  assert.match(readme, /infra\/main\.example\.bicepparam/)
+  assert.match(readme, /infra\/custom-domain\.example\.bicepparam/)
+  assert.match(readme, /bootstrap.*(?:dominio|domain).*CI/is)
+  assert.doesNotMatch(
+    readme,
+    /`TRUSTED_PROXY` defaults to `false`|accepts only the exact values `true` or `false`/,
+  )
+})
+
 test("the observability module has the exact bounded logging and alert contract", () => {
   const template = compileBicep("infra/modules/observability.bicep")
 
