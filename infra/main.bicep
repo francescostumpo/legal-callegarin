@@ -45,6 +45,13 @@ param logUsageAlertThresholdMb int = 100
 @description('Storage used-capacity alert threshold in bytes.')
 param storageUsedCapacityAlertThresholdBytes int = 5368709120
 
+@minValue(0)
+@description('Optional monthly budget amount in the subscription billing currency. Zero disables creation.')
+param monthlyBudgetAmount int = 0
+
+@description('First UTC day of the current month used as the Azure budget start date.')
+param budgetStartDate string = '${utcNow('yyyy-MM')}-01T00:00:00Z'
+
 @description('Immutable lowercase private GHCR image digest.')
 param imageReference string
 
@@ -90,6 +97,7 @@ var actionGroupName = '${validatedProjectPrefix}-${environment}-ops'
 var actionGroupShortName = '${take(validatedProjectPrefix, 5)}${take(environment, 3)}ag'
 var storageUsedCapacityAlertName = '${validatedProjectPrefix}-${environment}-storage-capacity'
 var logUsageAlertName = '${validatedProjectPrefix}-${environment}-log-usage'
+var budgetName = '${validatedProjectPrefix}-${environment}-monthly-budget'
 var managedEnvironmentName = '${validatedProjectPrefix}-${environment}-env'
 var containerAppName = '${validatedProjectPrefix}-${environment}-app'
 
@@ -118,6 +126,16 @@ module observability './modules/observability.bicep' = {
     logUsageAlertThresholdMb: logUsageAlertThresholdMb
     storageUsedCapacityAlertThresholdBytes: storageUsedCapacityAlertThresholdBytes
     tags: commonTags
+  }
+}
+
+module cost './modules/cost.bicep' = {
+  name: 'cost'
+  params: {
+    monthlyBudgetAmount: monthlyBudgetAmount
+    budgetName: budgetName
+    budgetStartDate: budgetStartDate
+    actionGroupId: observability.outputs.actionGroupId
   }
 }
 
@@ -173,6 +191,7 @@ output storageUsedCapacityAlertId string = observability.outputs.storageUsedCapa
 output storageUsedCapacityAlertName string = observability.outputs.storageUsedCapacityAlertName
 output logUsageAlertId string = observability.outputs.logUsageAlertId
 output logUsageAlertName string = observability.outputs.logUsageAlertName
+output monthlyBudgetEnabled bool = cost.outputs.budgetEnabled
 output managedEnvironmentId string = platform.outputs.managedEnvironmentId
 output managedEnvironmentName string = platform.outputs.managedEnvironmentName
 output managedEnvironmentDefaultDomain string = platform.outputs.defaultDomain

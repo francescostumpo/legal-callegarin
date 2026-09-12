@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
+import { readFileSync } from "node:fs"
 import test from "node:test"
 
 const repositoryRoot = new URL("../", import.meta.url)
@@ -79,6 +80,7 @@ test("the resource-group entry point has bounded deterministic naming and safe o
       "adminUsername",
       "additionalTags",
       "alertEmailAddress",
+      "budgetStartDate",
       "environment",
       "ghcrToken",
       "ghcrUsername",
@@ -86,6 +88,7 @@ test("the resource-group entry point has bounded deterministic naming and safe o
       "location",
       "logRetentionDays",
       "logUsageAlertThresholdMb",
+      "monthlyBudgetAmount",
       "priorVersionRetentionDays",
       "projectPrefix",
       "publicBaseUrl",
@@ -129,6 +132,16 @@ test("the resource-group entry point has bounded deterministic naming and safe o
     template.parameters.storageUsedCapacityAlertThresholdBytes.minValue,
     1,
   )
+  assert.equal(template.parameters.monthlyBudgetAmount.type, "int")
+  assert.equal(template.parameters.monthlyBudgetAmount.defaultValue, 0)
+  assert.equal(template.parameters.monthlyBudgetAmount.minValue, 0)
+  assert.equal(template.parameters.budgetStartDate.type, "string")
+  assert.equal(
+    template.parameters.budgetStartDate.defaultValue,
+    "[format('{0}-01T00:00:00Z', utcNow('yyyy-MM'))]",
+  )
+  assert.equal(JSON.stringify(template).split("utcNow(").length - 1, 1)
+  assert.doesNotMatch(JSON.stringify(template.resources), /utcNow\(/)
 
   for (const parameter of [
     "ghcrToken",
@@ -166,6 +179,10 @@ test("the resource-group entry point has bounded deterministic naming and safe o
     "[format('{0}{1}ag', take(variables('validatedProjectPrefix'), 5), take(parameters('environment'), 3))]",
   )
   assert.equal(
+    template.variables.budgetName,
+    "[format('{0}-{1}-monthly-budget', variables('validatedProjectPrefix'), parameters('environment'))]",
+  )
+  assert.equal(
     deployment.properties.parameters.tags.value,
     "[variables('commonTags')]",
   )
@@ -194,6 +211,7 @@ test("the resource-group entry point has bounded deterministic naming and safe o
       "logAnalyticsWorkspaceName",
       "monitorActionGroupId",
       "monitorActionGroupName",
+      "monthlyBudgetEnabled",
       "logUsageAlertId",
       "logUsageAlertName",
       "sessionsTableName",
@@ -208,6 +226,100 @@ test("the resource-group entry point has bounded deterministic naming and safe o
     serializedOutputs,
     /listKeys|connectionString|sharedAccessSignature|sasToken|password|secret/i,
   )
+})
+
+test("the cost module conditionally creates one resource-group monthly budget", () => {
+  const template = compileBicep("infra/modules/cost.bicep")
+
+  assert.equal(
+    template.$schema,
+    "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  )
+  assert.deepEqual(Object.keys(template.parameters).sort(), [
+    "actionGroupId",
+    "budgetName",
+    "budgetStartDate",
+    "monthlyBudgetAmount",
+  ])
+  assert.equal(template.parameters.monthlyBudgetAmount.type, "int")
+  assert.equal(template.parameters.monthlyBudgetAmount.minValue, 0)
+  for (const parameter of Object.values(template.parameters)) {
+    assert.notEqual(parameter.type, "securestring")
+  }
+
+  const budget = oneResource(template, "Microsoft.Consumption/budgets")
+  assert.equal(resourcesOf(template).length, 1)
+  assert.equal(budget.apiVersion, "2024-08-01")
+  assert.equal(budget.name, "[parameters('budgetName')]")
+  assert.equal(
+    budget.condition,
+    "[greater(parameters('monthlyBudgetAmount'), 0)]",
+  )
+  assert.equal("scope" in budget, false)
+  assert.equal(budget.properties.amount, "[parameters('monthlyBudgetAmount')]")
+  assert.equal(budget.properties.category, "Cost")
+  assert.equal(budget.properties.timeGrain, "Monthly")
+  assert.deepEqual(budget.properties.timePeriod, {
+    startDate: "[parameters('budgetStartDate')]",
+  })
+  assert.equal("filter" in budget.properties, false)
+  assert.deepEqual(Object.keys(budget.properties.notifications), [
+    "Actual_GreaterThanOrEqualTo_80_Percent",
+  ])
+  assert.deepEqual(
+    budget.properties.notifications.Actual_GreaterThanOrEqualTo_80_Percent,
+    {
+      contactEmails: [],
+      contactGroups: ["[parameters('actionGroupId')]"],
+      contactRoles: [],
+      enabled: true,
+      locale: "it-it",
+      operator: "GreaterThanOrEqualTo",
+      threshold: 80,
+      thresholdType: "Actual",
+    },
+  )
+  assert.deepEqual(outputNames(template), ["budgetEnabled"])
+  assert.equal(template.outputs.budgetEnabled.type, "bool")
+  assert.equal(
+    template.outputs.budgetEnabled.value,
+    "[greater(parameters('monthlyBudgetAmount'), 0)]",
+  )
+
+  const serialized = JSON.stringify(template)
+  assert.doesNotMatch(serialized, /ResourceGroupName|contactEmails.+@/i)
+  assert.doesNotMatch(
+    serialized,
+    /Microsoft\.Authorization|roleAssignments|UserAssigned|securestring|@(?:\d{4}-\d{2}-\d{2}-preview|preview)/i,
+  )
+  assert.doesNotMatch(
+    JSON.stringify(template.outputs),
+    /"(?:budgetId|email|cost|amount|notification|billing|secret|token)"/i,
+  )
+})
+
+test("the operations guide documents non-enforcing budget governance and fallback", () => {
+  const operations = readFileSync(
+    new URL("docs/operations.md", repositoryRoot),
+    "utf8",
+  )
+
+  assert.match(operations, /monthlyBudgetAmount.*0/i)
+  assert.match(operations, /nessuna risorsa.*budget/i)
+  assert.match(operations, /Microsoft\.Consumption\/budgets\/write/)
+  assert.match(operations, /Cost Management\s+Contributor/)
+  assert.match(operations, /operatore.*autorizzat/i)
+  assert.match(operations, /non.*(?:arresta|ferma).*non.*scala.*non.*elimina/is)
+  assert.match(operations, /8[–-]24 ore/i)
+  assert.match(operations, /PAYG.*72 ore/is)
+  assert.match(operations, /nuov[oa] sottoscrizione.*48 ore/is)
+  assert.match(operations, /valuta di fatturazione/i)
+  assert.match(operations, /subscription.*scope/i)
+  assert.match(operations, /ResourceGroupName/)
+  assert.match(operations, /operator.*In/is)
+  assert.match(operations, /gruppo di risorse.*produzione/i)
+  assert.match(operations, /operator-only|solo l.operatore/i)
+  assert.match(operations, /non sono state\s+eseguite dal Task 11C2/i)
 })
 
 test("the observability module has the exact bounded logging and alert contract", () => {
@@ -748,11 +860,31 @@ test("the identity module grants only the two required Storage data roles", () =
 
 test("main composes observability before platform without leaking operational secrets", () => {
   const template = compileBicep("infra/main.bicep")
+  const cost = deploymentByName(template, "cost")
   const observability = deploymentByName(template, "observability")
   const platform = deploymentByName(template, "platform")
   const app = deploymentByName(template, "container-app")
   const identity = deploymentByName(template, "storage-identity")
 
+  assert.equal(
+    cost.properties.parameters.monthlyBudgetAmount.value,
+    "[parameters('monthlyBudgetAmount')]",
+  )
+  assert.equal(
+    cost.properties.parameters.budgetStartDate.value,
+    "[parameters('budgetStartDate')]",
+  )
+  assert.equal(
+    cost.properties.parameters.actionGroupId.value,
+    "[reference(resourceId('Microsoft.Resources/deployments', 'observability'), '2025-04-01').outputs.actionGroupId.value]",
+  )
+  assert.equal(
+    cost.properties.parameters.budgetName.value,
+    "[variables('budgetName')]",
+  )
+  assert.deepEqual(cost.dependsOn, [
+    "[resourceId('Microsoft.Resources/deployments', 'observability')]",
+  ])
   assert.equal(
     observability.properties.parameters.storageAccountId.value,
     "[reference(resourceId('Microsoft.Resources/deployments', 'storage'), '2025-04-01').outputs.storageAccountId.value]",
@@ -794,11 +926,16 @@ test("main composes observability before platform without leaking operational se
       .sort(),
     [
       "container-app",
+      "cost",
       "observability",
       "platform",
       "storage",
       "storage-identity",
     ],
+  )
+  assert.deepEqual(
+    cost.properties.template,
+    compileBicep("infra/modules/cost.bicep"),
   )
   assert.deepEqual(
     observability.properties.template,
@@ -830,6 +967,7 @@ test("main composes observability before platform without leaking operational se
       "Microsoft.App/managedEnvironments@2026-01-01",
       "Microsoft.Authorization/roleAssignments@2022-04-01",
       "Microsoft.Authorization/roleAssignments@2022-04-01",
+      "Microsoft.Consumption/budgets@2024-08-01",
       "Microsoft.Insights/actionGroups@2023-01-01",
       "Microsoft.Insights/metricAlerts@2026-01-01",
       "Microsoft.Insights/scheduledQueryRules@2026-03-01",
@@ -854,6 +992,10 @@ test("main composes observability before platform without leaking operational se
     /connectionString|sharedAccessSignature|sasToken|UserAssigned|workloadProfiles|workloadProfileName|vnetConfiguration|zoneRedundant|browserTelemetry|clientAnalytics/i,
   )
   assert.equal(serialized.split("listKeys(").length - 1, 1)
+  assert.equal(
+    template.outputs.monthlyBudgetEnabled.value,
+    "[reference(resourceId('Microsoft.Resources/deployments', 'cost'), '2025-04-01').outputs.budgetEnabled.value]",
+  )
   assert.doesNotMatch(
     JSON.stringify(template.outputs),
     /password|secret|token|hash|customerId|sharedKey|email|query/i,
