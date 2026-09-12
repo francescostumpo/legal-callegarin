@@ -352,6 +352,11 @@ test("article draft, preview, publication, conflict, and logout lifecycle", asyn
       await Promise.all([created, editorNavigation])
       articleID = createdArticleIDFromURL(page.url())
       expect(articleID).not.toBe("")
+      await expect(page.getByRole("status")).toHaveText(/^Bozza creata$/)
+      await expect(
+        page.getByRole("button", { name: "Salva bozza" }),
+      ).toBeEnabled()
+      await expect(page.getByRole("button", { name: "Pubblica" })).toBeEnabled()
       await expect(page.getByLabel("Titolo")).toHaveValue(v1Title)
       await expect(page.getByLabel("Copertina")).toHaveValue("article-notebook")
       await expect(editor).toHaveText(v1Body)

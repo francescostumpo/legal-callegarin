@@ -1275,6 +1275,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
         )
         allowNavigation.current = true
         setDirty(false)
+        setMessage("Bozza creata")
         navigate(`/articoli/${result.data.id}`, { replace: true })
       } else {
         const result = await client.fetchJSON<ArticleMutationDTO>(

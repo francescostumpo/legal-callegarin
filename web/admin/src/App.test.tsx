@@ -1266,6 +1266,9 @@ describe("article console", () => {
       await screen.findByRole("heading", { name: "Modifica articolo" }),
     ).toBeInTheDocument()
     expect(window.location.pathname).toBe("/admin/articoli/article-1")
+    expect(screen.getByRole("status")).toHaveTextContent(/^Bozza creata$/)
+    expect(screen.getByRole("button", { name: "Salva bozza" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Pubblica" })).toBeEnabled()
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     expect(window.localStorage.length).toBe(0)
     expect(window.sessionStorage.length).toBe(0)
