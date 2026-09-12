@@ -103,7 +103,7 @@ function createStatefulRunner(scenario, state, calls) {
         if (scenario === 'containers') containers.push({...containers[0],name:'sidecar'});
         if (scenario === 'container-name') containers[0].name = 'other';
         if (scenario === 'image') containers[0].image = 'ghcr.io/francescostumpo/legal-callegarin:latest';
-        return JSON.stringify({
+        const revisionDocument = {
           id:scenario === 'revision-id' ? `${revisionPath}-wrong` : revisionPath,
           name:revisionName,
           active:scenario === 'revision-active' ? false : true,
@@ -111,9 +111,11 @@ function createStatefulRunner(scenario, state, calls) {
           provisioningState:scenario === 'revision-provisioning' ? 'Failed' : 'Provisioned',
           runningState:scenario === 'revision-running' ? 'Stopped' : 'Running',
           fqdn:'callegarin--production.example.azurecontainerapps.io',
-          trafficWeight:100,
+          trafficWeight:scenario === 'revision-weight-null' ? null : 100,
           template:{containers},
-        });
+        };
+        if (scenario === 'revision-weight-omitted') delete revisionDocument.trafficWeight;
+        return JSON.stringify(revisionDocument);
       }
       throw new Error(`${label} failed`);
     }
@@ -255,6 +257,16 @@ test('multi-page dry-run is deterministic, accepts untagged versions, and never 
   assert.ok(pageGets[1][2].endsWith('state=active&per_page=100&page=2'));
   assert.ok(result.calls.every((call) => !call.includes(token)));
   assert.deepEqual(new Set(result.calls.filter((call)=>call[0]==='az'&&call[1]==='rest').map((call)=>call[call.indexOf('--query')+1])),new Set([appQuery,revisionQuery]));
+});
+
+test('app traffic remains authoritative when revision trafficWeight is null or omitted', () => {
+  for (const scenario of ['revision-weight-null','revision-weight-omitted']) {
+    const result = runCase(scenario);
+    assert.equal(result.status,0,`${scenario}: ${result.stderr}`);
+    assert.match(result.stdout,/versions=13/);
+    assert.match(result.stdout,/candidates=2/);
+    assert.equal(deletes(result).length,0);
+  }
 });
 
 test('apply revalidates Azure and snapshot before exact sequential deletes, then verifies final state', () => {

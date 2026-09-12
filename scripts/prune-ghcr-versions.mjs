@@ -175,10 +175,12 @@ function validateTraffic(traffic) {
 }
 
 function revisionDigest(revision, expectedId, revisionName, appName) {
-  exactKeys(revision, ['id','name','active','healthState','provisioningState','runningState','fqdn','trafficWeight','template'], 'revision projection');
+  const revisionKeys = ['id','name','active','healthState','provisioningState','runningState','fqdn','template'];
+  if (own(object(revision, 'revision projection'), 'trafficWeight')) revisionKeys.push('trafficWeight');
+  exactKeys(revision, revisionKeys, 'revision projection');
   if (typeof revision.id !== 'string' || revision.id.toLowerCase() !== expectedId.toLowerCase() || revision.name !== revisionName) fail('revision identity mismatch');
   if (revision.active !== true || revision.healthState !== 'Healthy' || revision.provisioningState !== 'Provisioned' || !['Running','ScaledToZero'].includes(revision.runningState)) fail('routed revision is not active, healthy, provisioned, and viable');
-  if (revision.trafficWeight !== 100 || typeof revision.fqdn !== 'string' || !fqdnPattern.test(revision.fqdn) || revision.fqdn.includes('..')) fail('routed revision traffic weight or FQDN is invalid');
+  if (typeof revision.fqdn !== 'string' || !fqdnPattern.test(revision.fqdn) || revision.fqdn.includes('..')) fail('routed revision FQDN is invalid');
   const template = object(revision.template, 'revision template');
   if (!Array.isArray(template.containers) || template.containers.length !== 1) fail('revision must contain exactly one container');
   const container = object(template.containers[0], 'revision container');
