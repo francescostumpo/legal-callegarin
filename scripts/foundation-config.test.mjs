@@ -142,7 +142,10 @@ test("the local container smoke is bounded, hardened, and cleans only its own co
   assert.match(script, /SMOKE_CONTAINER=legal-callegarin-smoke-\$\$/)
   assert.match(script, /SMOKE_CONTAINER_ID=$/m)
   assert.match(script, /SMOKE_COMMIT=\$\(git rev-parse HEAD\)/)
-  assert.match(script, /git status --porcelain --untracked-files=all/)
+  assert.match(
+    script,
+    /^SMOKE_STATUS=\$\(git status --porcelain --untracked-files=all\)$/m,
+  )
   assert.doesNotMatch(script, /9084831/)
   assert.match(
     script,
@@ -176,6 +179,9 @@ test("the local container smoke is bounded, hardened, and cleans only its own co
     /docker (?:system )?prune|docker rm -f \$\(|docker rm -f `|docker login|docker push/,
   )
   assert.match(script, /seq 1 60/)
+  assert.doesNotMatch(script, /http [^\n]*\|[ \t]*grep/)
+  assert.match(script, /http -fsS -o "\$SMOKE_DIR\/readiness"/)
+  assert.match(script, /grep -qx 'ok' "\$SMOKE_DIR\/readiness"/)
   for (const route of [
     "/health/live",
     "/health/ready",
@@ -215,6 +221,54 @@ test("the local container smoke is bounded, hardened, and cleans only its own co
     makefile,
     /^container-smoke:\n\t\.\/scripts\/container-smoke\.sh/m,
   )
+})
+
+test("the container smoke fails closed when Git status cannot prove cleanliness", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "legal-smoke-git-failure-"))
+  const fakeBin = join(directory, "bin")
+  const dockerLog = join(directory, "docker.log")
+  await mkdir(fakeBin)
+  await writeFile(
+    join(fakeBin, "git"),
+    `#!/bin/sh
+if [ "$1 $2" = "rev-parse HEAD" ]; then
+  echo 0123456789abcdef0123456789abcdef01234567
+  exit 0
+fi
+if [ "$1" = "status" ]; then exit 42; fi
+exit 43
+`,
+  )
+  await writeFile(
+    join(fakeBin, "docker"),
+    `#!/bin/sh
+echo called >> "$FAKE_DOCKER_LOG"
+exit 99
+`,
+  )
+  await Promise.all([
+    chmod(join(fakeBin, "git"), 0o755),
+    chmod(join(fakeBin, "docker"), 0o755),
+  ])
+  try {
+    const result = spawnSync(
+      "sh",
+      [new URL("container-smoke.sh", import.meta.url).pathname],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH}`,
+          FAKE_DOCKER_LOG: dockerLog,
+        },
+      },
+    )
+    assert.notEqual(result.status, 0)
+    const dockerCalls = await readFile(dockerLog, "utf8").catch(() => "")
+    assert.equal(dockerCalls, "")
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test("the article migration runbook fails closed on revision mode and legacy rows", async () => {

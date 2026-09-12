@@ -20,7 +20,8 @@ case "$SMOKE_COMMIT" in
     exit 1
     ;;
 esac
-if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+SMOKE_STATUS=$(git status --porcelain --untracked-files=all)
+if [ -n "$SMOKE_STATUS" ]; then
   echo "container smoke requires a clean Git worktree" >&2
   exit 1
 fi
@@ -74,7 +75,8 @@ fi
 ready_at=$(date +%s%3N)
 echo "cold_start_readiness_ms=$((ready_at - started_at))"
 
-http -fsS "$SMOKE_ORIGIN/health/ready" | grep -qx 'ok'
+http -fsS -o "$SMOKE_DIR/readiness" "$SMOKE_ORIGIN/health/ready"
+grep -qx 'ok' "$SMOKE_DIR/readiness"
 http -fsS -D "$SMOKE_DIR/public.headers" -o "$SMOKE_DIR/public.html" "$SMOKE_ORIGIN/"
 grep -qi '^Content-Security-Policy:' "$SMOKE_DIR/public.headers"
 grep -qi '^X-Content-Type-Options: nosniff' "$SMOKE_DIR/public.headers"
