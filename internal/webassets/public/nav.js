@@ -43,6 +43,7 @@ for (const navigation of navigations) {
 for (const form of document.querySelectorAll("[data-contact-form]")) {
   const feedback = form.querySelector("[data-contact-feedback]")
   const submitButton = form.querySelector('[type="submit"]')
+  const generatedFieldState = new Map()
   let submitting = false
   let activeRequest = null
 
@@ -54,6 +55,7 @@ for (const form of document.querySelectorAll("[data-contact-form]")) {
 
     submitting = true
     if (submitButton) submitButton.disabled = true
+    clearGeneratedValidation()
     if (feedback) {
       feedback.hidden = true
       feedback.removeAttribute("role")
@@ -95,7 +97,11 @@ for (const form of document.querySelectorAll("[data-contact-form]")) {
         return
       }
 
-      showContactError(payload?.error?.message)
+      if (payload?.error?.fields) {
+        showContactValidation(payload.error.message, payload.error.fields)
+      } else {
+        showContactError(payload?.error?.message)
+      }
     } catch (error) {
       if (error?.name === "AbortError") return
       showContactError(
@@ -115,5 +121,73 @@ for (const form of document.querySelectorAll("[data-contact-form]")) {
     feedback.hidden = false
     feedback.setAttribute("role", "alert")
     feedback.focus()
+  }
+
+  function showContactValidation(message, fields) {
+    if (!feedback) return
+    const errors = []
+    for (const fieldName of ["name", "email", "phone", "message", "privacy"]) {
+      const fieldMessage = fields[fieldName]
+      const control = form.elements.namedItem(fieldName)
+      if (typeof fieldMessage !== "string" || !fieldMessage || !control) {
+        continue
+      }
+
+      generatedFieldState.set(control, {
+        invalid: control.getAttribute("aria-invalid"),
+        describedBy: control.getAttribute("aria-describedby"),
+      })
+      const errorID = `contact-${fieldName}-error`
+      const descriptionIDs = new Set(
+        (control.getAttribute("aria-describedby") || "")
+          .split(/\s+/)
+          .filter(Boolean),
+      )
+      descriptionIDs.add(errorID)
+      control.setAttribute("aria-invalid", "true")
+      control.setAttribute("aria-describedby", [...descriptionIDs].join(" "))
+
+      const fieldError = document.createElement("p")
+      fieldError.id = errorID
+      fieldError.className = "field-error"
+      fieldError.dataset.contactGeneratedError = ""
+      fieldError.textContent = fieldMessage
+      control.closest(".form-field, .form-checkbox")?.append(fieldError)
+      errors.push({ fieldName, fieldMessage })
+    }
+
+    feedback.replaceChildren()
+    const heading = document.createElement("h3")
+    heading.textContent = message || "Controlla i dati inseriti."
+    feedback.append(heading)
+    if (errors.length > 0) {
+      const list = document.createElement("ul")
+      for (const error of errors) {
+        const item = document.createElement("li")
+        const link = document.createElement("a")
+        link.href = `#${error.fieldName}`
+        link.textContent = error.fieldMessage
+        item.append(link)
+        list.append(item)
+      }
+      feedback.append(list)
+    }
+    feedback.hidden = false
+    feedback.setAttribute("role", "alert")
+    feedback.focus()
+  }
+
+  function clearGeneratedValidation() {
+    form
+      .querySelectorAll("[data-contact-generated-error]")
+      .forEach((error) => error.remove())
+    for (const [control, state] of generatedFieldState) {
+      if (state.invalid === null) control.removeAttribute("aria-invalid")
+      else control.setAttribute("aria-invalid", state.invalid)
+      if (state.describedBy === null)
+        control.removeAttribute("aria-describedby")
+      else control.setAttribute("aria-describedby", state.describedBy)
+    }
+    generatedFieldState.clear()
   }
 }

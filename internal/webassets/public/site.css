@@ -306,6 +306,10 @@ h3 {
   display: inline-flex;
 }
 
+.js-enabled .mobile-navigation[open] > .navigation-toggle {
+  visibility: hidden;
+}
+
 .navigation-list {
   display: flex;
   flex-direction: column;
@@ -446,6 +450,7 @@ h3 {
 }
 
 .area-card__media img {
+  height: auto;
   object-fit: cover;
   transition: transform 500ms ease;
 }
@@ -634,6 +639,12 @@ h3 {
   padding-left: 1.25rem;
 }
 
+.error-page .content-section a {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+}
+
 .contact-layout {
   display: grid;
   gap: var(--space-6);
@@ -663,6 +674,12 @@ h3 {
 .form-field label,
 .form-checkbox label {
   font-weight: 650;
+}
+
+.form-checkbox label {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
 }
 
 .form-field label span,
@@ -743,6 +760,12 @@ h3 {
 .form-error-summary p,
 .form-success p {
   margin-bottom: 0;
+}
+
+.form-error-summary a {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
 }
 
 .form-honeypot {
@@ -867,6 +890,7 @@ h3 {
   }
 
   .navigation-list--desktop a {
+    min-width: 2.75rem;
     min-height: 2.75rem;
     border: 0;
     font-family: var(--font-body);

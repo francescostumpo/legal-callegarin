@@ -222,7 +222,12 @@ func TestStandaloneLinksMeetMinimumPointerTarget(t *testing.T) {
 		t.Fatalf("read site.css: %v", err)
 	}
 	css := string(cssBytes)
-	for _, selector := range []string{".area-card h3 a", ".site-footer nav a"} {
+	for _, selector := range []string{
+		".area-card h3 a",
+		".site-footer nav a",
+		".error-page .content-section a",
+		".form-error-summary a",
+	} {
 		assertCSSRuleContains(t, css, selector, "display: inline-flex", "min-height: 2.75rem", "align-items: center")
 	}
 }
@@ -253,6 +258,7 @@ func TestMobileCloseControlRequiresJavaScriptEnhancement(t *testing.T) {
 	css := string(cssBytes)
 	assertCSSRuleContains(t, css, ".mobile-navigation__close", "display: none")
 	assertCSSRuleContains(t, css, ".js-enabled .mobile-navigation__close", "display: inline-flex")
+	assertCSSRuleContains(t, css, ".js-enabled .mobile-navigation[open] > .navigation-toggle", "visibility: hidden")
 
 	navigationBytes, err := fs.ReadFile(webassets.Files, "public/nav.js")
 	if err != nil {

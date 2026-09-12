@@ -11,15 +11,81 @@ const source = await readFile(
 function page() {
   return new JSDOM(
     `<!doctype html><form data-contact-form action="/contatti" method="post">
-      <input name="name" value="Mario Rossi"><input name="email" value="mario@example.test">
-      <input name="phone" value=""><textarea name="message">Messaggio sufficientemente lungo</textarea>
-      <input name="privacy" type="checkbox" value="accepted" checked>
+      <div class="form-field"><label for="name">Nome e cognome</label><input id="name" name="name" value="Mario Rossi"></div>
+      <div class="form-field"><label for="email">Email</label><input id="email" name="email" value="mario@example.test"></div>
+      <div class="form-field"><label for="phone">Telefono</label><input id="phone" name="phone" value=""></div>
+      <div class="form-field"><label for="message">Messaggio</label><textarea id="message" name="message" aria-describedby="message-help">Messaggio sufficientemente lungo</textarea><p id="message-help">Aiuto esistente</p></div>
+      <div class="form-checkbox"><input id="privacy" name="privacy" type="checkbox" value="accepted" checked><label for="privacy">Privacy</label></div>
       <input name="website" value=""><input name="started" value="signed-time">
       <button type="submit">Invia</button><div data-contact-feedback></div>
     </form>`,
     { url: "https://studio.example.test/contatti", runScripts: "outside-only" },
   )
 }
+
+test("contact enhancement exposes field validation and clears only generated state before retry", async () => {
+  const dom = page()
+  const responses = [
+    {
+      ok: false,
+      json: async () => ({
+        error: {
+          code: "contact_validation",
+          message: "Controlla i dati inseriti.",
+          fields: {
+            name: "Inserisci un nome valido.",
+            email: "Inserisci un indirizzo email valido.",
+            message: "Inserisci un messaggio più lungo.",
+            privacy: "Conferma la privacy.",
+          },
+        },
+      }),
+    },
+    new Promise(() => {}),
+  ]
+  dom.window.fetch = () => responses.shift()
+  dom.window.eval(source)
+  const form = dom.window.document.querySelector("form")
+
+  form.dispatchEvent(
+    new dom.window.Event("submit", { bubbles: true, cancelable: true }),
+  )
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 0))
+
+  const feedback = form.querySelector("[data-contact-feedback]")
+  assert.equal(feedback.getAttribute("role"), "alert")
+  assert.match(feedback.textContent, /controlla i dati inseriti/i)
+  assert.equal(feedback.querySelectorAll('a[href^="#"]').length, 4)
+  for (const field of ["name", "email", "message", "privacy"]) {
+    const control = form.elements[field]
+    const describedBy = control.getAttribute("aria-describedby")
+    assert.equal(control.getAttribute("aria-invalid"), "true", field)
+    assert.match(describedBy, new RegExp(`contact-${field}-error`), field)
+    const error = form.querySelector(`#contact-${field}-error`)
+    assert.equal(error?.hasAttribute("data-contact-generated-error"), true)
+  }
+  assert.match(
+    form.elements.message.getAttribute("aria-describedby"),
+    /message-help/,
+  )
+  assert.equal(form.elements.name.value, "Mario Rossi")
+  assert.equal(form.elements.email.value, "mario@example.test")
+
+  form.dispatchEvent(
+    new dom.window.Event("submit", { bubbles: true, cancelable: true }),
+  )
+  assert.equal(
+    form.querySelectorAll("[data-contact-generated-error]").length,
+    0,
+  )
+  assert.equal(form.elements.name.hasAttribute("aria-invalid"), false)
+  assert.equal(form.elements.name.hasAttribute("aria-describedby"), false)
+  assert.equal(
+    form.elements.message.getAttribute("aria-describedby"),
+    "message-help",
+  )
+  assert.equal(form.elements.name.value, "Mario Rossi")
+})
 
 test("contact enhancement retains DOM values on recoverable failure and prevents double submit", async () => {
   const dom = page()
