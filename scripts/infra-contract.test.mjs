@@ -5,6 +5,12 @@ import test from "node:test"
 
 const repositoryRoot = new URL("../", import.meta.url)
 const compiledTemplates = new Map()
+const parameterEnvironment = {
+  ...process.env,
+  GHCR_TOKEN: "sentinel-ghcr-token",
+  ADMIN_PASSWORD_HASH: "sentinel-argon2id-hash",
+  SESSION_KEY_BASE64: "sentinel-session-key",
+}
 
 function compileBicep(path) {
   if (compiledTemplates.has(path)) {
@@ -29,6 +35,26 @@ function compileBicep(path) {
   const template = JSON.parse(result.stdout)
   compiledTemplates.set(path, template)
   return template
+}
+
+function compileBicepParameters(path) {
+  const result = spawnSync(
+    "az",
+    ["bicep", "build-params", "--file", path, "--stdout"],
+    {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: parameterEnvironment,
+    },
+  )
+
+  assert.equal(
+    result.status,
+    0,
+    `az bicep build-params failed for ${path}:\n${result.stderr}`,
+  )
+  assert.equal(result.stderr, "", `Bicep emitted warnings for ${path}`)
+  return JSON.parse(result.stdout)
 }
 
 function resourcesOf(template) {
@@ -81,6 +107,7 @@ test("the resource-group entry point has bounded deterministic naming and safe o
       "additionalTags",
       "alertEmailAddress",
       "budgetStartDate",
+      "customDomainApex",
       "environment",
       "ghcrToken",
       "ghcrUsername",
@@ -98,6 +125,7 @@ test("the resource-group entry point has bounded deterministic naming and safe o
   )
   assert.equal(template.parameters.location.defaultValue, "italynorth")
   assert.deepEqual(template.parameters.location.allowedValues, ["italynorth"])
+  assert.equal("defaultValue" in template.parameters.customDomainApex, false)
   assert.equal(template.parameters.projectPrefix.minLength, 2)
   assert.equal(template.parameters.projectPrefix.maxLength, 6)
   assert.deepEqual(template.parameters.environment.allowedValues, [
@@ -202,6 +230,14 @@ test("the resource-group entry point has bounded deterministic naming and safe o
       "articlesTableName",
       "blobOrigin",
       "contactsTableName",
+      "dnsApexAHost",
+      "dnsApexAValue",
+      "dnsApexTxtHost",
+      "dnsApexTxtValue",
+      "dnsWwwCnameHost",
+      "dnsWwwCnameValue",
+      "dnsWwwTxtHost",
+      "dnsWwwTxtValue",
       "managedEnvironmentCustomDomainVerificationId",
       "managedEnvironmentDefaultDomain",
       "managedEnvironmentId",
@@ -226,6 +262,461 @@ test("the resource-group entry point has bounded deterministic naming and safe o
     serializedOutputs,
     /listKeys|connectionString|sharedAccessSignature|sasToken|password|secret/i,
   )
+})
+
+test("main validates and durably preserves an optional apex plus www binding", () => {
+  const template = compileBicep("infra/main.bicep")
+  const app = deploymentByName(template, "container-app")
+
+  assert.equal(template.parameters.customDomainApex.type, "string")
+  assert.equal("defaultValue" in template.parameters.customDomainApex, false)
+  assert.equal(
+    template.variables.allowedDomainCharacters,
+    "abcdefghijklmnopqrstuvwxyz0123456789.-",
+  )
+  assert.equal(
+    template.variables.domainAlphaNumericCharacters,
+    "abcdefghijklmnopqrstuvwxyz0123456789",
+  )
+  assert.deepEqual(template.variables.malformedDomainBoundaryPairs, [
+    "..",
+    ".-",
+    "-.",
+  ])
+  assert.match(template.variables.customDomainLabels, /split\(/)
+  assert.match(template.variables.customDomainLabelsAreValid, /filter\(/)
+  assert.match(template.variables.customDomainLabelsAreValid, /greater\(/)
+  assert.match(template.variables.customDomainLabelsAreValid, /63/)
+  assert.match(template.variables.invalidCustomDomainCharacters, /filter\(/)
+  assert.match(template.variables.customDomainBoundaryIsValid, /substring\(/)
+  assert.match(template.variables.customDomainSeparatorsAreValid, /filter\(/)
+  assert.match(template.variables.customDomainApexIsValid, /lessOrEquals\(/)
+  assert.match(template.variables.customDomainApexIsValid, /trim\(/)
+  assert.match(template.variables.customDomainApexIsValid, /toLower\(/)
+  assert.match(template.variables.customDomainApexIsValid, /contains\(/)
+  assert.match(template.variables.customDomainApexIsValid, /startsWith\(/)
+  assert.match(
+    template.variables.customDomainApexIsValid,
+    /variables\('customDomainLabelsAreValid'\)/,
+  )
+  assert.match(
+    template.variables.publicBaseUrlMatchesCustomDomain,
+    /https:\/\//,
+  )
+  assert.match(
+    template.variables.validatedCustomDomainApex,
+    /fail\('customDomainApex must be empty for bootstrap or a valid apex whose canonical publicBaseUrl is the apex or www HTTPS origin\.'\)/,
+  )
+  assert.equal(
+    template.variables.wwwDomain,
+    "[format('www.{0}', variables('validatedCustomDomainApex'))]",
+  )
+  assert.equal(
+    template.variables.apexCertificateId,
+    "[resourceId('Microsoft.App/managedEnvironments/managedCertificates', variables('managedEnvironmentName'), variables('apexCertificateName'))]",
+  )
+  assert.equal(
+    template.variables.wwwCertificateId,
+    "[resourceId('Microsoft.App/managedEnvironments/managedCertificates', variables('managedEnvironmentName'), variables('wwwCertificateName'))]",
+  )
+  assert.equal(
+    template.variables.customDomains,
+    "[if(empty(variables('validatedCustomDomainApex')), createArray(), createArray(createObject('name', variables('validatedCustomDomainApex'), 'bindingType', 'SniEnabled', 'certificateId', variables('apexCertificateId')), createObject('name', variables('wwwDomain'), 'bindingType', 'SniEnabled', 'certificateId', variables('wwwCertificateId'))))]",
+  )
+  assert.equal(
+    app.properties.parameters.customDomains.value,
+    "[variables('customDomains')]",
+  )
+
+  assert.equal(template.outputs.dnsApexAHost.value, "@")
+  assert.equal(
+    template.outputs.dnsApexAValue.value,
+    "[reference(resourceId('Microsoft.Resources/deployments', 'platform'), '2025-04-01').outputs.staticIp.value]",
+  )
+  assert.equal(template.outputs.dnsApexTxtHost.value, "asuid")
+  assert.equal(
+    template.outputs.dnsApexTxtValue.value,
+    "[reference(resourceId('Microsoft.Resources/deployments', 'platform'), '2025-04-01').outputs.customDomainVerificationId.value]",
+  )
+  assert.equal(template.outputs.dnsWwwCnameHost.value, "www")
+  assert.equal(
+    template.outputs.dnsWwwCnameValue.value,
+    "[reference(resourceId('Microsoft.Resources/deployments', 'container-app'), '2025-04-01').outputs.containerAppFqdn.value]",
+  )
+  assert.equal(template.outputs.dnsWwwTxtHost.value, "asuid.www")
+  assert.equal(
+    template.outputs.dnsWwwTxtValue.value,
+    template.outputs.dnsApexTxtValue.value,
+  )
+  assert.notEqual(
+    template.outputs.dnsWwwCnameValue.value,
+    template.outputs.managedEnvironmentDefaultDomain.value,
+  )
+
+  const domainContractAccepts = (apex, publicBaseUrl) => {
+    const labels = apex.split(".")
+    return (
+      apex.length > 0 &&
+      apex.length <= 253 &&
+      apex === apex.trim() &&
+      apex === apex.toLowerCase() &&
+      Array.from(apex).every((character) =>
+        template.variables.allowedDomainCharacters.includes(character),
+      ) &&
+      apex.includes(".") &&
+      template.variables.domainAlphaNumericCharacters.includes(apex[0]) &&
+      template.variables.domainAlphaNumericCharacters.includes(apex.at(-1)) &&
+      !template.variables.malformedDomainBoundaryPairs.some((pair) =>
+        apex.includes(pair),
+      ) &&
+      labels.every((label) => label.length > 0 && label.length <= 63) &&
+      !apex.startsWith("www.") &&
+      [`https://${apex}`, `https://www.${apex}`].includes(publicBaseUrl)
+    )
+  }
+
+  assert.equal(
+    domainContractAccepts(
+      "studiolegalecallegarin.it",
+      "https://studiolegalecallegarin.it",
+    ),
+    true,
+  )
+  const sixtyThreeCharacterLabel = "a".repeat(63)
+  assert.equal(
+    domainContractAccepts(
+      `${sixtyThreeCharacterLabel}.it`,
+      `https://${sixtyThreeCharacterLabel}.it`,
+    ),
+    true,
+  )
+  const sixtyFourCharacterLabel = "a".repeat(64)
+  assert.equal(
+    domainContractAccepts(
+      `${sixtyFourCharacterLabel}.it`,
+      `https://${sixtyFourCharacterLabel}.it`,
+    ),
+    false,
+  )
+  for (const [apex, publicBaseUrl] of [
+    ["studio..it", "https://studio..it"],
+    ["-studio.it", "https://-studio.it"],
+    ["studio-.it", "https://studio-.it"],
+    ["Studio.it", "https://Studio.it"],
+    ["www.studio.it", "https://www.studio.it"],
+    [
+      `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.it`,
+      `https://${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.it`,
+    ],
+    ["studio.it", "https://different.it"],
+  ]) {
+    assert.equal(domainContractAccepts(apex, publicBaseUrl), false)
+  }
+})
+
+test("the custom-domain entry point performs two complete app writes around two managed certificates", () => {
+  const template = compileBicep("infra/custom-domain.bicep")
+  const mainTemplate = compileBicep("infra/main.bicep")
+  assert.deepEqual(Object.keys(template.parameters).sort(), [
+    "additionalTags",
+    "adminPasswordHash",
+    "adminUsername",
+    "customDomainApex",
+    "environment",
+    "ghcrToken",
+    "ghcrUsername",
+    "imageReference",
+    "location",
+    "projectPrefix",
+    "publicBaseUrl",
+    "sessionKeyBase64",
+  ])
+  assert.equal(template.parameters.location.defaultValue, "italynorth")
+  assert.deepEqual(template.parameters.location.allowedValues, ["italynorth"])
+  for (const parameter of [
+    "ghcrToken",
+    "adminPasswordHash",
+    "sessionKeyBase64",
+  ]) {
+    assert.equal(template.parameters[parameter].type, "securestring")
+    assert.equal("defaultValue" in template.parameters[parameter], false)
+  }
+  for (const variable of [
+    "storageAccountName",
+    "managedEnvironmentName",
+    "containerAppName",
+    "apexCertificateName",
+    "wwwCertificateName",
+    "allowedDomainCharacters",
+    "domainAlphaNumericCharacters",
+    "malformedDomainBoundaryPairs",
+    "customDomainLabels",
+    "customDomainLabelsAreValid",
+    "invalidCustomDomainCharacters",
+    "customDomainBoundaryIsValid",
+    "customDomainSeparatorsAreValid",
+    "customDomainApexIsValid",
+    "publicBaseUrlMatchesCustomDomain",
+  ]) {
+    assert.deepEqual(
+      template.variables[variable],
+      mainTemplate.variables[variable],
+      `${variable} must match main's durable validation contract`,
+    )
+  }
+  assert.equal(
+    template.variables.customDomainConfigurationIsValid,
+    "[and(variables('customDomainApexIsValid'), variables('publicBaseUrlMatchesCustomDomain'))]",
+  )
+  assert.match(
+    template.variables.validatedCustomDomainApex,
+    /fail\('customDomainApex must be a nonempty valid apex/,
+  )
+
+  const validationApp = deploymentByName(template, "domain-validation-app")
+  const securedApp = deploymentByName(template, "domain-bound-app")
+  const certificates = resourcesOf(template).filter(
+    ({ type }) =>
+      type === "Microsoft.App/managedEnvironments/managedCertificates",
+  )
+  assert.equal(certificates.length, 2)
+  assert.deepEqual(
+    resourcesOf(template).filter(
+      ({ type }) => type === "Microsoft.App/containerApps",
+    ),
+    [],
+  )
+  assert.deepEqual(
+    validationApp.properties.template,
+    compileBicep("infra/modules/container-app.bicep"),
+  )
+  assert.deepEqual(
+    securedApp.properties.template,
+    compileBicep("infra/modules/container-app.bicep"),
+  )
+  assert.equal(
+    validationApp.properties.parameters.customDomains.value,
+    "[variables('validationCustomDomains')]",
+  )
+  assert.equal(
+    securedApp.properties.parameters.customDomains.value,
+    "[variables('securedCustomDomains')]",
+  )
+  assert.deepEqual(template.variables.validationCustomDomains, [
+    {
+      name: "[variables('validatedCustomDomainApex')]",
+      bindingType: "Disabled",
+    },
+    { name: "[variables('wwwDomain')]", bindingType: "Disabled" },
+  ])
+  assert.deepEqual(template.variables.securedCustomDomains, [
+    {
+      name: "[variables('validatedCustomDomainApex')]",
+      bindingType: "SniEnabled",
+      certificateId:
+        "[resourceId('Microsoft.App/managedEnvironments/managedCertificates', variables('managedEnvironmentName'), variables('apexCertificateName'))]",
+    },
+    {
+      name: "[variables('wwwDomain')]",
+      bindingType: "SniEnabled",
+      certificateId:
+        "[resourceId('Microsoft.App/managedEnvironments/managedCertificates', variables('managedEnvironmentName'), variables('wwwCertificateName'))]",
+    },
+  ])
+
+  const apexCertificate = certificates.find(
+    ({ properties }) => properties.domainControlValidation === "HTTP",
+  )
+  const wwwCertificate = certificates.find(
+    ({ properties }) => properties.domainControlValidation === "CNAME",
+  )
+  assert.ok(apexCertificate)
+  assert.ok(wwwCertificate)
+  assert.equal(apexCertificate.apiVersion, "2026-01-01")
+  assert.equal(wwwCertificate.apiVersion, "2026-01-01")
+  assert.equal(
+    apexCertificate.name,
+    "[format('{0}/{1}', variables('managedEnvironmentName'), variables('apexCertificateName'))]",
+  )
+  assert.equal(
+    wwwCertificate.name,
+    "[format('{0}/{1}', variables('managedEnvironmentName'), variables('wwwCertificateName'))]",
+  )
+  assert.equal(
+    apexCertificate.properties.subjectName,
+    "[variables('validatedCustomDomainApex')]",
+  )
+  assert.equal(
+    wwwCertificate.properties.subjectName,
+    "[variables('wwwDomain')]",
+  )
+  for (const certificate of certificates) {
+    assert.deepEqual(certificate.dependsOn, [
+      "[resourceId('Microsoft.Resources/deployments', 'domain-validation-app')]",
+    ])
+    assert.match(certificate.name, /managedEnvironmentName/)
+  }
+  assert.deepEqual(securedApp.dependsOn.sort(), [
+    "[resourceId('Microsoft.App/managedEnvironments/managedCertificates', variables('managedEnvironmentName'), variables('apexCertificateName'))]",
+    "[resourceId('Microsoft.App/managedEnvironments/managedCertificates', variables('managedEnvironmentName'), variables('wwwCertificateName'))]",
+  ])
+
+  for (const deployment of [validationApp, securedApp]) {
+    assert.deepEqual(Object.keys(deployment.properties.parameters).sort(), [
+      "adminPasswordHash",
+      "adminUsername",
+      "azureStorageAccountUrl",
+      "containerAppName",
+      "customDomains",
+      "ghcrToken",
+      "ghcrUsername",
+      "imageReference",
+      "location",
+      "managedEnvironmentId",
+      "publicBaseUrl",
+      "sessionKeyBase64",
+      "tags",
+    ])
+    assert.equal(
+      deployment.properties.parameters.containerAppName.value,
+      "[variables('containerAppName')]",
+    )
+    assert.equal(
+      deployment.properties.parameters.managedEnvironmentId.value,
+      "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+    )
+    assert.equal(
+      deployment.properties.parameters.azureStorageAccountUrl.value,
+      "[variables('blobOrigin')]",
+    )
+    for (const parameter of [
+      "adminPasswordHash",
+      "adminUsername",
+      "ghcrToken",
+      "ghcrUsername",
+      "imageReference",
+      "location",
+      "publicBaseUrl",
+      "sessionKeyBase64",
+    ]) {
+      assert.equal(
+        deployment.properties.parameters[parameter].value,
+        `[parameters('${parameter}')]`,
+      )
+    }
+    assert.equal(
+      deployment.properties.parameters.tags.value,
+      "[variables('commonTags')]",
+    )
+  }
+  assert.match(
+    template.variables.blobOrigin,
+    /environment\(\)\.suffixes\.storage/,
+  )
+  assert.doesNotMatch(
+    JSON.stringify(template.outputs),
+    /password|secret|token|hash|registry|admin|session/i,
+  )
+  assert.deepEqual(
+    outputNames(template),
+    [
+      "apexCertificateId",
+      "apexCertificateName",
+      "containerAppFqdn",
+      "containerAppName",
+      "customDomainApex",
+      "dnsApexAHost",
+      "dnsApexAValue",
+      "dnsApexTxtHost",
+      "dnsApexTxtValue",
+      "dnsWwwCnameHost",
+      "dnsWwwCnameValue",
+      "dnsWwwTxtHost",
+      "dnsWwwTxtValue",
+      "wwwCertificateId",
+      "wwwCertificateName",
+      "wwwDomain",
+    ].sort(),
+  )
+  assert.deepEqual(
+    allResources(template)
+      .map(({ type, apiVersion }) => `${type}@${apiVersion}`)
+      .sort(),
+    [
+      "Microsoft.App/containerApps@2026-01-01",
+      "Microsoft.App/containerApps@2026-01-01",
+      "Microsoft.App/managedEnvironments/managedCertificates@2026-01-01",
+      "Microsoft.App/managedEnvironments/managedCertificates@2026-01-01",
+      "Microsoft.Resources/deployments@2025-04-01",
+      "Microsoft.Resources/deployments@2025-04-01",
+    ].sort(),
+  )
+  assert.doesNotMatch(
+    JSON.stringify(template),
+    /@(?:\d{4}-\d{2}-\d{2}-preview|preview)/i,
+  )
+  assert.doesNotMatch(
+    JSON.stringify(template),
+    /Microsoft\.(?:Network\/dnsZones|Authorization\/roleAssignments|ContainerRegistry|KeyVault|Insights\/components)/i,
+  )
+})
+
+test("example parameter files use only three secret environment reads and compile in memory", () => {
+  const examples = [
+    "infra/main.example.bicepparam",
+    "infra/custom-domain.example.bicepparam",
+  ]
+  const expectedReads = [
+    "ADMIN_PASSWORD_HASH",
+    "GHCR_TOKEN",
+    "SESSION_KEY_BASE64",
+  ]
+
+  for (const path of examples) {
+    const source = readFileSync(new URL(path, repositoryRoot), "utf8")
+    const readCalls = Array.from(
+      source.matchAll(/readEnvironmentVariable\(([^)]*)\)/g),
+    )
+    assert.equal(readCalls.length, 3)
+    const reads = readCalls
+      .map((match) => {
+        assert.match(match[1], /^'[A-Z0-9_]+'$/)
+        return match[1].slice(1, -1)
+      })
+      .sort()
+    assert.deepEqual(reads, expectedReads)
+    const imageReference = source.match(/param imageReference = '([^']+)'/)?.[1]
+    assert.match(
+      imageReference,
+      /^ghcr\.io\/example\/legal-callegarin@sha256:[0-9a-f]{64}$/,
+    )
+    const compiled = compileBicepParameters(path)
+    assert.deepEqual(Object.keys(compiled).sort(), [
+      "parametersJson",
+      "templateJson",
+      "templateSpecId",
+    ])
+    assert.equal(typeof compiled.parametersJson, "string")
+    assert.equal(typeof compiled.templateJson, "string")
+    assert.equal(compiled.templateSpecId, null)
+  }
+
+  const mainSource = readFileSync(
+    new URL("infra/main.example.bicepparam", repositoryRoot),
+    "utf8",
+  )
+  assert.match(mainSource, /param customDomainApex = ''/)
+  assert.match(mainSource, /param monthlyBudgetAmount = 0/)
+  assert.match(mainSource, /param alertEmailAddress = 'ops@example\.com'/)
+  const customSource = readFileSync(
+    new URL("infra/custom-domain.example.bicepparam", repositoryRoot),
+    "utf8",
+  )
+  assert.match(customSource, /param customDomainApex = 'example\.com'/)
+  assert.match(customSource, /param publicBaseUrl = 'https:\/\/example\.com'/)
+
+  const gitignore = readFileSync(new URL(".gitignore", repositoryRoot), "utf8")
+  assert.match(gitignore, /^infra\/\*\.local\.bicepparam$/m)
 })
 
 test("the cost module conditionally creates one resource-group monthly budget", () => {

@@ -78,6 +78,9 @@ param sessionKeyBase64 string
 @description('Canonical public HTTPS origin without a trailing slash.')
 param publicBaseUrl string
 
+@description('Apex custom domain. Use an empty string only for the initial pre-DNS bootstrap deployment.')
+param customDomainApex string
+
 var commonTags = union(additionalTags, {
   project: projectPrefix
   environment: environment
@@ -100,6 +103,60 @@ var logUsageAlertName = '${validatedProjectPrefix}-${environment}-log-usage'
 var budgetName = '${validatedProjectPrefix}-${environment}-monthly-budget'
 var managedEnvironmentName = '${validatedProjectPrefix}-${environment}-env'
 var containerAppName = '${validatedProjectPrefix}-${environment}-app'
+var apexCertificateName = '${validatedProjectPrefix}-${environment}-apex-cert'
+var wwwCertificateName = '${validatedProjectPrefix}-${environment}-www-cert'
+var allowedDomainCharacters = 'abcdefghijklmnopqrstuvwxyz0123456789.-'
+var domainAlphaNumericCharacters = 'abcdefghijklmnopqrstuvwxyz0123456789'
+var malformedDomainBoundaryPairs = [
+  '..'
+  '.-'
+  '-.'
+]
+var customDomainLabels = split(customDomainApex, '.')
+var customDomainLabelsAreValid = empty(filter(
+  customDomainLabels,
+  label => empty(label) || length(label) > 63
+))
+var invalidCustomDomainCharacters = filter(
+  map(range(0, length(customDomainApex)), index => substring(customDomainApex, index, 1)),
+  character => !contains(allowedDomainCharacters, character)
+)
+var customDomainBoundaryIsValid = empty(customDomainApex) ? false : contains(domainAlphaNumericCharacters, substring(customDomainApex, 0, 1)) && contains(domainAlphaNumericCharacters, substring(customDomainApex, max(0, length(customDomainApex) - 1), 1))
+var customDomainSeparatorsAreValid = empty(filter(
+  malformedDomainBoundaryPairs,
+  pair => contains(customDomainApex, pair)
+))
+var customDomainApexIsValid = !empty(customDomainApex) && length(customDomainApex) <= 253 && customDomainApex == trim(customDomainApex) && customDomainApex == toLower(customDomainApex) && empty(invalidCustomDomainCharacters) && contains(customDomainApex, '.') && customDomainBoundaryIsValid && customDomainSeparatorsAreValid && customDomainLabelsAreValid && !startsWith(customDomainApex, 'www.')
+var publicBaseUrlMatchesCustomDomain = publicBaseUrl == 'https://${customDomainApex}' || publicBaseUrl == 'https://www.${customDomainApex}'
+var customDomainConfigurationIsValid = empty(customDomainApex) || (customDomainApexIsValid && publicBaseUrlMatchesCustomDomain)
+var validatedCustomDomainApex = customDomainConfigurationIsValid
+  ? customDomainApex
+  : fail('customDomainApex must be empty for bootstrap or a valid apex whose canonical publicBaseUrl is the apex or www HTTPS origin.')
+var wwwDomain = 'www.${validatedCustomDomainApex}'
+var apexCertificateId = resourceId(
+  'Microsoft.App/managedEnvironments/managedCertificates',
+  managedEnvironmentName,
+  apexCertificateName
+)
+var wwwCertificateId = resourceId(
+  'Microsoft.App/managedEnvironments/managedCertificates',
+  managedEnvironmentName,
+  wwwCertificateName
+)
+var customDomains = empty(validatedCustomDomainApex)
+  ? []
+  : [
+      {
+        name: validatedCustomDomainApex
+        bindingType: 'SniEnabled'
+        certificateId: apexCertificateId
+      }
+      {
+        name: wwwDomain
+        bindingType: 'SniEnabled'
+        certificateId: wwwCertificateId
+      }
+    ]
 
 module storage './modules/storage.bicep' = {
   name: 'storage'
@@ -164,7 +221,7 @@ module containerApp './modules/container-app.bicep' = {
     sessionKeyBase64: sessionKeyBase64
     publicBaseUrl: publicBaseUrl
     azureStorageAccountUrl: storage.outputs.blobOrigin
-    customDomains: []
+    customDomains: customDomains
   }
 }
 
@@ -201,3 +258,11 @@ output containerAppId string = containerApp.outputs.containerAppId
 output containerAppName string = containerApp.outputs.containerAppName
 output containerAppFqdn string = containerApp.outputs.containerAppFqdn
 output containerAppPrincipalId string = containerApp.outputs.principalId
+output dnsApexAHost string = '@'
+output dnsApexAValue string = platform.outputs.staticIp
+output dnsApexTxtHost string = 'asuid'
+output dnsApexTxtValue string = platform.outputs.customDomainVerificationId
+output dnsWwwCnameHost string = 'www'
+output dnsWwwCnameValue string = containerApp.outputs.containerAppFqdn
+output dnsWwwTxtHost string = 'asuid.www'
+output dnsWwwTxtValue string = platform.outputs.customDomainVerificationId
