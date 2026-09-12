@@ -45,19 +45,22 @@ func NewSessionService(repository SessionRepository, username, credentialVersion
 // Create returns the only copy of the raw bearer token. Repositories receive
 // only its SHA-256 digest.
 func (service *SessionService) Create(ctx context.Context) (string, Session, error) {
+	now := service.now().UTC()
+	if _, err := service.repository.DeleteExpired(ctx, now); err != nil {
+		return "", Session{}, err
+	}
 	for range maxTokenCollisions {
 		rawBytes := make([]byte, sessionTokenByteCount)
 		if _, err := io.ReadFull(service.random, rawBytes); err != nil {
 			return "", Session{}, fmt.Errorf("create session: obtain token: %w", err)
 		}
 		raw := base64.RawURLEncoding.EncodeToString(rawBytes)
-		createdAt := service.now().UTC()
 		session := Session{
 			TokenHash:         hashSessionToken(raw),
 			Username:          service.username,
 			CredentialVersion: service.credentialVersion,
-			CreatedAt:         createdAt,
-			ExpiresAt:         createdAt.Add(sessionLifetime),
+			CreatedAt:         now,
+			ExpiresAt:         now.Add(sessionLifetime),
 		}
 		if err := service.repository.Create(ctx, session); err != nil {
 			if errors.Is(err, ErrConflict) {
