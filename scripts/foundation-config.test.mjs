@@ -58,6 +58,153 @@ test("the frontend formatter is pinned and ordered after npm ci", async () => {
   assert.ok(typecheckIndex > formatIndex)
 })
 
+test("the container build uses three immutable, exact toolchain stages", async () => {
+  const dockerfile = await readRepositoryFile("Dockerfile")
+  const fromLines = dockerfile.match(/^FROM .+$/gm) ?? []
+
+  assert.deepEqual(fromLines, [
+    "FROM node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS frontend",
+    "FROM golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS builder",
+    "FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS runtime",
+  ])
+  assert.match(dockerfile, /^COPY package\.json package-lock\.json \.\/$/m)
+  assert.match(dockerfile, /^RUN npm ci$/m)
+  assert.match(dockerfile, /^RUN npm run build$/m)
+  assert.match(dockerfile, /^COPY go\.mod go\.sum \.\/$/m)
+  assert.match(
+    dockerfile,
+    /COPY --from=frontend \/app\/internal\/webassets\/admin\/dist \.\/internal\/webassets\/admin\/dist/,
+  )
+  assert.ok(
+    dockerfile.indexOf("COPY --from=frontend") <
+      dockerfile.indexOf("RUN CGO_ENABLED=0 GOOS=linux"),
+  )
+  assert.match(
+    dockerfile,
+    /^RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main\.buildVersion=\$\{VERSION\} -X main\.buildCommit=\$\{COMMIT\}" -o \/out\/legal-callegarin \.\/cmd\/web$/m,
+  )
+  assert.deepEqual(dockerfile.match(/^ARG .+$/gm), [
+    "ARG VERSION",
+    "ARG COMMIT",
+  ])
+  assert.doesNotMatch(
+    dockerfile,
+    /ARG .*?(?:SECRET|PASSWORD|TOKEN|KEY)|ENV .*?(?:SECRET|PASSWORD|TOKEN|KEY)/i,
+  )
+  assert.match(
+    dockerfile,
+    /^COPY --from=builder \/out\/legal-callegarin \/legal-callegarin$/m,
+  )
+  assert.match(dockerfile, /^USER 65532:65532$/m)
+  assert.match(dockerfile, /^EXPOSE 8080$/m)
+  assert.match(dockerfile, /^ENTRYPOINT \["\/legal-callegarin"\]$/m)
+  assert.doesNotMatch(dockerfile, /^HEALTHCHECK/m)
+
+  const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf("FROM "))
+  assert.equal((runtimeStage.match(/^COPY /gm) ?? []).length, 1)
+})
+
+test("the Docker context excludes local, generated, secret, and unrelated files", async () => {
+  const dockerignore = await readRepositoryFile(".dockerignore")
+  for (const pattern of [
+    ".git",
+    ".worktrees",
+    ".superpowers",
+    ".env",
+    ".env.*",
+    "node_modules",
+    "internal/webassets/admin/dist",
+    "bin",
+    "coverage",
+    "docs",
+    "**/*_test.go",
+    "**/*.test.*",
+  ]) {
+    assert.match(
+      dockerignore,
+      new RegExp(
+        `^${pattern.replaceAll(".", "\\.").replaceAll("*", ".*")}$`,
+        "m",
+      ),
+    )
+  }
+  assert.doesNotMatch(dockerignore, /^package(?:-lock)?\.json$/m)
+  assert.doesNotMatch(dockerignore, /^go\.(?:mod|sum)$/m)
+})
+
+test("the local container smoke is bounded, hardened, and cleans only its own container", async () => {
+  const [script, makefile] = await Promise.all([
+    readRepositoryFile("scripts/container-smoke.sh"),
+    readRepositoryFile("Makefile"),
+  ])
+
+  assert.match(script, /^set -eu$/m)
+  assert.match(script, /SMOKE_CONTAINER=legal-callegarin-smoke/)
+  assert.match(
+    script,
+    /docker build .*--build-arg VERSION=local-test .*--build-arg COMMIT=9084831/,
+  )
+  assert.match(
+    script,
+    /docker run[\s\S]*--read-only[\s\S]*--cap-drop ALL[\s\S]*--security-opt no-new-privileges/,
+  )
+  assert.match(script, /-p 127\.0\.0\.1:18080:8080/)
+  assert.match(script, /APP_ENV=development/)
+  assert.match(script, /STORAGE_MODE=memory/)
+  assert.match(script, /ADMIN_USERNAME=smoke-admin/)
+  assert.match(script, /SMOKE_PASSWORD=smoke-password-non-production/)
+  assert.match(script, /ADMIN_PASSWORD_HASH=/)
+  assert.match(script, /SESSION_KEY_BASE64=/)
+  assert.match(script, /PUBLIC_BASE_URL=\$SMOKE_ORIGIN/)
+  assert.match(script, /trap cleanup EXIT INT TERM/)
+  assert.match(script, /docker rm -f "\$SMOKE_CONTAINER"/)
+  assert.ok(
+    script.indexOf('docker container inspect "$SMOKE_CONTAINER"') <
+      script.indexOf("trap cleanup EXIT INT TERM"),
+    "cleanup trap must not own a pre-existing container",
+  )
+  assert.doesNotMatch(
+    script,
+    /docker (?:system )?prune|docker rm -f \$\(|docker rm -f `|docker login|docker push/,
+  )
+  assert.match(script, /seq 1 60/)
+  for (const route of [
+    "/health/live",
+    "/health/ready",
+    "/",
+    "/admin/login",
+    "/api/admin/session",
+  ]) {
+    assert.ok(script.includes(route), `missing smoke route ${route}`)
+  }
+  assert.match(script, /grep -q '\"code\":\"authentication_required\"'/)
+  assert.doesNotMatch(script, /\"code\":\"unauthenticated\"/)
+  assert.match(script, /Content-Security-Policy/i)
+  assert.match(script, /Strict-Transport-Security/i)
+  assert.match(script, /Referrer-Policy/i)
+  assert.match(script, /Permissions-Policy/i)
+  assert.match(script, /X-Frame-Options/i)
+  assert.match(script, /Set-Cookie/i)
+  assert.match(script, /public_asset=.*site-\[0-9a-f\]/)
+  assert.match(script, /curl -fsS "\$SMOKE_ORIGIN\$public_asset"/)
+  assert.doesNotMatch(script, /curl -fsS "\$SMOKE_ORIGIN\/assets\/site\.css"/)
+  assert.match(script, /started=.*name="started"/)
+  assert.match(script, /test "\$login_status" = 303/)
+  assert.match(script, /session_cookie=.*Set-Cookie/)
+  assert.match(script, /admin_asset=.*\/admin\/assets\/index-/)
+  assert.match(
+    script,
+    /curl -fsS -H "Cookie: \$session_cookie" "\$SMOKE_ORIGIN\$admin_asset"/,
+  )
+  assert.match(script, /\"requestId\":\"\[\^\"\]\+\"/)
+  assert.match(script, /\"fields\":\{\}/)
+  assert.match(script, /docker stop .*"\$SMOKE_CONTAINER"/)
+  assert.match(
+    makefile,
+    /^container-smoke:\n\t\.\/scripts\/container-smoke\.sh/m,
+  )
+})
+
 test("the article migration runbook fails closed on revision mode and legacy rows", async () => {
   const [runbook, rolloutScript] = await Promise.all([
     readRepositoryFile("docs/article-storage-rollout.md"),

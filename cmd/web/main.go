@@ -22,6 +22,13 @@ import (
 
 const shutdownTimeout = 20 * time.Second
 
+const maxBuildMetadataLength = 64
+
+var (
+	buildVersion = "development"
+	buildCommit  = "unknown"
+)
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -142,8 +149,32 @@ func newHTTPServer(cfg config.Config, handler http.Handler, logger *slog.Logger)
 
 func serveHTTP(ctx context.Context, cfg config.Config, handler http.Handler, logger *slog.Logger) error {
 	server := newHTTPServer(cfg, handler, logger)
-	logger.Info("web server starting", "event", "server_starting")
+	logServerStarting(logger, buildVersion, buildCommit)
 	return serveServer(ctx, server, logger)
+}
+
+func logServerStarting(logger *slog.Logger, version, commit string) {
+	logger.Info("web server starting",
+		"event", "server_starting",
+		"version", safeBuildMetadata(version, "development"),
+		"commit", safeBuildMetadata(commit, "unknown"),
+	)
+}
+
+func safeBuildMetadata(value, fallback string) string {
+	if value == "" || len(value) > maxBuildMetadataLength {
+		return fallback
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '.' || character == '_' || character == '+' || character == '-' {
+			continue
+		}
+		return fallback
+	}
+	return value
 }
 
 type httpServerRuntime interface {

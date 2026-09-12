@@ -1,4 +1,4 @@
-.PHONY: build check
+.PHONY: build check container-smoke
 
 build:
 	npm run build
@@ -22,3 +22,6 @@ check:
 	npm run typecheck
 	npm test -- --run
 	npm run build
+
+container-smoke:
+	./scripts/container-smoke.sh

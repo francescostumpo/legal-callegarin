@@ -3,18 +3,89 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/francescostumpo/legal-callegarin/internal/app"
 	"github.com/francescostumpo/legal-callegarin/internal/config"
 	storagebundle "github.com/francescostumpo/legal-callegarin/internal/storage"
 	azurestorage "github.com/francescostumpo/legal-callegarin/internal/storage/azure"
 	memorystorage "github.com/francescostumpo/legal-callegarin/internal/storage/memory"
+	"github.com/francescostumpo/legal-callegarin/internal/webassets"
 )
+
+func TestBuildMetadataIsBoundedAndSafe(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, value, fallback, want string
+	}{
+		{name: "version", value: "release-2026.09.12+1", fallback: "development", want: "release-2026.09.12+1"},
+		{name: "commit", value: "9084831", fallback: "unknown", want: "9084831"},
+		{name: "empty", value: "", fallback: "unknown", want: "unknown"},
+		{name: "newline", value: "safe\nsecret", fallback: "unknown", want: "unknown"},
+		{name: "space", value: "not safe", fallback: "unknown", want: "unknown"},
+		{name: "too long", value: strings.Repeat("a", 65), fallback: "unknown", want: "unknown"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := safeBuildMetadata(testCase.value, testCase.fallback); got != testCase.want {
+				t.Fatalf("safeBuildMetadata(%q) = %q, want %q", testCase.value, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestStartupLogContainsOnlySanitizedBuildMetadata(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	logServerStarting(logger, "local-test", "9084831\nSESSION_KEY_BASE64=secret")
+
+	var record map[string]any
+	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+		t.Fatalf("decode startup log: %v", err)
+	}
+	if record["event"] != "server_starting" || record["version"] != "local-test" || record["commit"] != "unknown" {
+		t.Fatalf("startup metadata = %#v", record)
+	}
+	if strings.Contains(output.String(), "SESSION_KEY_BASE64") || strings.Contains(output.String(), "secret") {
+		t.Fatalf("startup log leaked invalid metadata: %s", output.String())
+	}
+}
+
+func TestBuildMetadataHasNoPublicHTTPEndpoint(t *testing.T) {
+	t.Parallel()
+
+	handler, err := app.New(app.Options{
+		Config: config.Config{
+			Environment: "test", StorageMode: "memory", PublicBaseURL: "https://studio.example.test",
+			SessionKey: []byte("0123456789abcdef0123456789abcdef"),
+		},
+		Assets: webassets.Files,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/version", "/debug/version", "/api/version"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test"+path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("GET %s status = %d, want 404", path, response.Code)
+		}
+		if strings.Contains(response.Body.String(), "local-test") || strings.Contains(response.Body.String(), "9084831") {
+			t.Fatalf("GET %s exposed build metadata", path)
+		}
+	}
+}
 
 func TestAzureStartupDispatchesSchemaModeBeforeOpen(t *testing.T) {
 	t.Parallel()
