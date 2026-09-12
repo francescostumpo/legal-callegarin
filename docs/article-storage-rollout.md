@@ -12,7 +12,8 @@ The commands below are an operator runbook. Tasks 11–13 must wire the exact
 resource names, deployment workflow gates, and post-deploy checks into Bicep
 and CI before production use. Run all blocks in one POSIX shell session. Every
 block repeats `set -eu`; when starting a new shell, rerun the variables block
-so its placeholders and `assert_no_legacy_article_rows` function are defined.
+so its placeholders and rollout-script path are defined. Run the commands from
+the repository root at the exact Git commit recorded in the change ticket.
 
 ## Variables and rollback floor
 
@@ -27,23 +28,8 @@ RESOURCE_GROUP='<resource-group>'
 CONTAINER_APP='<container-app>'
 STORAGE_ACCOUNT='<storage-account>'
 IMAGE_DIGEST='ghcr.io/<owner>/<package>@sha256:<digest>'
-
-assert_no_legacy_article_rows() {
-  LEGACY_COUNT="$(
-    az storage entity query \
-      --account-name "$STORAGE_ACCOUNT" \
-      --auth-mode login \
-      --table-name articles \
-      --filter "PartitionKey eq 'articles' and entityType eq 'article'" \
-      --select RowKey id \
-      --query 'length(items[?id == `null` || RowKey == id])' \
-      --output tsv
-  )"
-  test "$LEGACY_COUNT" = 0 || {
-    printf 'legacy article rows remain: %s\n' "$LEGACY_COUNT" >&2
-    exit 1
-  }
-}
+ROLLOUT_SCRIPT='./scripts/article-storage-rollout.sh'
+test -r "$ROLLOUT_SCRIPT"
 
 az containerapp show \
   --resource-group "$RESOURCE_GROUP" \
@@ -236,7 +222,7 @@ az storage entity query \
   --select RowKey id createdAt status \
   --output json
 
-assert_no_legacy_article_rows
+sh "$ROLLOUT_SCRIPT" assert-no-legacy
 ```
 
 Compare the logical article count with the count recorded before migration and
@@ -265,84 +251,60 @@ in Container Apps, because it can create legacy rows behind the marker.
 
 `repair` is deliberately a downtime procedure. Do not delete or edit the
 migration marker. First quiesce all writers by deactivating every active
-revision and verify the active-revision query returns no entries. Wait at least
-the application write timeout (30 seconds) for in-flight requests to finish.
+revision, verify a fresh active-revision query returns zero, and wait the full
+30-second application write timeout for in-flight requests to finish. The
+versioned rollout script performs that sequence and will not accept a shorter
+drain interval:
 
 ```bash
 set -eu
 
-az containerapp revision list \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$CONTAINER_APP" \
-  --query '[?properties.active].name' \
-  --output tsv
-
-az containerapp revision deactivate \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$CONTAINER_APP" \
-  --revision '<each-active-revision-name>'
-
-az containerapp update \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$CONTAINER_APP" \
-  --image "$IMAGE_DIGEST" \
-  --set-env-vars ARTICLE_STORAGE_SCHEMA_MODE=repair
+REPAIR_REVISION="$(
+  sh "$ROLLOUT_SCRIPT" quiesce-and-create-repair
+)"
+printf 'verified repair revision: %s\n' "$REPAIR_REVISION"
 ```
+
+`quiesce-and-create-repair` obtains every active revision name and deactivates
+each exact name. It then makes a new count query and aborts before both the
+drain and update unless that count is zero. Only after `sleep 30` does it create
+the repair revision, list revisions for operator observation, select the exact
+generated revision, and require `healthState=Healthy`, the exact
+`IMAGE_DIGEST`, and `ARTICLE_STORAGE_SCHEMA_MODE=repair` before returning its
+name. Under `set -eu`, a failed command substitution stops this runbook.
 
 The repair revision ignores the marker, scans all article rows, conditionally
 converges late legacy rows, verifies a clean pass, and only then starts its
-listener. Verify the marker and row count, then run the exact same fail-closed
-legacy-row assertion before the lifecycle check:
+listener. Repeat the Stage 2 marker and row-list queries, then run the same
+versioned fail-closed legacy-row assertion before the lifecycle check:
 
 ```bash
 set -eu
 
-assert_no_legacy_article_rows
+sh "$ROLLOUT_SCRIPT" assert-no-legacy
 ```
 
-Finally deploy the same digest with `ARTICLE_STORAGE_SCHEMA_MODE=migrate`, wait
-for health, and only then restore traffic after repeating the revision-mode
-preflight:
+Finally let the rollout script deploy the same digest with
+`ARTICLE_STORAGE_SCHEMA_MODE=migrate` and promote only the revision generated
+by that update:
 
 ```bash
 set -eu
 
-REPAIR_REVISION='<healthy-repair-revision>'
-RECOVERY_MIGRATE_REVISION='<healthy-recovery-migrate-revision>'
-
-az containerapp revision set-mode \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$CONTAINER_APP" \
-  --mode multiple
-
-ACTIVE_REVISIONS_MODE="$(
-  az containerapp show \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$CONTAINER_APP" \
-    --query properties.configuration.activeRevisionsMode \
-    --output tsv
+RECOVERY_MIGRATE_REVISION="$(
+  sh "$ROLLOUT_SCRIPT" \
+    create-and-promote-recovery-migrate \
+    "$REPAIR_REVISION"
 )"
-test "$ACTIVE_REVISIONS_MODE" = Multiple || {
-  printf 'active revision mode is not Multiple: %s\n' "$ACTIVE_REVISIONS_MODE" >&2
-  exit 1
-}
-
-az containerapp update \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$CONTAINER_APP" \
-  --image "$IMAGE_DIGEST" \
-  --set-env-vars ARTICLE_STORAGE_SCHEMA_MODE=migrate
-
-az containerapp ingress traffic set \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$CONTAINER_APP" \
-  --revision-weight "$RECOVERY_MIGRATE_REVISION=100"
-
-az containerapp revision deactivate \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$CONTAINER_APP" \
-  --revision "$REPAIR_REVISION"
+printf 'promoted recovery migrate revision: %s\n' "$RECOVERY_MIGRATE_REVISION"
 ```
 
-A failed or ambiguous repair remains a hard stop; keep writers quiesced and
-rerun `repair` after investigating.
+The script performs the update before discovering its generated revision name,
+lists revisions for observation, and verifies that exact revision is Healthy,
+uses `IMAGE_DIGEST`, and has schema mode `migrate`. Immediately after those
+checks it sets and verifies `activeRevisionsMode=Multiple`; only then does it
+assign 100% traffic. The repair revision is deactivated only after the traffic
+command succeeds. An unhealthy or mismatched revision, a mode other than
+`Multiple`, or any ambiguous result stops without changing traffic. A failed or
+ambiguous repair remains a hard stop; keep writers quiesced and rerun `repair`
+after investigating.
