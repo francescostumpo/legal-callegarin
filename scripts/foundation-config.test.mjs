@@ -46,3 +46,34 @@ test("the frontend formatter is pinned and ordered after npm ci", async () => {
   assert.ok(formatIndex > installIndex)
   assert.ok(typecheckIndex > formatIndex)
 })
+
+test("the article migration runbook fails closed on revision mode and legacy rows", async () => {
+  const runbook = await readRepositoryFile("docs/article-storage-rollout.md")
+
+  const shellBlocks = [...runbook.matchAll(/```bash\n([\s\S]*?)```/g)]
+  assert.ok(shellBlocks.length > 0)
+  for (const block of shellBlocks) {
+    assert.match(block[1], /^set -eu\n/)
+  }
+  assert.match(runbook, /length\(items\[\?id == `null` \|\| RowKey == id\]\)/)
+  assert.match(runbook, /test "\$LEGACY_COUNT" = 0 \|\|/)
+  assert.equal(
+    [...runbook.matchAll(/^assert_no_legacy_article_rows$/gm)].length,
+    2,
+  )
+
+  const trafficCommands = [
+    ...runbook.matchAll(/az containerapp ingress traffic set/g),
+  ]
+  assert.equal(trafficCommands.length, 3)
+  for (const command of trafficCommands) {
+    const preflight = runbook.slice(
+      Math.max(0, command.index - 700),
+      command.index,
+    )
+    assert.match(
+      preflight,
+      /az containerapp revision set-mode[\s\S]*--mode multiple[\s\S]*ACTIVE_REVISIONS_MODE="\$\([\s\S]*properties\.configuration\.activeRevisionsMode[\s\S]*test "\$ACTIVE_REVISIONS_MODE" = Multiple/,
+    )
+  }
+})
