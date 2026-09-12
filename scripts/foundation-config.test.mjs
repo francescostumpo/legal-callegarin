@@ -87,11 +87,23 @@ test("the article migration runbook fails closed on revision mode and legacy row
   assert.match(rolloutScript, /--query '\[\?properties\.active\]\.name'/)
   assert.match(rolloutScript, /--query 'length\(\[\?properties\.active\]\)'/)
   assert.match(rolloutScript, /^  sleep 30$/m)
+  assert.match(rolloutScript, /--revision-suffix "\$revision_suffix"/)
+  assert.match(rolloutScript, /--query properties\.latestRevisionName/)
+  assert.doesNotMatch(rolloutScript, /latest_revision_name\(\)/)
+  assert.match(rolloutScript, /test "\$revision_active" = true/)
+  assert.match(runbook, /ROLLOUT_ID=/)
   assert.match(rolloutScript, /properties\.configuration\.activeRevisionsMode/)
   assert.match(rolloutScript, /test "\$active_revisions_mode" = Multiple/)
 })
 
 const rolloutScriptPath = new URL("article-storage-rollout.sh", import.meta.url)
+const validImageDigest = `ghcr.io/example/legal@sha256:${"a".repeat(64)}`
+const rolloutID = "rollout01"
+const repairSuffix = `repair-${rolloutID}`
+const migrateSuffix = `migrate-${rolloutID}`
+const repairRevision = `app-test--${repairSuffix}`
+const migrateRevision = `app-test--${migrateSuffix}`
+const appArguments = ["--resource-group", "rg-test", "--name", "app-test"]
 
 async function runRolloutCommand(args, overrides = {}) {
   const directory = await mkdtemp(join(tmpdir(), "legal-callegarin-rollout-"))
@@ -100,22 +112,83 @@ async function runRolloutCommand(args, overrides = {}) {
   await writeFile(log, "")
   await mkdir(fakeBin)
 
-  const fakeAz = `#!/bin/sh
-set -eu
-printf 'az %s\\n' "$*" >> "$FAKE_CALL_LOG"
-case "$*" in
-  *"storage entity query"*) printf '%s\\n' "${"$"}{FAKE_LEGACY_COUNT:-0}" ;;
-  *"revision list"*"[?properties.active].name"*) printf '%s\\n' "${"$"}{FAKE_ACTIVE_NAMES:-}" ;;
-  *"revision list"*"length([?properties.active])"*) printf '%s\\n' "${"$"}{FAKE_RESIDUAL_COUNT:-0}" ;;
-  *"containerapp show"*"properties.latestRevisionName"*) printf '%s\\n' "${"$"}{FAKE_LATEST_REVISION:-revision-new}" ;;
-  *"containerapp show"*"properties.configuration.activeRevisionsMode"*) printf '%s\\n' "${"$"}{FAKE_ACTIVE_MODE:-Multiple}" ;;
-  *"revision show"*) printf '%s\\t%s\\t%s\\n' "${"$"}{FAKE_HEALTH:-Healthy}" "${"$"}{FAKE_REVISION_IMAGE:-ghcr.io/example/legal@sha256:digest}" "${"$"}{FAKE_REVISION_SCHEMA_MODE:-repair}" ;;
-  *) : ;;
-esac
+  const fakeAz = `#!/usr/bin/env node
+const fs = require("node:fs")
+const args = process.argv.slice(2)
+const option = (name) => {
+  const index = args.indexOf(name)
+  return index === -1 ? undefined : args[index + 1]
+}
+const startsWith = (...prefix) => prefix.every((value, index) => args[index] === value)
+const expectedRepair = process.env.FAKE_EXPECTED_REPAIR_REVISION
+const expectedMigrate = process.env.FAKE_EXPECTED_MIGRATE_REVISION
+let op
+if (startsWith("storage", "entity", "query")) {
+  op = "legacy-query"
+} else if (startsWith("containerapp", "revision", "list")) {
+  const query = option("--query") || ""
+  if (query === "[?properties.active].name") op = "active-list"
+  else if (query === "length([?properties.active])") op = "residual-count"
+  else if (query.startsWith("length([?name ==")) {
+    op = query.includes("repair-") ? "repair-suffix-check" : "migrate-suffix-check"
+  } else op = "observe"
+} else if (startsWith("containerapp", "revision", "deactivate")) {
+  const revision = option("--revision")
+  op = revision === expectedRepair ? "repair-deactivate" : "deactivate:" + revision
+} else if (startsWith("containerapp", "revision", "set-mode")) {
+  op = "set-mode"
+} else if (startsWith("containerapp", "revision", "show")) {
+  op = option("--revision") === expectedRepair ? "repair-show" : "migrate-show"
+} else if (startsWith("containerapp", "show")) {
+  op = "mode-show"
+} else if (startsWith("containerapp", "update")) {
+  op = option("--set-env-vars") === "ARTICLE_STORAGE_SCHEMA_MODE=repair" ? "repair-update" : "migrate-update"
+} else if (startsWith("containerapp", "ingress", "traffic", "set")) {
+  op = "traffic-set"
+} else {
+  process.stderr.write("unexpected fake az argv: " + JSON.stringify(args) + "\\n")
+  process.exit(97)
+}
+const existing = fs.readFileSync(process.env.FAKE_CALL_LOG, "utf8")
+  .split("\\n")
+  .filter(Boolean)
+  .map((line) => JSON.parse(line))
+const occurrence = existing.filter((call) => call.op === op).length + 1
+fs.appendFileSync(process.env.FAKE_CALL_LOG, JSON.stringify({ tool: "az", op, args }) + "\\n")
+const failAt = process.env.FAKE_FAIL_AT || ""
+if (failAt === op || failAt === op + "#" + occurrence) process.exit(42)
+const sequenceValue = (name, fallback) => {
+  const values = (process.env[name] || "").split(",").filter(Boolean)
+  return values[occurrence - 1] || fallback
+}
+if (op === "legacy-query") {
+  process.stdout.write((process.env.FAKE_LEGACY_COUNT || "0") + "\\n")
+} else if (op === "active-list") {
+  process.stdout.write((process.env.FAKE_ACTIVE_NAMES || "") + "\\n")
+} else if (op === "residual-count") {
+  process.stdout.write((process.env.FAKE_RESIDUAL_COUNT || "0") + "\\n")
+} else if (op.endsWith("suffix-check")) {
+  process.stdout.write(sequenceValue("FAKE_SUFFIX_COUNTS", "0") + "\\n")
+} else if (op === "mode-show") {
+  process.stdout.write(sequenceValue("FAKE_ACTIVE_MODES", "Multiple") + "\\n")
+} else if (op === "repair-update") {
+  process.stdout.write((process.env.FAKE_REPAIR_UPDATE_REVISION || expectedRepair) + "\\n")
+} else if (op === "migrate-update") {
+  process.stdout.write((process.env.FAKE_MIGRATE_UPDATE_REVISION || expectedMigrate) + "\\n")
+} else if (op === "repair-show" || op === "migrate-show") {
+  const phase = op === "repair-show" ? "REPAIR" : "MIGRATE"
+  const active = process.env["FAKE_" + phase + "_ACTIVE"] || "true"
+  const health = process.env["FAKE_" + phase + "_HEALTH"] || "Healthy"
+  const image = process.env["FAKE_" + phase + "_IMAGE"] || process.env.IMAGE_DIGEST
+  const mode = process.env["FAKE_" + phase + "_MODE"] || phase.toLowerCase()
+  process.stdout.write([active, health, image, mode].join("\\t") + "\\n")
+}
 `
-  const fakeSleep = `#!/bin/sh
-set -eu
-printf 'sleep %s\\n' "$*" >> "$FAKE_CALL_LOG"
+  const fakeSleep = `#!/usr/bin/env node
+const fs = require("node:fs")
+const args = process.argv.slice(2)
+fs.appendFileSync(process.env.FAKE_CALL_LOG, JSON.stringify({ tool: "sleep", op: "sleep", args }) + "\\n")
+if ((process.env.FAKE_FAIL_AT || "") === "sleep") process.exit(42)
 `
   await Promise.all([
     writeFile(join(fakeBin, "az"), fakeAz),
@@ -135,130 +208,405 @@ printf 'sleep %s\\n' "$*" >> "$FAKE_CALL_LOG"
       RESOURCE_GROUP: "rg-test",
       CONTAINER_APP: "app-test",
       STORAGE_ACCOUNT: "storage-test",
-      IMAGE_DIGEST: "ghcr.io/example/legal@sha256:digest",
+      IMAGE_DIGEST: validImageDigest,
+      ROLLOUT_ID: rolloutID,
+      FAKE_EXPECTED_REPAIR_REVISION: repairRevision,
+      FAKE_EXPECTED_MIGRATE_REVISION: migrateRevision,
       ...overrides,
     },
   })
   const calls = await readFile(log, "utf8")
   await rm(directory, { recursive: true, force: true })
-  return { ...result, calls: calls.trim().split("\n").filter(Boolean) }
+  return {
+    ...result,
+    calls: calls
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line)),
+  }
 }
 
-function callIndex(calls, fragment) {
-  return calls.findIndex((call) => call.includes(fragment))
+function operations(result) {
+  return result.calls.map((call) => call.op)
 }
 
-test("repair quiescence deactivates every active revision before drain and update", async () => {
+function callFor(result, operation, occurrence = 1) {
+  const matches = result.calls.filter((call) => call.op === operation)
+  assert.ok(matches.length >= occurrence, `missing ${operation} #${occurrence}`)
+  return matches[occurrence - 1]
+}
+
+test("repair success uses exact argv and safe operation order", async () => {
   const result = await runRolloutCommand(["quiesce-and-create-repair"], {
     FAKE_ACTIVE_NAMES: "revision-a\nrevision-b",
     FAKE_RESIDUAL_COUNT: "0",
-    FAKE_LATEST_REVISION: "revision-repair",
-    FAKE_REVISION_SCHEMA_MODE: "repair",
   })
 
   assert.equal(result.status, 0, result.stderr)
-  assert.equal(result.stdout.trim(), "revision-repair")
-  assert.equal(
-    result.calls.filter((call) => call.includes("revision deactivate")).length,
-    2,
-  )
-  assert.ok(result.calls.some((call) => call.endsWith("--revision revision-a")))
-  assert.ok(result.calls.some((call) => call.endsWith("--revision revision-b")))
-  const residual = callIndex(result.calls, "length([?properties.active])")
-  const sleep = callIndex(result.calls, "sleep 30")
-  const update = callIndex(result.calls, "containerapp update")
-  assert.ok(residual > callIndex(result.calls, "--revision revision-b"))
-  assert.ok(sleep > residual)
-  assert.ok(update > sleep)
-  const observation = callIndex(result.calls, "[].{name:name,active:")
-  const generatedRevision = callIndex(
-    result.calls,
+  assert.equal(result.stdout.trim(), repairRevision)
+  assert.deepEqual(operations(result), [
+    "active-list",
+    "deactivate:revision-a",
+    "deactivate:revision-b",
+    "residual-count",
+    "sleep",
+    "set-mode",
+    "mode-show",
+    "repair-suffix-check",
+    "repair-update",
+    "observe",
+    "repair-show",
+  ])
+  assert.deepEqual(callFor(result, "sleep").args, ["30"])
+  assert.deepEqual(callFor(result, "set-mode").args, [
+    "containerapp",
+    "revision",
+    "set-mode",
+    ...appArguments,
+    "--mode",
+    "multiple",
+  ])
+  assert.deepEqual(callFor(result, "repair-update").args, [
+    "containerapp",
+    "update",
+    ...appArguments,
+    "--image",
+    validImageDigest,
+    "--revision-suffix",
+    repairSuffix,
+    "--set-env-vars",
+    "ARTICLE_STORAGE_SCHEMA_MODE=repair",
+    "--query",
     "properties.latestRevisionName",
-  )
-  const health = callIndex(result.calls, "revision show")
-  assert.ok(observation > update)
-  assert.ok(generatedRevision > observation)
-  assert.ok(health > generatedRevision)
+    "--output",
+    "tsv",
+  ])
+  assert.deepEqual(callFor(result, "mode-show").args, [
+    "containerapp",
+    "show",
+    ...appArguments,
+    "--query",
+    "properties.configuration.activeRevisionsMode",
+    "--output",
+    "tsv",
+  ])
+  assert.deepEqual(callFor(result, "repair-suffix-check").args, [
+    "containerapp",
+    "revision",
+    "list",
+    ...appArguments,
+    "--query",
+    `length([?name == '${repairRevision}'])`,
+    "--output",
+    "tsv",
+  ])
+  assert.deepEqual(callFor(result, "repair-show").args, [
+    "containerapp",
+    "revision",
+    "show",
+    ...appArguments,
+    "--revision",
+    repairRevision,
+    "--query",
+    "[[to_string(properties.active),properties.healthState,properties.template.containers[0].image,(properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0])]]",
+    "--output",
+    "tsv",
+  ])
+  assert.deepEqual(callFor(result, "deactivate:revision-a").args, [
+    "containerapp",
+    "revision",
+    "deactivate",
+    ...appArguments,
+    "--revision",
+    "revision-a",
+  ])
+  assert.deepEqual(callFor(result, "deactivate:revision-b").args, [
+    "containerapp",
+    "revision",
+    "deactivate",
+    ...appArguments,
+    "--revision",
+    "revision-b",
+  ])
 })
 
-test("repair creation fails closed when its generated revision is unhealthy", async () => {
-  const result = await runRolloutCommand(["quiesce-and-create-repair"], {
-    FAKE_ACTIVE_NAMES: "revision-a",
-    FAKE_RESIDUAL_COUNT: "0",
-    FAKE_LATEST_REVISION: "revision-repair",
-    FAKE_HEALTH: "Unhealthy",
-    FAKE_REVISION_SCHEMA_MODE: "repair",
-  })
-
-  assert.notEqual(result.status, 0)
-  assert.equal(result.stdout, "")
-  assert.equal(callIndex(result.calls, "ingress traffic set"), -1)
+test("repair failure matrix stops before every subsequent operation", async () => {
+  const sequence = [
+    "active-list",
+    "deactivate:revision-a",
+    "deactivate:revision-b",
+    "residual-count",
+    "sleep",
+    "set-mode",
+    "mode-show",
+    "repair-suffix-check",
+    "repair-update",
+    "observe",
+    "repair-show",
+  ]
+  for (const failedOperation of sequence) {
+    const result = await runRolloutCommand(["quiesce-and-create-repair"], {
+      FAKE_ACTIVE_NAMES: "revision-a\nrevision-b",
+      FAKE_FAIL_AT: failedOperation,
+    })
+    assert.notEqual(result.status, 0, failedOperation)
+    assert.deepEqual(
+      operations(result),
+      sequence.slice(0, sequence.indexOf(failedOperation) + 1),
+      failedOperation,
+    )
+  }
 })
 
-test("repair quiescence aborts before drain and update when a revision remains active", async () => {
-  const result = await runRolloutCommand(["quiesce-and-create-repair"], {
+test("repair rejects residual writers and every invalid revision property", async () => {
+  const residual = await runRolloutCommand(["quiesce-and-create-repair"], {
     FAKE_ACTIVE_NAMES: "revision-a\nrevision-b",
     FAKE_RESIDUAL_COUNT: "1",
   })
+  assert.notEqual(residual.status, 0)
+  assert.deepEqual(operations(residual), [
+    "active-list",
+    "deactivate:revision-a",
+    "deactivate:revision-b",
+    "residual-count",
+  ])
 
-  assert.notEqual(result.status, 0)
-  assert.equal(
-    result.calls.filter((call) => call.includes("revision deactivate")).length,
-    2,
-  )
-  assert.equal(callIndex(result.calls, "sleep 30"), -1)
-  assert.equal(callIndex(result.calls, "containerapp update"), -1)
-})
+  const singleMode = await runRolloutCommand(["quiesce-and-create-repair"], {
+    FAKE_ACTIVE_MODES: "Single",
+  })
+  assert.notEqual(singleMode.status, 0)
+  assert.equal(operations(singleMode).includes("repair-update"), false)
 
-test("recovery promotion orders update health mode traffic and repair deactivation", async () => {
-  const result = await runRolloutCommand(
-    ["create-and-promote-recovery-migrate", "revision-repair"],
-    {
-      FAKE_LATEST_REVISION: "revision-migrate",
-      FAKE_REVISION_SCHEMA_MODE: "migrate",
-      FAKE_ACTIVE_MODE: "Multiple",
-    },
+  const existingSuffix = await runRolloutCommand(
+    ["quiesce-and-create-repair"],
+    { FAKE_SUFFIX_COUNTS: "1" },
   )
+  assert.notEqual(existingSuffix.status, 0)
+  assert.equal(operations(existingSuffix).includes("repair-update"), false)
 
-  assert.equal(result.status, 0, result.stderr)
-  assert.equal(result.stdout.trim(), "revision-migrate")
-  const update = callIndex(result.calls, "containerapp update")
-  const observation = callIndex(result.calls, "[].{name:name,active:")
-  const generatedRevision = callIndex(
-    result.calls,
-    "properties.latestRevisionName",
-  )
-  const health = callIndex(result.calls, "revision show")
-  const setMode = callIndex(result.calls, "revision set-mode")
-  const modeCheck = callIndex(
-    result.calls,
-    "properties.configuration.activeRevisionsMode",
-  )
-  const traffic = callIndex(result.calls, "ingress traffic set")
-  const deactivate = callIndex(result.calls, "--revision revision-repair")
-  assert.ok(update >= 0 && observation > update)
-  assert.ok(generatedRevision > observation && health > generatedRevision)
-  assert.ok(setMode > health && modeCheck > setMode)
-  assert.ok(traffic > modeCheck && deactivate > traffic)
-})
-
-test("recovery promotion never shifts traffic when revision checks fail", async () => {
   for (const overrides of [
-    { FAKE_HEALTH: "Unhealthy", FAKE_REVISION_SCHEMA_MODE: "migrate" },
-    {
-      FAKE_REVISION_IMAGE: "ghcr.io/example/legal@sha256:wrong",
-      FAKE_REVISION_SCHEMA_MODE: "migrate",
-    },
-    { FAKE_REVISION_SCHEMA_MODE: "repair" },
-    { FAKE_REVISION_SCHEMA_MODE: "migrate", FAKE_ACTIVE_MODE: "Single" },
+    { FAKE_REPAIR_ACTIVE: "false" },
+    { FAKE_REPAIR_HEALTH: "Unhealthy" },
+    { FAKE_REPAIR_IMAGE: `ghcr.io/example/legal@sha256:${"b".repeat(64)}` },
+    { FAKE_REPAIR_MODE: "migrate" },
   ]) {
     const result = await runRolloutCommand(
-      ["create-and-promote-recovery-migrate", "revision-repair"],
-      { FAKE_LATEST_REVISION: "revision-migrate", ...overrides },
+      ["quiesce-and-create-repair"],
+      overrides,
     )
     assert.notEqual(result.status, 0)
-    assert.equal(callIndex(result.calls, "ingress traffic set"), -1)
-    assert.equal(callIndex(result.calls, "revision deactivate"), -1)
+    assert.equal(operations(result).at(-1), "repair-show")
+    assert.equal(result.stdout, "")
+  }
+})
+
+test("recovery success ties the exact update response to health and promotion", async () => {
+  const result = await runRolloutCommand([
+    "create-and-promote-recovery-migrate",
+    repairRevision,
+  ])
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout.trim(), migrateRevision)
+  assert.deepEqual(operations(result), [
+    "set-mode",
+    "mode-show",
+    "migrate-suffix-check",
+    "migrate-update",
+    "observe",
+    "migrate-show",
+    "set-mode",
+    "mode-show",
+    "traffic-set",
+    "repair-deactivate",
+  ])
+  assert.deepEqual(callFor(result, "migrate-update").args, [
+    "containerapp",
+    "update",
+    ...appArguments,
+    "--image",
+    validImageDigest,
+    "--revision-suffix",
+    migrateSuffix,
+    "--set-env-vars",
+    "ARTICLE_STORAGE_SCHEMA_MODE=migrate",
+    "--query",
+    "properties.latestRevisionName",
+    "--output",
+    "tsv",
+  ])
+  assert.deepEqual(callFor(result, "traffic-set").args, [
+    "containerapp",
+    "ingress",
+    "traffic",
+    "set",
+    ...appArguments,
+    "--revision-weight",
+    `${migrateRevision}=100`,
+  ])
+  assert.deepEqual(callFor(result, "migrate-suffix-check").args, [
+    "containerapp",
+    "revision",
+    "list",
+    ...appArguments,
+    "--query",
+    `length([?name == '${migrateRevision}'])`,
+    "--output",
+    "tsv",
+  ])
+  assert.deepEqual(callFor(result, "migrate-show").args, [
+    "containerapp",
+    "revision",
+    "show",
+    ...appArguments,
+    "--revision",
+    migrateRevision,
+    "--query",
+    "[[to_string(properties.active),properties.healthState,properties.template.containers[0].image,(properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0])]]",
+    "--output",
+    "tsv",
+  ])
+  assert.deepEqual(callFor(result, "repair-deactivate").args, [
+    "containerapp",
+    "revision",
+    "deactivate",
+    ...appArguments,
+    "--revision",
+    repairRevision,
+  ])
+})
+
+test("recovery command failure matrix suppresses all later operations", async () => {
+  const sequence = [
+    "set-mode",
+    "mode-show",
+    "migrate-suffix-check",
+    "migrate-update",
+    "observe",
+    "migrate-show",
+    "set-mode",
+    "mode-show",
+    "traffic-set",
+    "repair-deactivate",
+  ]
+  const failures = [
+    ["set-mode#1", 0],
+    ["mode-show#1", 1],
+    ["migrate-suffix-check", 2],
+    ["migrate-update", 3],
+    ["observe", 4],
+    ["migrate-show", 5],
+    ["set-mode#2", 6],
+    ["mode-show#2", 7],
+    ["traffic-set", 8],
+    ["repair-deactivate", 9],
+  ]
+  for (const [failure, lastIndex] of failures) {
+    const result = await runRolloutCommand(
+      ["create-and-promote-recovery-migrate", repairRevision],
+      { FAKE_FAIL_AT: failure },
+    )
+    assert.notEqual(result.status, 0, failure)
+    assert.deepEqual(
+      operations(result),
+      sequence.slice(0, lastIndex + 1),
+      failure,
+    )
+  }
+})
+
+test("recovery property and mode failures never mutate traffic", async () => {
+  for (const overrides of [
+    { FAKE_MIGRATE_ACTIVE: "false" },
+    { FAKE_MIGRATE_HEALTH: "Unhealthy" },
+    { FAKE_MIGRATE_IMAGE: `ghcr.io/example/legal@sha256:${"b".repeat(64)}` },
+    { FAKE_MIGRATE_MODE: "repair" },
+    { FAKE_ACTIVE_MODES: "Single" },
+    { FAKE_ACTIVE_MODES: "Multiple,Single" },
+  ]) {
+    const result = await runRolloutCommand(
+      ["create-and-promote-recovery-migrate", repairRevision],
+      overrides,
+    )
+    assert.notEqual(result.status, 0)
+    assert.equal(operations(result).includes("traffic-set"), false)
+    assert.equal(operations(result).includes("repair-deactivate"), false)
+  }
+
+  const singleBeforeUpdate = await runRolloutCommand(
+    ["create-and-promote-recovery-migrate", repairRevision],
+    { FAKE_ACTIVE_MODES: "Single" },
+  )
+  assert.equal(operations(singleBeforeUpdate).includes("migrate-update"), false)
+})
+
+test("same suffix, stale response, and inactive no-change retry fail closed", async () => {
+  const sameSuffix = await runRolloutCommand(
+    ["create-and-promote-recovery-migrate", repairRevision],
+    { FAKE_SUFFIX_COUNTS: "1" },
+  )
+  assert.notEqual(sameSuffix.status, 0)
+  assert.deepEqual(operations(sameSuffix), [
+    "set-mode",
+    "mode-show",
+    "migrate-suffix-check",
+  ])
+
+  const stale = await runRolloutCommand(
+    ["create-and-promote-recovery-migrate", repairRevision],
+    { FAKE_MIGRATE_UPDATE_REVISION: "app-test--migrate-stale" },
+  )
+  assert.notEqual(stale.status, 0)
+  assert.equal(operations(stale).includes("traffic-set"), false)
+  assert.equal(operations(stale).includes("migrate-show"), false)
+
+  const inactive = await runRolloutCommand(
+    ["create-and-promote-recovery-migrate", repairRevision],
+    { FAKE_MIGRATE_ACTIVE: "false" },
+  )
+  assert.notEqual(inactive.status, 0)
+  assert.equal(operations(inactive).at(-1), "migrate-show")
+  assert.equal(operations(inactive).includes("traffic-set"), false)
+
+  const newRollout = await runRolloutCommand(
+    ["create-and-promote-recovery-migrate", repairRevision],
+    {
+      ROLLOUT_ID: "rollout02",
+      FAKE_EXPECTED_MIGRATE_REVISION: "app-test--migrate-rollout02",
+    },
+  )
+  assert.equal(newRollout.status, 0, newRollout.stderr)
+  assert.equal(newRollout.stdout.trim(), "app-test--migrate-rollout02")
+})
+
+test("image digest and rollout ID validation reject unsafe inputs before Azure", async () => {
+  for (const image of [
+    "ghcr.io/example/legal:latest",
+    "ghcr.io/example/legal@sha256:abcd",
+    `ghcr.io/example/legal@sha256:${"g".repeat(64)}`,
+    `example.azurecr.io/legal@sha256:${"a".repeat(64)}`,
+    `ghcr.io/Example/legal@sha256:${"a".repeat(64)}`,
+    `ghcr.io/example/legal@sha256:${"A".repeat(64)}`,
+  ]) {
+    const result = await runRolloutCommand(["quiesce-and-create-repair"], {
+      IMAGE_DIGEST: image,
+    })
+    assert.notEqual(result.status, 0, image)
+    assert.deepEqual(result.calls, [], image)
+  }
+  for (const id of [
+    "",
+    "UPPER",
+    "-leading",
+    "trailing-",
+    "too-long-rollout-id",
+  ]) {
+    const result = await runRolloutCommand(["quiesce-and-create-repair"], {
+      ROLLOUT_ID: id,
+    })
+    assert.notEqual(result.status, 0, id)
+    assert.deepEqual(result.calls, [], id)
   }
 })
 
@@ -273,4 +621,6 @@ test("legacy guard uses the exact count as a fail-closed result", async () => {
   assert.equal(clean.status, 0, clean.stderr)
   assert.notEqual(legacy.status, 0)
   assert.match(legacy.stderr, /legacy article rows remain: 2/)
+  assert.deepEqual(operations(clean), ["legacy-query"])
+  assert.deepEqual(operations(legacy), ["legacy-query"])
 })

@@ -7,10 +7,39 @@ fail() {
   exit 1
 }
 
-require_container_app() {
+require_rollout_configuration() {
   : "${RESOURCE_GROUP:?RESOURCE_GROUP is required}"
   : "${CONTAINER_APP:?CONTAINER_APP is required}"
   : "${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
+  : "${ROLLOUT_ID:?ROLLOUT_ID is required}"
+
+  case "$CONTAINER_APP" in
+    '' | [!a-z]* | *[!a-z0-9-]* | *-) fail "invalid Container Apps app name: $CONTAINER_APP" ;;
+  esac
+
+  case "$ROLLOUT_ID" in
+    '' | [!a-z]* | *[!a-z0-9-]* | *-) fail "invalid ROLLOUT_ID: $ROLLOUT_ID" ;;
+  esac
+  test "${#ROLLOUT_ID}" -le 16 || fail "ROLLOUT_ID exceeds 16 characters"
+
+  case "$IMAGE_DIGEST" in
+    ghcr.io/*@sha256:*) ;;
+    *) fail 'IMAGE_DIGEST must be a canonical lowercase GHCR sha256 reference' ;;
+  esac
+  repository_and_digest=${IMAGE_DIGEST#ghcr.io/}
+  image_repository=${repository_and_digest%@sha256:*}
+  image_sha256=${IMAGE_DIGEST##*@sha256:}
+  case "$image_repository" in
+    '' | /* | */ | *//* | *[!a-z0-9._/-]*) fail 'IMAGE_DIGEST has an invalid GHCR repository path' ;;
+  esac
+  case "$image_repository" in
+    */*) ;;
+    *) fail 'IMAGE_DIGEST must include a GHCR owner and package' ;;
+  esac
+  test "${#image_sha256}" -eq 64 || fail 'IMAGE_DIGEST sha256 must contain exactly 64 lowercase hex characters'
+  case "$image_sha256" in
+    *[!0-9a-f]*) fail 'IMAGE_DIGEST sha256 must contain exactly 64 lowercase hex characters' ;;
+  esac
 }
 
 validate_revision_name() {
@@ -27,12 +56,39 @@ observe_revisions() {
     --output table >&2
 }
 
-latest_revision_name() {
-  az containerapp show \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$CONTAINER_APP" \
-    --query properties.latestRevisionName \
-    --output tsv
+assert_revision_suffix_available() {
+  expected_revision=$1
+  suffix_match_count="$(
+    az containerapp revision list \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$CONTAINER_APP" \
+      --query "length([?name == '$expected_revision'])" \
+      --output tsv
+  )"
+  case "$suffix_match_count" in
+    '' | *[!0-9]*) fail "invalid suffix match count for $expected_revision: $suffix_match_count" ;;
+  esac
+  test "$suffix_match_count" = 0 || fail "revision suffix already exists: $expected_revision"
+}
+
+create_revision() {
+  schema_mode=$1
+  revision_suffix=$2
+  expected_revision=$3
+
+  created_revision="$(
+    az containerapp update \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$CONTAINER_APP" \
+      --image "$IMAGE_DIGEST" \
+      --revision-suffix "$revision_suffix" \
+      --set-env-vars "ARTICLE_STORAGE_SCHEMA_MODE=$schema_mode" \
+      --query properties.latestRevisionName \
+      --output tsv
+  )"
+  validate_revision_name "$created_revision"
+  test "$created_revision" = "$expected_revision" || fail "update returned unexpected revision: $created_revision"
+  printf '%s\n' "$created_revision"
 }
 
 verify_revision() {
@@ -45,7 +101,7 @@ verify_revision() {
       --resource-group "$RESOURCE_GROUP" \
       --name "$CONTAINER_APP" \
       --revision "$revision" \
-      --query '[properties.healthState,properties.template.containers[0].image,(properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0])]' \
+      --query '[[to_string(properties.active),properties.healthState,properties.template.containers[0].image,(properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0])]]' \
       --output tsv
   )"
 
@@ -53,11 +109,13 @@ verify_revision() {
   IFS="$(printf '\t')"
   set -- $revision_facts
   IFS=$old_ifs
-  test "$#" -eq 3 || fail "could not verify revision $revision"
+  test "$#" -eq 4 || fail "could not verify revision $revision"
 
-  health_state=$1
-  revision_image=$2
-  revision_mode=$3
+  revision_active=$1
+  health_state=$2
+  revision_image=$3
+  revision_mode=$4
+  test "$revision_active" = true || fail "revision $revision is not active: $revision_active"
   test "$health_state" = Healthy || fail "revision $revision is not Healthy: $health_state"
   test "$revision_image" = "$IMAGE_DIGEST" || fail "revision $revision image does not match IMAGE_DIGEST"
   test "$revision_mode" = "$expected_mode" || fail "revision $revision schema mode is not $expected_mode: $revision_mode"
@@ -99,7 +157,10 @@ assert_no_legacy_article_rows() {
 }
 
 quiesce_and_create_repair() {
-  require_container_app
+  require_rollout_configuration
+  repair_suffix="repair-$ROLLOUT_ID"
+  expected_repair_revision="$CONTAINER_APP--$repair_suffix"
+  validate_revision_name "$expected_repair_revision"
 
   active_revisions="$(
     az containerapp revision list \
@@ -140,33 +201,33 @@ quiesce_and_create_repair() {
 
   sleep 30
 
-  az containerapp update \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$CONTAINER_APP" \
-    --image "$IMAGE_DIGEST" \
-    --set-env-vars ARTICLE_STORAGE_SCHEMA_MODE=repair >/dev/null
+  set_and_verify_multiple_mode
+  assert_revision_suffix_available "$expected_repair_revision"
+  repair_revision="$(
+    create_revision repair "$repair_suffix" "$expected_repair_revision"
+  )"
 
   observe_revisions
-  repair_revision="$(latest_revision_name)"
   verify_revision "$repair_revision" repair
   printf '%s\n' "$repair_revision"
 }
 
 create_and_promote_recovery_migrate() {
-  require_container_app
+  require_rollout_configuration
   repair_revision=$1
   validate_revision_name "$repair_revision"
 
-  az containerapp update \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$CONTAINER_APP" \
-    --image "$IMAGE_DIGEST" \
-    --set-env-vars ARTICLE_STORAGE_SCHEMA_MODE=migrate >/dev/null
+  migrate_suffix="migrate-$ROLLOUT_ID"
+  expected_migrate_revision="$CONTAINER_APP--$migrate_suffix"
+  validate_revision_name "$expected_migrate_revision"
+
+  set_and_verify_multiple_mode
+  assert_revision_suffix_available "$expected_migrate_revision"
+  recovery_revision="$(
+    create_revision migrate "$migrate_suffix" "$expected_migrate_revision"
+  )"
 
   observe_revisions
-  recovery_revision="$(latest_revision_name)"
-  validate_revision_name "$recovery_revision"
-  test "$recovery_revision" != "$repair_revision" || fail "migrate update did not create a new revision"
   verify_revision "$recovery_revision" migrate
 
   set_and_verify_multiple_mode

@@ -17,9 +17,11 @@ the repository root at the exact Git commit recorded in the change ticket.
 
 ## Variables and rollback floor
 
-Use an immutable GHCR digest, never a tag. Capture the first digest that
-contains the `compat|migrate|repair` implementation as the rollback floor and
-retain it in GHCR:
+Use an immutable GHCR digest, never a tag. The operational script accepts only
+a canonical lowercase `ghcr.io/<owner>/<package>@sha256:<digest>` reference
+whose digest is exactly 64 lowercase hexadecimal characters. Capture the first
+digest that contains the `compat|migrate|repair` implementation as the rollback
+floor and retain it in GHCR:
 
 ```bash
 set -eu
@@ -28,6 +30,7 @@ RESOURCE_GROUP='<resource-group>'
 CONTAINER_APP='<container-app>'
 STORAGE_ACCOUNT='<storage-account>'
 IMAGE_DIGEST='ghcr.io/<owner>/<package>@sha256:<digest>'
+ROLLOUT_ID='r20260912t0037'
 ROLLOUT_SCRIPT='./scripts/article-storage-rollout.sh'
 test -r "$ROLLOUT_SCRIPT"
 
@@ -38,9 +41,13 @@ az containerapp show \
   --output json
 ```
 
-Record `IMAGE_DIGEST`, the Git commit, UTC time, and operator in the change
-ticket. That digest is the rollback floor: after the migration marker exists,
-never activate an older image that can write direct-ID rows.
+`ROLLOUT_ID` must be unique for the recovery attempt, begin with a lowercase
+letter, contain only lowercase letters, digits, and hyphens, end with a letter
+or digit, and contain at most 16 characters. The script derives distinct
+`repair-$ROLLOUT_ID` and `migrate-$ROLLOUT_ID` revision suffixes. Record
+`IMAGE_DIGEST`, `ROLLOUT_ID`, the Git commit, UTC time, and operator in the
+change ticket. That digest is the rollback floor: after the migration marker
+exists, never activate an older image that can write direct-ID rows.
 
 ## Stage 1: compatibility deployment
 
@@ -267,11 +274,16 @@ printf 'verified repair revision: %s\n' "$REPAIR_REVISION"
 
 `quiesce-and-create-repair` obtains every active revision name and deactivates
 each exact name. It then makes a new count query and aborts before both the
-drain and update unless that count is zero. Only after `sleep 30` does it create
-the repair revision, list revisions for operator observation, select the exact
-generated revision, and require `healthState=Healthy`, the exact
-`IMAGE_DIGEST`, and `ARTICLE_STORAGE_SCHEMA_MODE=repair` before returning its
-name. Under `set -eu`, a failed command substitution stops this runbook.
+drain and update unless that count is zero. Only after `sleep 30` does it set
+multiple-revision mode and freshly require the exact property value
+`Multiple`. It also rejects an already existing `repair-$ROLLOUT_ID` revision
+before update. The update uses that unique suffix and returns its own
+`properties.latestRevisionName`; the script requires the response to equal
+`$CONTAINER_APP--repair-$ROLLOUT_ID`, rather than making an app-wide latest
+revision query. It then lists revisions for operator observation and requires
+that exact generated revision to have `active=true`, `healthState=Healthy`, the
+exact `IMAGE_DIGEST`, and `ARTICLE_STORAGE_SCHEMA_MODE=repair` before returning
+its name. Under `set -eu`, a failed command substitution stops this runbook.
 
 The repair revision ignores the marker, scans all article rows, conditionally
 converges late legacy rows, verifies a clean pass, and only then starts its
@@ -299,12 +311,26 @@ RECOVERY_MIGRATE_REVISION="$(
 printf 'promoted recovery migrate revision: %s\n' "$RECOVERY_MIGRATE_REVISION"
 ```
 
-The script performs the update before discovering its generated revision name,
-lists revisions for observation, and verifies that exact revision is Healthy,
-uses `IMAGE_DIGEST`, and has schema mode `migrate`. Immediately after those
-checks it sets and verifies `activeRevisionsMode=Multiple`; only then does it
-assign 100% traffic. The repair revision is deactivated only after the traffic
-command succeeds. An unhealthy or mismatched revision, a mode other than
-`Multiple`, or any ambiguous result stops without changing traffic. A failed or
-ambiguous repair remains a hard stop; keep writers quiesced and rerun `repair`
-after investigating.
+Before the migration update, the script freshly sets and verifies
+`activeRevisionsMode=Multiple` and rejects an already existing
+`migrate-$ROLLOUT_ID` revision. The update uses that unique suffix and captures
+its own `properties.latestRevisionName`; the response must equal
+`$CONTAINER_APP--migrate-$ROLLOUT_ID`. After listing revisions for observation,
+the script requires that exact revision to have `active=true`,
+`healthState=Healthy`, the exact `IMAGE_DIGEST`, and schema mode `migrate`.
+Immediately before promotion it again sets and freshly verifies
+`activeRevisionsMode=Multiple`; only then does it assign 100% traffic. The
+repair revision is deactivated only after the traffic command succeeds. No
+repair command assigns traffic implicitly or explicitly.
+
+Do not blindly retry either command with the same `ROLLOUT_ID`: an existing
+operation-specific suffix is a hard stop before update, while a stale,
+inactive, or mismatched update response cannot be promoted. First inspect the
+exact repair and migrate revision names from the failed attempt and their
+traffic, active, health, image, and schema-mode state. Record that inspection;
+only then generate a new unique `ROLLOUT_ID`. A replacement migration may use
+the previously verified `REPAIR_REVISION` argument with the new ID. An
+unhealthy or mismatched revision, any failed mode check, or any ambiguous
+result stops without changing traffic. A failed or ambiguous repair remains a
+hard stop; keep writers quiesced and start a newly identified repair only after
+investigating.
