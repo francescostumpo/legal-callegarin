@@ -192,8 +192,9 @@ test("article draft, preview, publication, conflict, and logout lifecycle", asyn
   const retry = test.info().retry
   const slug = `ciclo-articolo-e2e-${retry}`
   const publicPath = `/sentenze-e-riflessioni/${slug}`
-  const v1Title = `Ciclo articolo E2E V1 ${retry}`
-  const v1Body = "Corpo sintetico V1 verificato in anteprima e pubblicazione."
+  const v1Title = `TitoloV1${"T".repeat(130)}${retry}`
+  const v1Summary = `SommarioV1${"S".repeat(260)}${retry}`
+  const v1Body = `CorpoV1${"B".repeat(220)}${retry}`
   const v2Title = `Ciclo articolo E2E V2 ${retry}`
   const v2Body =
     "Corpo sintetico V2 salvato senza modificare subito il pubblico."
@@ -327,11 +328,7 @@ test("article draft, preview, publication, conflict, and logout lifecycle", asyn
       await page.setViewportSize(mobileViewport)
       await page.getByLabel("Titolo").fill(v1Title)
       await page.getByLabel("Slug").fill(slug)
-      await page
-        .getByLabel("Sommario")
-        .fill(
-          "Sommario sintetico sufficientemente esteso per il ciclo articolo E2E.",
-        )
+      await page.getByLabel("Sommario").fill(v1Summary)
       await page.getByLabel("Area").selectOption("famiglia-e-persone")
       await page
         .getByLabel("Copertina")
@@ -380,6 +377,7 @@ test("article draft, preview, publication, conflict, and logout lifecycle", asyn
       await expect(
         preview.getByRole("heading", { level: 1, name: v1Title }),
       ).toBeVisible()
+      await expect(preview.getByText(v1Summary, { exact: true })).toBeVisible()
       await expect(preview.getByText(v1Body)).toBeVisible()
       const previewCover = preview.locator("img").first()
       await expect(previewCover).toHaveAttribute("alt", notebookCoverAlt)
@@ -410,6 +408,11 @@ test("article draft, preview, publication, conflict, and logout lifecycle", asyn
       await assertAdminHasNoHorizontalOverflow(page)
       await assertFrameFitsAvailableWidth(frame)
       await assertFrameHasNoHorizontalOverflow(frame)
+      await expect(
+        preview.getByRole("heading", { level: 1, name: v1Title }),
+      ).toBeVisible()
+      await expect(preview.getByText(v1Summary, { exact: true })).toBeVisible()
+      await expect(preview.getByText(v1Body, { exact: true })).toBeVisible()
 
       await page.setViewportSize(desktopViewport)
       await page.getByRole("button", { name: "Desktop", exact: true }).click()
@@ -436,11 +439,27 @@ test("article draft, preview, publication, conflict, and logout lifecycle", asyn
       await publishedV1
       await expect(page.getByRole("status")).toHaveText("Articolo pubblicato")
 
-      await publicPage.goto(publicPath)
+      await publicPage.setViewportSize(constrainedAdminViewport)
+      const articleIndex = await publicPage.goto("/sentenze-e-riflessioni")
+      expect(articleIndex?.status()).toBe(200)
+      const v1Card = publicPage.locator(".article-card").filter({
+        has: publicPage.getByRole("link", { name: v1Title, exact: true }),
+      })
+      await expect(v1Card).toBeVisible()
+      await expect(v1Card.getByText(v1Summary, { exact: true })).toBeVisible()
+      await publicAudit.assertPage()
+
+      const publicV1 = await publicPage.goto(publicPath)
+      expect(publicV1?.status()).toBe(200)
       await expect(
         publicPage.getByRole("heading", { level: 1, name: v1Title }),
       ).toBeVisible()
-      await expect(publicPage.getByText(v1Body)).toBeVisible()
+      await expect(
+        publicPage.getByText(v1Summary, { exact: true }),
+      ).toBeVisible()
+      await expect(publicPage.getByText(v1Body, { exact: true })).toBeVisible()
+      await publicAudit.assertPage()
+      expect(await publicContext.cookies()).toEqual([])
 
       const editor = page.getByRole("textbox", { name: "Contenuto articolo" })
       await page.getByLabel("Titolo").fill(v2Title)

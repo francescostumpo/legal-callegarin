@@ -248,6 +248,19 @@ func TestArticlePagesHaveReadableEditorialTypography(t *testing.T) {
 	assertCSSRuleContains(t, css, ".article-body", "max-width:", "font-size:", "line-height:")
 }
 
+func TestArticleAuthorContentWrapsLongTokens(t *testing.T) {
+	t.Parallel()
+
+	cssBytes, err := fs.ReadFile(webassets.Files, "public/site.css")
+	if err != nil {
+		t.Fatalf("read site.css: %v", err)
+	}
+	css := string(cssBytes)
+	for _, selector := range []string{".article-detail", ".article-card"} {
+		assertCSSRuleContains(t, css, selector, "overflow-wrap: anywhere")
+	}
+}
+
 func TestSingleArticleLayoutUsesDedicatedModifiers(t *testing.T) {
 	t.Parallel()
 

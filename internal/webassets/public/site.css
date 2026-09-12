@@ -438,6 +438,10 @@ h3 {
   background: var(--color-charcoal);
 }
 
+.article-card {
+  overflow-wrap: anywhere;
+}
+
 .area-card__media {
   display: block;
   overflow: hidden;
@@ -524,6 +528,7 @@ h3 {
 
 .article-detail {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .article-byline {
