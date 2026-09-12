@@ -164,6 +164,54 @@ az deployment group show \
   --output json
 ```
 
+#### 2.1. Normalizzazione obbligatoria del traffico dopo il Bicep
+
+Dopo ogni deployment completo di `main.bicep`, iniziale o successivo, e dopo
+ogni deployment completo di `custom-domain.bicep`, eseguire questa
+normalizzazione prima di abilitare deploy e retention. I template Bicep
+impostano temporaneamente `latestRevision: true`, mentre entrambi gli engine
+operativi rifiutano intenzionalmente routing implicito a latest.
+
+Leggere il traffico e ispezionare **tutte** le revisioni restituite da Azure:
+
+```sh
+az containerapp show \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --query '{activeRevisionsMode:properties.configuration.activeRevisionsMode,traffic:properties.configuration.ingress.traffic}' \
+  --output json
+
+az containerapp revision list \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --all \
+  --query '[].{name:name,active:properties.active,health:properties.healthState,image:properties.template.containers[0].image,mode:properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0]}' \
+  --output json
+```
+
+Selezionare soltanto una revisione con nome opaco copiato dall'output Azure,
+attiva, `Healthy`, con digest immutabile e modalità schema compatibile. Dopo la
+verifica impostare il segnaposto non segreto ed eliminare esplicitamente la
+regola latest mentre si assegna il 100% al nome esatto:
+
+```sh
+NORMALIZED_REVISION='<azure-returned-active-healthy-compatible-revision-name>'
+
+az containerapp ingress traffic set \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --revision-weight "latest=0" "$NORMALIZED_REVISION=100" \
+  --output none
+```
+
+Rileggere immediatamente app, traffico e revisione e verificare che non esista
+alcuna regola `latestRevision: true`, che l'unica regola con peso positivo sia
+la revisione nominata con peso 100 e che questa sia ancora attiva, sana e
+compatibile. Solo dopo questa verifica esatta abilitare deploy e retention.
+
 ### 3. Record DNS presso il registrar
 
 La creazione o modifica dei record presso il registrar è una mutazione
@@ -254,6 +302,10 @@ L'operazione è idempotente: prima registra esattamente due binding `Disabled`,
 poi richiede il certificato apex con validazione HTTP e quello `www` con
 validazione CNAME, infine applica entrambi come `SniEnabled`. L'issuance può
 restare `Pending` per diversi minuti.
+
+Questo è un deployment completo: prima di proseguire ripetere integralmente la
+normalizzazione del traffico della sezione 2.1 e verificarne nuovamente routing
+nominato, revisione, digest, health e modalità schema.
 
 ### 5. Verifica successiva al deployment
 
@@ -403,3 +455,297 @@ La compilazione locale non dimostra il comportamento live. Disponibilità del
 provider, risultato del what-if, certificate issuance e renewal, propagazione
 DNS, TLS, alert e cost behavior restano non verificati finché un operatore
 autorizzato non esegue e registra la procedura in un'attività separata.
+
+## Ambiente GitHub `production`
+
+Creare e proteggere l'environment `production` di GitHub **prima**
+di eseguire qualsiasi workflow. Il semplice riferimento a un environment
+inesistente può auto-crearlo senza protezioni: questa preparazione è quindi una
+precondizione fail-closed, non un miglioramento facoltativo.
+
+Nelle regole di deployment impostare `Selected branches and tags` e consentire
+soltanto `main`.
+Proteggere inoltre `main` con branch protection e status check obbligatori. Se
+il piano e la visibilità del repository privato supportano i required reviewer,
+configurarne uno e disabilitare il bypass amministrativo solo quando esiste un
+secondo operatore fidato. Con un singolo operatore non abilitare "prevent
+self-review": provocherebbe un deadlock anche durante il recupero manuale. Se
+queste regole non sono disponibili, registrare il rischio residuo e fare
+affidamento congiunto su selezione di `main`, branch protection, guardie rigide
+dei workflow, subject OIDC immutabile e concurrency condivisa. Quando un
+required reviewer è attivo, anche il job retention schedulato può attendere
+l'approvazione.
+
+Inserire nell'environment esattamente queste sei variabili; sono identificatori
+o configurazioni non segrete:
+
+| Variabile | Significato |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Client ID dell'applicazione Microsoft Entra federata |
+| `AZURE_TENANT_ID` | Tenant ID Microsoft Entra |
+| `AZURE_SUBSCRIPTION_ID` | Sottoscrizione che contiene il resource group |
+| `AZURE_RESOURCE_GROUP` | Resource group di produzione |
+| `AZURE_CONTAINER_APP_NAME` | Nome della Container App esistente |
+| `PUBLIC_BASE_URL` | Origine HTTPS canonica, usata solo dal deploy |
+
+I workflow correnti usano **zero GitHub environment secrets**. Non salvare in
+GitHub un Azure client secret, il PAT runtime, `ADMIN_PASSWORD_HASH` o
+`SESSION_KEY_BASE64`. `GHCR_TOKEN`, `ADMIN_PASSWORD_HASH` e
+`SESSION_KEY_BASE64` sono input runtime protetti gestiti in Azure; non sono
+input dei workflow correnti. `${{ github.token }}` (`GITHUB_TOKEN`) è invece il
+token automatico ed effimero del singolo job Actions.
+
+I permessi restano minimi e distinti:
+
+- publish: `contents: read`, `packages: write`;
+- deploy: `contents: read`, `id-token: write`;
+- retention: `contents: read`, `id-token: write`, `packages: write`.
+
+Deploy e retention usano entrambi il gruppo concurrency `production-deploy`
+con cancellazione disabilitata. Riferimenti ufficiali: [GitHub environments e
+protection rules](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+e [permessi di
+`GITHUB_TOKEN`](https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication).
+
+## Bootstrap OIDC immutabile
+
+Per repository creati dopo il 15 luglio 2026 GitHub usa per impostazione
+predefinita il subject immutabile adottato qui. Il subject esatto è:
+
+```text
+repo:francescostumpo@55147498/legal-callegarin@1365534753:environment:production
+```
+
+L'audience è `api://AzureADTokenExchange`. Il ruolo è **Container Apps
+Contributor**, ID `358470bc-b998-42bd-ab17-a7e34c199c0f`, assegnato soltanto al
+resource group di produzione. Non assegnare un ruolo ampio né un ruolo a scope
+subscription. `scripts/bootstrap-github-oidc.sh` verifica il default OIDC
+immutabile di GitHub, ma non configura l'impostazione OIDC: non modificarla e
+non sostituirla con un subject personalizzato.
+
+Sul resource group è assegnato soltanto Container Apps Contributor.
+
+Precondizioni per l'operatore: login Azure sulla sottoscrizione e tenant
+corretti; autorità Microsoft Entra per creare/verificare applicazione, service
+principal e federated credential; autorità
+`Microsoft.Authorization/roleAssignments/read|write` sul resource group;
+accesso autenticato e protetto alle API GitHub. Il live bootstrap richiede
+`GITHUB_API_TOKEN`: deve essere un PAT fine-grained selezionato soltanto per
+`francescostumpo/legal-callegarin` con repository permission `Actions: read`;
+l'accesso metadata è implicito. È una credenziale operatore effimera e
+`GITHUB_API_TOKEN` non è un GitHub environment secret, non è
+`${{ github.token }}`/`GITHUB_TOKEN`, non è il PAT classic runtime ACA e non è
+un Azure client secret. Non salvarlo in argv, file, log, ticket o chat.
+
+L'operatore deve prima eseguire il dry-run, che non richiede il token né Azure
+CLI e non modifica alcun sistema:
+
+```sh
+./scripts/bootstrap-github-oidc.sh \
+  --subscription-id '<subscription-uuid>' \
+  --tenant-id '<tenant-uuid>' \
+  --resource-group '<resource-group-name>' \
+  --github-owner-id 55147498 \
+  --github-repository-id 1365534753 \
+  --application-display-name '<application-display-name>' \
+  --federated-credential-name '<federated-credential-name>' \
+  --dry-run
+```
+
+### OPERATORE — MUTATIVO — NON ESEGUITO DA CODEX
+
+Solo dopo aver revisionato dry-run, account e autorità, l'operatore può
+eseguire separatamente la forma mutativa. Questo esempio acquisisce il token
+con prompt nascosto dentro un sottoprocesso; il parent shell lo rimuove prima e
+dopo e non riceve mai il valore. `set +x` deve precedere l'acquisizione:
+
+```bash
+set +x
+unset GITHUB_API_TOKEN
+(
+  set +x
+  set -e
+  read -r -s -p 'GitHub bootstrap token: ' GITHUB_API_TOKEN
+  printf '\n' >&2
+  export GITHUB_API_TOKEN
+  trap 'unset GITHUB_API_TOKEN' EXIT HUP INT TERM
+
+  ./scripts/bootstrap-github-oidc.sh \
+    --subscription-id '<subscription-uuid>' \
+    --tenant-id '<tenant-uuid>' \
+    --resource-group '<resource-group-name>' \
+    --github-owner-id 55147498 \
+    --github-repository-id 1365534753 \
+    --application-display-name '<application-display-name>' \
+    --federated-credential-name '<federated-credential-name>'
+)
+unset GITHUB_API_TOKEN
+```
+
+In alternativa il token può essere iniettato nel medesimo sottoprocesso da un
+secret manager protetto, mantenendo trap, assenza di xtrace e `unset` finale.
+Lo script copia e fa subito `unset` della variabile ricevuta, autentica entrambi
+i GET GitHub passando l'header a curl su stdin e cancella la copia privata prima
+di avviare Node o Azure.
+
+Mappare l'output finale `AZURE_CLIENT_ID=<client_id>` alla variabile GitHub
+`AZURE_CLIENT_ID`; mappare gli argomenti verificati alle variabili
+`AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` e `AZURE_RESOURCE_GROUP`. Il client
+ID non è segreto. `AZURE_CONTAINER_APP_NAME` proviene dall'output Bicep
+`containerAppName`; `PUBLIC_BASE_URL` è l'origine HTTPS canonica già verificata
+nel runbook dominio. Lo script conclude con un audit completo di applicazione,
+service principal, credenziali federate e unica assegnazione RBAC. Nessun
+application password o password del service principal viene creato. Vedere
+[OpenID Connect da GitHub Actions verso
+Azure](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure)
+e [federazione delle identità workload di Microsoft
+Entra](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation).
+
+## Deploy applicativo e rollback
+
+Il workflow di produzione parte da un push a `main` o da
+`workflow_dispatch`. Pubblica l'immagine privata con il solo tag SHA del commit,
+verifica il digest prodotto contro quello risolto dal registry e passa al deploy
+soltanto il riferimento immutabile `@sha256`. Il job protetto accede ad Azure
+con OIDC, crea una revisione candidata e verifica liveness, readiness, pagina
+pubblica e assenza di cookie pubblici. Solo dopo gli smoke check assegna il 100%
+alla revisione candidata per nome; un fallimento successivo tenta il rollback
+automatico alla revisione precedente verificata.
+
+Il bootstrap iniziale Bicep resta un'operazione revisionata dall'operatore e
+avvia l'applicazione in modalità `compat`. Soltanto un successivo rollout
+approvato tramite il deploy engine crea una revisione `migrate`. Seguire il
+[runbook dello schema articoli](article-storage-rollout.md) e rispettarne il
+confine logico di compatibilità.
+
+Per un rollback manuale, leggere prima il traffic routing esatto dell'app e per
+ogni revisione candidata verificare insieme traffic, image, mode e health. Il
+nome revisione restituito da Azure è opaco: non ricostruirlo. Non usare
+`latest`, label/tag, nomi dedotti, artefatti precedenti al confine di
+compatibilità o PUT parziali della Container App.
+
+```sh
+az containerapp show \
+  --subscription '<subscription-uuid>' \
+  --resource-group '<resource-group-name>' \
+  --name '<container-app-name>' \
+  --query '{activeRevisionsMode:properties.configuration.activeRevisionsMode,traffic:properties.configuration.ingress.traffic}' \
+  --output json
+
+az containerapp revision list \
+  --subscription '<subscription-uuid>' \
+  --resource-group '<resource-group-name>' \
+  --name '<container-app-name>' \
+  --all \
+  --query '[].{name:name,active:properties.active,health:properties.healthState,image:properties.template.containers[0].image,mode:properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0]}' \
+  --output table
+
+az containerapp revision show \
+  --subscription '<subscription-uuid>' \
+  --resource-group '<resource-group-name>' \
+  --name '<container-app-name>' \
+  --revision '<azure-returned-verified-revision-name>' \
+  --query '{active:properties.active,health:properties.healthState,image:properties.template.containers[0].image,mode:properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0]}' \
+  --output json
+```
+
+Procedere soltanto se `activeRevisionsMode` è esattamente `Multiple`. Muovere
+traffico soltanto verso una revisione sana, realmente trattenuta e non
+precedente al confine di compatibilità, usando il nome opaco restituito da
+Azure. Impostare `CURRENT_ROUTED_REVISION` sull'unico nome esplicito che riceve
+traffico e `ROLLBACK_REVISION` sul target verificato:
+
+```sh
+CURRENT_ROUTED_REVISION='<azure-returned-current-routed-revision-name>'
+ROLLBACK_REVISION='<azure-returned-verified-rollback-revision-name>'
+
+az containerapp ingress traffic set \
+  --subscription '<subscription-uuid>' \
+  --resource-group '<resource-group-name>' \
+  --name '<container-app-name>' \
+  --revision-weight "$CURRENT_ROUTED_REVISION=0" "$ROLLBACK_REVISION=100"
+```
+
+Il rollback non annulla le scritture già effettuate. Dopo il rollback rileggere
+app, traffico e revisione esatta, poi ripetere gli smoke check e il controllo
+di assenza di `Set-Cookie` sulle pagine pubbliche. Confermare che la revisione
+precedentemente instradata sia a 0 e il target verificato a 100. Per revisioni
+e traffico vedere [Azure Container Apps
+revisions](https://learn.microsoft.com/en-us/azure/container-apps/revisions)
+e [traffic
+splitting](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting).
+
+## GHCR privato, credenziale runtime e retention
+
+La pull privata della Container App richiede un **personal access token
+(classic)** con il solo scope `read:packages`; non è un fine-grained token.
+Creare prima il nuovo PAT nelle impostazioni GitHub, inserirlo soltanto nel
+secret app-scoped ACA `ghcr-token` mediante input protetto, quindi creare una
+nuova revisione e verificarne la pull privata e la salute. Revocare il vecchio
+PAT solo dopo la promozione riuscita. La modifica del secret ACA da sola non
+crea una revisione e non aggiorna quelle in esecuzione.
+
+La Container App conserva il PAT soltanto nel secret `ghcr-token`.
+Creazione, smoke check e promozione della revisione usano il deploy engine
+revisionato con soli argomenti non segreti.
+
+Non inserire mai il PAT nel repository, nell'environment GitHub, in file
+parametri, argv, log, ticket o chat. I file Bicep locali ignorati lo leggono
+dal solo ambiente operatore e Azure lo conserva come secret della Container
+App. Consultare [autenticazione del Container registry
+GitHub](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+e [gestione dei secret di Azure Container
+Apps](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets).
+
+Publish e retention usano `GITHUB_TOKEN`, automatico ed effimero; il
+`GITHUB_TOKEN` non è il PAT runtime. Il package deve essere collegato al
+repository e concedere ad Actions accesso `admin`: la cancellazione REST con
+`GITHUB_TOKEN` è attualmente in public preview. Verificare queste condizioni
+prima del primo apply; vedere [accesso dei workflow ai
+package](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)
+e [eliminazione/ripristino dei
+package](https://docs.github.com/en/packages/learn-github-packages/deleting-and-restoring-a-package).
+
+La retention gira ogni domenica alle 03:17 UTC e supporta anche apply manuale.
+La policy conserva l'unione del digest instradato, dei 10 package più nuovi e
+di quelli creati negli ultimi 30 giorni; nessun tag costituisce un pin o una
+allowlist. I limiti rigidi sono 100 pagine, 10.000 versioni, 100 eliminazioni e
+1 MiB di output. Il job condivide `production-deploy`, verifica nuovamente lo
+stato prima della prima cancellazione e fallisce chiuso su drift o risposta
+ambigua. Dopo un'eliminazione parziale interrompe il lavoro e richiede review
+operatore. Un package version eliminato può essere ripristinabile per 30 giorni
+se il namespace resta libero, ma il ripristino è deliberato e non sostituisce
+la verifica fail-closed.
+
+Il ruolo operativo **Operatore Pacchetti** controlla i workflow falliti e
+schedulati, e rivede mensilmente GHCR usage e lista package. Configura inoltre
+gli avvisi GitHub Packages al 90% e 100% dell'uso incluso di storage/bandwidth.
+L'**Operatore Costi Azure** resta responsabile di action group, budget e alert
+Azure: un avviso non ferma né limita automaticamente la spesa.
+
+## Secret applicativi e recupero credenziali
+
+`ADMIN_USERNAME` è configurazione non segreta. `ADMIN_PASSWORD_HASH` è un PHC
+Argon2id segreto: sostituirlo cambia la credential version e rende non valide
+le sessioni precedenti. `SESSION_KEY_BASE64` è un secret con almeno 32 byte
+dopo la decodifica; la sua rotazione invalida tutte le sessioni e richiede la
+stessa disciplina secret protetto/nuova revisione. Per password dimenticata o
+compromessa seguire esclusivamente [recupero password
+amministratore](password-recovery.md).
+
+## Gate esterni e responsabilità
+
+Nessuna attività esterna di questa checklist è stata eseguita da Codex o dai
+task di implementazione. Prima della produzione un operatore deve registrare:
+
+- disponibilità del GitHub plan e delle protection rule richieste;
+- collegamento del package, accesso package `admin` e rischio public preview;
+- esito reale di Actions per CI, publish, deploy e retention;
+- login OIDC live e audit dell'unico ruolo sul resource group;
+- private image pull e prova completa di rotazione/revoca PAT;
+- Azure what-if e deployment Bicep revisionati;
+- rollback drill su una revisione trattenuta compatibile;
+- propagazione DNS/TLS e rinnovo certificati;
+- alert delivery Azure/GitHub e comportamento reale di cost/usage;
+- storage recovery rehearsal, incluse copie e ripristino;
+- contenuti approvati dall'avvocato prima della pubblicazione.

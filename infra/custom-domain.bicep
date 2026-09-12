@@ -31,7 +31,7 @@ param imageReference string
 param ghcrUsername string
 
 @secure()
-@description('Fine-grained token used only by Container Apps to pull from GHCR.')
+@description('Personal access token (classic) with only read:packages, used by Container Apps for the private GHCR pull.')
 param ghcrToken string
 
 @minLength(1)

@@ -15,13 +15,14 @@ block repeats `set -eu`; when starting a new shell, rerun the variables block
 so its placeholders and rollout-script path are defined. Run the commands from
 the repository root at the exact Git commit recorded in the change ticket.
 
-## Variables and rollback floor
+## Variables and logical compatibility boundary
 
 Use an immutable GHCR digest, never a tag. The operational script accepts only
 a canonical lowercase `ghcr.io/<owner>/<package>@sha256:<digest>` reference
-whose digest is exactly 64 lowercase hexadecimal characters. Capture the first
-digest that contains the `compat|migrate|repair` implementation as the rollback
-floor and retain it in GHCR:
+whose digest is exactly 64 lowercase hexadecimal characters. Record the first
+digest that contains the `compat|migrate|repair` implementation as the logical
+compatibility boundary. During migration the routed digest is protected by the
+repository retention policy, but there is no permanent pin:
 
 ```bash
 set -eu
@@ -50,12 +51,12 @@ Azure call. The complete revision name is opaque: the script accepts only the
 Azure-returned revision name and never assumes which separator Azure places
 between the app name and suffix. Record
 `IMAGE_DIGEST`, `ROLLOUT_ID`, the Git commit, UTC time, and operator in the
-change ticket. That digest is the rollback floor: after the migration marker
-exists, never activate an older image that can write direct-ID rows.
+change ticket. After the migration marker exists, never activate an image from
+before that boundary because it can write direct-ID rows.
 
 ## Stage 1: compatibility deployment
 
-Deploy the rollback-floor artifact in compatibility mode:
+Deploy the compatibility-boundary artifact in compatibility mode:
 
 ```bash
 set -eu
@@ -253,10 +254,11 @@ marker, counts, health checks, and lifecycle result in the change ticket.
 
 ## Rollback
 
-Rollback may use only `IMAGE_DIGEST` (the compatibility floor) or a newer
-digest. Keep `ARTICLE_STORAGE_SCHEMA_MODE=migrate` for normal constant-time
-operation. Never reactivate a pre-floor revision, even if it is still present
-in Container Apps, because it can create legacy rows behind the marker.
+Rollback may use only an actually retained digest at or newer than the logical
+compatibility boundary. If the original boundary artifact ages out, choose a
+newer retained compatible digest. Never rely on a SHA tag to retain an image
+and never use a pre-boundary image. Keep
+`ARTICLE_STORAGE_SCHEMA_MODE=migrate` for normal constant-time operation.
 
 ## Recovery after a late legacy write
 
