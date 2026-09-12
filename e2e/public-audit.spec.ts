@@ -66,6 +66,62 @@ test.describe("public audit negative regressions", () => {
     )
   })
 
+  test("fails a synthetic document wider than its viewport", async ({
+    page,
+  }) => {
+    const audit = installPublicAudit(page)
+    await page.setContent(`<!doctype html>
+      <html lang="it">
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Overflow sintetico</title>
+          <style>
+            body { margin: 0; background: white; color: black; }
+            .overflow { width: calc(100vw + 80px); height: 44px; }
+          </style>
+        </head>
+        <body>
+          <header>Testata</header>
+          <main>
+            <h1>Overflow sintetico</h1>
+            <div class="overflow">Contenuto oltre il viewport</div>
+          </main>
+          <footer>Piè di pagina</footer>
+        </body>
+      </html>`)
+
+    await expect(audit.assertPage()).rejects.toThrow(
+      "document horizontal overflow",
+    )
+  })
+
+  test("fails third-party traffic that is aborted before network access", async ({
+    page,
+  }) => {
+    const target = "https://third-party.invalid/audit-probe"
+    let intercepted = ""
+    await page.route(target, async (route) => {
+      intercepted = `${route.request().method()} ${route.request().url()}`
+      await route.abort("blockedbyclient")
+    })
+    const audit = installPublicAudit(page)
+    await page.setContent(`<!doctype html>
+      <html lang="it">
+        <head><title>Traffico esterno sintetico</title></head>
+        <body>
+          <header>Testata</header>
+          <main><h1>Traffico esterno sintetico</h1></main>
+          <footer>Piè di pagina</footer>
+        </body>
+      </html>`)
+
+    await page.evaluate((url) => fetch(url).catch(() => undefined), target)
+    expect(intercepted).toBe(`GET ${target}`)
+    await expect(audit.assertClean()).rejects.toThrow(
+      "third-party request GET https://third-party.invalid/audit-probe",
+    )
+  })
+
   test("rejects an allowlisted status when the request has an unexpected query", async ({
     page,
   }) => {

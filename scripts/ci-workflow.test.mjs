@@ -18,6 +18,8 @@ const setupGoAction =
   "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
 const setupNodeAction =
   "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+const uploadArtifactAction =
+  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 const azuriteImage =
   "mcr.microsoft.com/azure-storage/azurite:3.37.0@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5"
 const integrationCommand =
@@ -69,6 +71,7 @@ test("toolchain actions are exact, immutable, cache-aware, and do not persist cr
     [checkoutAction, "v7.0.1"],
     [setupGoAction, "v7.0.0"],
     [setupNodeAction, "v7.0.0"],
+    [uploadArtifactAction, "v7.0.1"],
   ])
   assert.match(
     workflow,
@@ -92,17 +95,13 @@ test("toolchain actions are exact, immutable, cache-aware, and do not persist cr
 })
 
 test("exact Bicep installation precedes all repository verification commands", () => {
-  assert.match(
+  assert.doesNotMatch(
     workflow,
-    /^      AZURE_CONFIG_DIR: \$\{\{ runner\.temp \}\}\/azure-cli$/m,
+    /^    env:\n      (?:AZURE_CONFIG_DIR|DOTNET_BUNDLE_EXTRACT_BASE_DIR):/m,
   )
   assert.match(
     workflow,
-    /^      DOTNET_BUNDLE_EXTRACT_BASE_DIR: \$\{\{ runner\.temp \}\}\/dotnet$/m,
-  )
-  assert.match(
-    workflow,
-    /- name: Install exact Bicep CLI\n        shell: bash\n        run: \|\n          set -euo pipefail/,
+    /- name: Install exact Bicep CLI\n        env:\n          AZURE_CONFIG_DIR: \$\{\{ runner\.temp \}\}\/azure-cli\n          DOTNET_BUNDLE_EXTRACT_BASE_DIR: \$\{\{ runner\.temp \}\}\/dotnet\n        shell: bash\n        run: \|\n          set -euo pipefail/,
   )
   const install = positionOf(
     /az bicep install --version v0\.45\.15/,
@@ -187,7 +186,55 @@ test("the local image identity is validated, built once, and gated without publi
   )
   assert.doesNotMatch(
     workflow,
-    /azure\/login|docker\/login-action|ghcr\.io|docker\s+(?:login|push)|upload-artifact|download-artifact|\bdeploy\b|\bsecrets\.|GITHUB_TOKEN|github\.token/i,
+    /azure\/login|docker\/login-action|ghcr\.io|docker\s+(?:login|push)|download-artifact|\bdeploy\b|\bsecrets\.|GITHUB_TOKEN|github\.token/i,
+  )
+})
+
+test("browser gates install local engines and run before Azurite", () => {
+  const race = positionOf(
+    /^          go test -race -count=1 \.\/\.\.\.$/m,
+    "unit race suite",
+  )
+  const install = positionOf(
+    /^          \.\/node_modules\/\.bin\/playwright install --with-deps chromium firefox webkit$/m,
+    "local Playwright browser installation",
+  )
+  const chromium = positionOf(
+    /^          npm run e2e -- --project=chromium$/m,
+    "full Chromium browser gate",
+  )
+  const smoke = positionOf(
+    /^          npm run e2e:smoke$/m,
+    "three-engine smoke gate",
+  )
+  const composeUp = positionOf(
+    /compose\.test\.yaml up --detach/,
+    "Azurite start",
+  )
+  assert.ok(race < install)
+  assert.ok(install < chromium)
+  assert.ok(chromium < smoke)
+  assert.ok(smoke < composeUp)
+})
+
+test("failure diagnostics upload only Playwright traces and screenshots for three days", () => {
+  const uploadBlock = workflow.slice(
+    positionOf(
+      /- name: Upload Playwright failure diagnostics/,
+      "Playwright diagnostic upload",
+    ),
+  )
+  assert.match(
+    workflow,
+    new RegExp(
+      `- name: Upload Playwright failure diagnostics\\n        if: failure\\(\\)\\n        uses: ${uploadArtifactAction.replaceAll("/", "\\/")} # v7\\.0\\.1\\n        with:\\n          name: playwright-failure-diagnostics\\n          path: \\|\\n            artifacts/playwright/test-results/\\*\\*/trace\\.zip\\n            artifacts/playwright/test-results/\\*\\*/\\*\\.png\\n          if-no-files-found: ignore\\n          retention-days: 3`,
+    ),
+  )
+  assert.equal(workflow.match(/actions\/upload-artifact@/g)?.length, 1)
+  assert.doesNotMatch(workflow, /^\s+path:\s+artifacts\/?\s*$/m)
+  assert.doesNotMatch(
+    uploadBlock,
+    /html-report|\.webm|video|storageState|storage-state|credentials|request bod|request header/i,
   )
 })
 
@@ -200,6 +247,7 @@ test("workflow commands retain the exact required integration and verification s
     /compose\.test\.yaml up --detach/,
     "Azurite start",
   )
+  const browserSmoke = positionOf(/^          npm run e2e:smoke$/m, "smoke")
   const integration = positionOf(
     new RegExp(integrationCommand.replaceAll(".", "\\.")),
     "tagged integration suite",
@@ -210,6 +258,7 @@ test("workflow commands retain the exact required integration and verification s
   )
   const build = positionOf(/docker build --pull/, "local container build")
   assert.ok(race < composeUp)
+  assert.ok(browserSmoke < composeUp)
   assert.ok(composeUp < integration)
   assert.ok(integration < teardown)
   assert.ok(teardown < build)

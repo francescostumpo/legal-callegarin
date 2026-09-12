@@ -11,9 +11,6 @@ jobs:
     name: Verify pull request
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-cli
-      DOTNET_BUNDLE_EXTRACT_BASE_DIR: ${{ runner.temp }}/dotnet
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,6 +31,9 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install exact Bicep CLI
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-cli
+          DOTNET_BUNDLE_EXTRACT_BASE_DIR: ${{ runner.temp }}/dotnet
         shell: bash
         run: |
           set -euo pipefail
@@ -53,6 +53,18 @@ jobs:
       - name: Run Go race tests
         run: |
           go test -race -count=1 ./...
+
+      - name: Install Playwright browsers
+        run: |
+          ./node_modules/.bin/playwright install --with-deps chromium firefox webkit
+
+      - name: Run full Chromium browser suite
+        run: |
+          npm run e2e -- --project=chromium
+
+      - name: Run three-engine browser smoke suite
+        run: |
+          npm run e2e:smoke
 
       - name: Start Azurite
         run: |
@@ -103,3 +115,14 @@ jobs:
       - name: Scan local image
         run: |
           make scan IMAGE="$CI_IMAGE" SEVERITY=HIGH,CRITICAL
+
+      - name: Upload Playwright failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-failure-diagnostics
+          path: |
+            artifacts/playwright/test-results/**/trace.zip
+            artifacts/playwright/test-results/**/*.png
+          if-no-files-found: ignore
+          retention-days: 3
