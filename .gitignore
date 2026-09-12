@@ -5,6 +5,7 @@ internal/webassets/admin/dist/
 /bin/*
 !/bin/.keep
 coverage/
+/artifacts/
 *.log
 .env
 .env.*
