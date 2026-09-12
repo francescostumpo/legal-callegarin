@@ -45,8 +45,10 @@ az containerapp show \
 letter, contain only lowercase letters, digits, and hyphens, end with a letter
 or digit, contain no consecutive hyphens, and contain at most 16 characters.
 The script derives distinct `repair-$ROLLOUT_ID` and
-`migrate-$ROLLOUT_ID` revision suffixes and validates both suffixes plus the
-complete Container Apps revision-name length before any Azure call. Record
+`migrate-$ROLLOUT_ID` revision suffixes and validates both suffixes before any
+Azure call. The complete revision name is opaque: the script accepts only the
+Azure-returned revision name and never assumes which separator Azure places
+between the app name and suffix. Record
 `IMAGE_DIGEST`, `ROLLOUT_ID`, the Git commit, UTC time, and operator in the
 change ticket. That digest is the rollback floor: after the migration marker
 exists, never activate an older image that can write direct-ID rows.
@@ -336,16 +338,19 @@ printf 'verified repair revision: %s\n' "$REPAIR_REVISION"
 each exact name. It then makes a new count query and aborts before both the
 drain and update unless that count is zero. Only after `sleep 30` does it set
 multiple-revision mode and freshly require the exact property value
-`Multiple`. It rejects an already existing `repair-$ROLLOUT_ID` revision by
-listing all revisions, including inactive ones. Immediately before update it
-again requires at least one named-only traffic rule and no implicit latest
-rule. The update uses the unique suffix and returns its own
-`properties.latestRevisionName`; the script requires the response to equal
-`$CONTAINER_APP-repair-$ROLLOUT_ID`, rather than making an app-wide latest
-revision query. It then lists revisions for operator observation and requires
-that exact generated revision to have `active=true`, `healthState=Healthy`, the
-exact `IMAGE_DIGEST`, and `ARTICLE_STORAGE_SCHEMA_MODE=repair` before returning
-its name. Under `set -eu`, a failed command substitution stops this runbook.
+`Multiple`. It rejects an already existing `repair-$ROLLOUT_ID` suffix by
+inspecting `properties.template.revisionSuffix` across all revisions, including
+inactive ones. Immediately before update it again requires at least one
+named-only traffic rule and no implicit latest rule. The update uses the unique
+suffix and returns its own `properties.latestRevisionName`. The script treats
+that Azure-returned revision name as opaque, requires that exact name to occur
+once in the target app's all-revisions lookup, and never reconstructs it from
+the app name and suffix. It then lists revisions for operator observation and
+requires that exact generated revision to have `active=true`,
+`healthState=Healthy`, the exact `IMAGE_DIGEST`,
+`ARTICLE_STORAGE_SCHEMA_MODE=repair`, and
+`properties.template.revisionSuffix=repair-$ROLLOUT_ID` before returning its
+name. Under `set -eu`, a failed command substitution stops this runbook.
 
 The repair revision ignores the marker, scans all article rows, conditionally
 converges late legacy rows, verifies a clean pass, and only then starts its
@@ -373,24 +378,29 @@ RECOVERY_MIGRATE_REVISION="$(
 printf 'promoted recovery migrate revision: %s\n' "$RECOVERY_MIGRATE_REVISION"
 ```
 
-Before the migration update, the supplied `REPAIR_REVISION` must belong
-exactly to `CONTAINER_APP`, have a
-valid suffix, differ from the expected migrate revision, and occur exactly once
-in an all-revisions lookup. That exact revision must still have `active=true`,
-`healthState=Healthy`, the exact `IMAGE_DIGEST`, and schema mode `repair`, or no
-migrate update occurs. The script then freshly sets and verifies
+Before the migration update, the supplied `REPAIR_REVISION` must be a valid
+revision name and occur exactly once in the target app's all-revisions lookup;
+the target resource group and app on that lookup establish its provenance. That
+exact revision must still have `active=true`, `healthState=Healthy`, the exact
+`IMAGE_DIGEST`, schema mode `repair`, and
+`properties.template.revisionSuffix=repair-$ROLLOUT_ID`, or no migrate update
+occurs. The script then freshly sets and verifies
 `activeRevisionsMode=Multiple`, rejects an existing
-`migrate-$ROLLOUT_ID` revision across active and inactive revisions, and
-immediately rechecks named-only traffic before update. The update uses the
-unique suffix and captures its own `properties.latestRevisionName`; the
-response must equal `$CONTAINER_APP-migrate-$ROLLOUT_ID`.
+`migrate-$ROLLOUT_ID` suffix by inspecting the suffix property across active and
+inactive revisions, and immediately rechecks named-only traffic before update.
+The update uses the unique suffix and captures its own
+`properties.latestRevisionName`. As for repair, the Azure-returned revision name
+must occur exactly once in the target app's all-revisions lookup; no separator
+shape is promised or inferred.
 
 After listing revisions for observation, the script requires that exact
 migrate revision to have `active=true`, `healthState=Healthy`, the exact
-`IMAGE_DIGEST`, and schema mode `migrate`. Immediately before promotion it
-again sets and freshly verifies `activeRevisionsMode=Multiple`; only then does
-it assign 100% traffic. Before the final deactivation it reasserts that repair
-and migrate are distinct and reverifies every repair property. The repair
+`IMAGE_DIGEST`, schema mode `migrate`, and
+`properties.template.revisionSuffix=migrate-$ROLLOUT_ID`. Immediately before
+promotion it again sets and freshly verifies
+`activeRevisionsMode=Multiple`; only then does it assign 100% traffic. Before
+the final deactivation it reasserts that repair and migrate are distinct and
+reverifies every repair property, including the repair suffix. The repair
 revision is deactivated only after both the traffic command and this final
 verification succeed. No repair command assigns traffic implicitly or
 explicitly.
@@ -399,10 +409,11 @@ Do not blindly retry either command with the same `ROLLOUT_ID`: an existing
 operation-specific suffix is a hard stop before update, while a stale,
 inactive, or mismatched update response cannot be promoted. First inspect the
 exact repair and migrate revision names from the failed attempt and their
-traffic, active, health, image, and schema-mode state. Record that inspection;
-only then generate a new unique `ROLLOUT_ID`. A replacement migration may use
-the previously verified `REPAIR_REVISION` argument with the new ID. An
-unhealthy or mismatched revision, any failed mode check, or any ambiguous
-result stops without changing traffic. A failed or ambiguous repair remains a
-hard stop; keep writers quiesced and start a newly identified repair only after
-investigating.
+traffic, active, health, image, schema-mode, and revision-suffix state. Record
+that inspection; only then generate a new unique `ROLLOUT_ID`. A migration may
+use only a repair revision whose suffix contains that same `ROLLOUT_ID`; a new
+ID therefore requires a newly verified repair revision and cannot reuse the old
+repair argument. An unhealthy or mismatched revision, any failed mode check, or
+any ambiguous result stops without changing traffic. A failed or ambiguous
+repair remains a hard stop; keep writers quiesced and start a newly identified
+repair only after investigating.

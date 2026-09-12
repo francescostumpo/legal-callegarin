@@ -48,6 +48,7 @@ validate_revision_name() {
   case "$1" in
     '' | *[!a-z0-9-]*) fail "invalid Container Apps revision name: $1" ;;
   esac
+  test "${#1}" -le 64 || fail "Container Apps revision name exceeds 64 characters: $1"
 }
 
 validate_revision_suffix() {
@@ -56,19 +57,10 @@ validate_revision_suffix() {
     '' | [!a-z]* | *[!a-z0-9-]* | *- | *--*) fail "invalid Container Apps revision suffix: $revision_suffix" ;;
   esac
   test "${#revision_suffix}" -le 64 || fail "Container Apps revision suffix exceeds 64 characters: $revision_suffix"
-  revision_name_length=$((${#CONTAINER_APP} + 1 + ${#revision_suffix}))
-  test "$revision_name_length" -le 64 || fail "Container Apps revision name exceeds 64 characters: $CONTAINER_APP-$revision_suffix"
 }
 
 validate_repair_revision_argument() {
-  repair_revision=$1
-  validate_revision_name "$repair_revision"
-  case "$repair_revision" in
-    "$CONTAINER_APP"-*) ;;
-    *) fail "repair revision does not belong to $CONTAINER_APP: $repair_revision" ;;
-  esac
-  repair_revision_suffix=${repair_revision#"$CONTAINER_APP"-}
-  validate_revision_suffix "$repair_revision_suffix"
+  validate_revision_name "$1"
 }
 
 assert_distinct_revisions() {
@@ -84,19 +76,19 @@ observe_revisions() {
 }
 
 assert_revision_suffix_available() {
-  expected_revision=$1
+  expected_suffix=$1
   suffix_match_count="$(
     az containerapp revision list \
       --resource-group "$RESOURCE_GROUP" \
       --name "$CONTAINER_APP" \
       --all \
-      --query "length([?name == '$expected_revision'].name)" \
+      --query "length([?properties.template.revisionSuffix == '$expected_suffix'])" \
       --output tsv
   )"
   case "$suffix_match_count" in
-    '' | *[!0-9]*) fail "invalid suffix match count for $expected_revision: $suffix_match_count" ;;
+    '' | *[!0-9]*) fail "invalid suffix match count for $expected_suffix: $suffix_match_count" ;;
   esac
-  test "$suffix_match_count" = 0 || fail "revision suffix already exists: $expected_revision"
+  test "$suffix_match_count" = 0 || fail "revision suffix already exists: $expected_suffix"
 }
 
 assert_revision_exists() {
@@ -112,7 +104,23 @@ assert_revision_exists() {
   case "$revision_match_count" in
     '' | *[!0-9]*) fail "invalid revision match count for $expected_revision: $revision_match_count" ;;
   esac
-  test "$revision_match_count" = 1 || fail "repair revision does not exist exactly once: $expected_revision"
+  test "$revision_match_count" = 1 || fail "revision does not exist exactly once in target app: $expected_revision"
+}
+
+assert_created_revision_exists() {
+  created_revision=$1
+  revision_match_count="$(
+    az containerapp revision list \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$CONTAINER_APP" \
+      --all \
+      --query "length([?name == '$created_revision'].name)" \
+      --output tsv
+  )"
+  case "$revision_match_count" in
+    '' | *[!0-9]*) fail "invalid revision match count for $created_revision: $revision_match_count" ;;
+  esac
+  test "$revision_match_count" = 1 || fail "Azure-returned revision does not exist exactly once in target app: $created_revision"
 }
 
 assert_named_only_traffic() {
@@ -142,7 +150,6 @@ assert_named_only_traffic() {
 create_revision() {
   schema_mode=$1
   revision_suffix=$2
-  expected_revision=$3
 
   created_revision="$(
     az containerapp update \
@@ -155,13 +162,14 @@ create_revision() {
       --output tsv
   )"
   validate_revision_name "$created_revision"
-  test "$created_revision" = "$expected_revision" || fail "update returned unexpected revision: $created_revision"
+  assert_created_revision_exists "$created_revision"
   printf '%s\n' "$created_revision"
 }
 
 verify_revision() {
   revision=$1
   expected_mode=$2
+  expected_suffix=$3
   validate_revision_name "$revision"
 
   revision_facts="$(
@@ -169,7 +177,7 @@ verify_revision() {
       --resource-group "$RESOURCE_GROUP" \
       --name "$CONTAINER_APP" \
       --revision "$revision" \
-      --query '[[to_string(properties.active),properties.healthState,properties.template.containers[0].image,(properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0])]]' \
+      --query '[[to_string(properties.active),properties.healthState,properties.template.containers[0].image,(properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0]),properties.template.revisionSuffix]]' \
       --output tsv
   )"
 
@@ -177,16 +185,18 @@ verify_revision() {
   IFS="$(printf '\t')"
   set -- $revision_facts
   IFS=$old_ifs
-  test "$#" -eq 4 || fail "could not verify revision $revision"
+  test "$#" -eq 5 || fail "could not verify revision $revision"
 
   revision_active=$1
   health_state=$2
   revision_image=$3
   revision_mode=$4
+  revision_suffix=$5
   test "$revision_active" = true || fail "revision $revision is not active: $revision_active"
   test "$health_state" = Healthy || fail "revision $revision is not Healthy: $health_state"
   test "$revision_image" = "$IMAGE_DIGEST" || fail "revision $revision image does not match IMAGE_DIGEST"
   test "$revision_mode" = "$expected_mode" || fail "revision $revision schema mode is not $expected_mode: $revision_mode"
+  test "$revision_suffix" = "$expected_suffix" || fail "revision $revision suffix is not $expected_suffix: $revision_suffix"
 }
 
 set_and_verify_multiple_mode() {
@@ -228,8 +238,6 @@ quiesce_and_create_repair() {
   require_rollout_configuration
   repair_suffix="repair-$ROLLOUT_ID"
   validate_revision_suffix "$repair_suffix"
-  expected_repair_revision="$CONTAINER_APP-$repair_suffix"
-  validate_revision_name "$expected_repair_revision"
 
   assert_named_only_traffic
 
@@ -273,14 +281,14 @@ quiesce_and_create_repair() {
   sleep 30
 
   set_and_verify_multiple_mode
-  assert_revision_suffix_available "$expected_repair_revision"
+  assert_revision_suffix_available "$repair_suffix"
   assert_named_only_traffic
   repair_revision="$(
-    create_revision repair "$repair_suffix" "$expected_repair_revision"
+    create_revision repair "$repair_suffix"
   )"
 
   observe_revisions
-  verify_revision "$repair_revision" repair
+  verify_revision "$repair_revision" repair "$repair_suffix"
   printf '%s\n' "$repair_revision"
 }
 
@@ -289,24 +297,24 @@ create_and_promote_recovery_migrate() {
   repair_revision=$1
   validate_repair_revision_argument "$repair_revision"
 
+  repair_suffix="repair-$ROLLOUT_ID"
+  validate_revision_suffix "$repair_suffix"
   migrate_suffix="migrate-$ROLLOUT_ID"
   validate_revision_suffix "$migrate_suffix"
-  expected_migrate_revision="$CONTAINER_APP-$migrate_suffix"
-  validate_revision_name "$expected_migrate_revision"
-  assert_distinct_revisions "$repair_revision" "$expected_migrate_revision"
 
   assert_revision_exists "$repair_revision"
-  verify_revision "$repair_revision" repair
+  verify_revision "$repair_revision" repair "$repair_suffix"
 
   set_and_verify_multiple_mode
-  assert_revision_suffix_available "$expected_migrate_revision"
+  assert_revision_suffix_available "$migrate_suffix"
   assert_named_only_traffic
   recovery_revision="$(
-    create_revision migrate "$migrate_suffix" "$expected_migrate_revision"
+    create_revision migrate "$migrate_suffix"
   )"
+  assert_distinct_revisions "$repair_revision" "$recovery_revision"
 
   observe_revisions
-  verify_revision "$recovery_revision" migrate
+  verify_revision "$recovery_revision" migrate "$migrate_suffix"
 
   set_and_verify_multiple_mode
   az containerapp ingress traffic set \
@@ -315,7 +323,7 @@ create_and_promote_recovery_migrate() {
     --revision-weight "$recovery_revision=100" >/dev/null
 
   assert_distinct_revisions "$repair_revision" "$recovery_revision"
-  verify_revision "$repair_revision" repair
+  verify_revision "$repair_revision" repair "$repair_suffix"
   az containerapp revision deactivate \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP" \
