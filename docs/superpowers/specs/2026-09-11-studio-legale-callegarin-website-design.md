@@ -379,6 +379,15 @@ GitHub Actions:
 8. preserves the previous healthy revision for rollback;
 9. removes superseded GHCR versions according to a retention rule.
 
+The Azure federated credential uses GitHub's immutable default OIDC subject
+format for repositories created after 15 July 2026. For this repository, whose
+public GitHub metadata reports owner ID `55147498`, repository ID `1365534753`,
+and creation date 11 September 2026, the production-environment subject is
+exactly
+`repo:francescostumpo@55147498/legal-callegarin@1365534753:environment:production`.
+The bootstrap revalidates the supplied numeric IDs and fails closed rather than
+falling back to the legacy name-only subject.
+
 Container Apps stores a GHCR token limited to package read access. Token rotation is an explicit operations procedure. GitHub package budgets and usage alerts are enabled where the account supports them.
 
 ## 16. Cost model
