@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+set +x
+set +a
+unset github_api_token
 set -euo pipefail
 
 export AZURE_CORE_OUTPUT=none
@@ -112,12 +115,22 @@ if [[ $dry_run == true ]]; then
   exit 0
 fi
 
+github_api_token=${GITHUB_API_TOKEN-}
+unset GITHUB_API_TOKEN
+if [[ ${#github_api_token} -gt 255 || ! $github_api_token =~ ^(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,244})$ ]]; then
+  github_api_token=""
+  unset github_api_token
+  die "invalid GitHub API token"
+fi
+
 command -v az >/dev/null || die "az is required"
 command -v curl >/dev/null || die "curl is required"
 command -v node >/dev/null || die "node is required"
 
 github_get() {
-  curl --fail --silent --show-error --location \
+  printf 'Authorization: Bearer %s\n' "$github_api_token" | \
+    curl --disable --no-location --fail --silent --show-error \
+    --header @- \
     --header "Accept: application/vnd.github+json" \
     --header "X-GitHub-Api-Version: $API_VERSION" \
     --user-agent "legal-callegarin-oidc-bootstrap/1.0" "$1"
@@ -125,6 +138,8 @@ github_get() {
 
 repo_json=$(github_get "https://api.github.com/repos/$REPOSITORY")
 oidc_json=$(github_get "https://api.github.com/repos/$REPOSITORY/actions/oidc/customization/sub")
+github_api_token=""
+unset github_api_token
 REPO_JSON=$repo_json OIDC_JSON=$oidc_json node -e '
 const fail = message => { console.error(`error: ${message}`); process.exit(1) }
 let repo, oidc

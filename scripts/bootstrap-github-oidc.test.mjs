@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash, randomBytes } from "node:crypto"
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -94,6 +95,11 @@ async function harness(t, scenario = {}) {
   await (await import("node:fs/promises")).mkdir(bin)
   const log = join(dir, "calls.jsonl")
   const state = join(dir, "state.json")
+  const githubToken = `github_pat_${randomBytes(32).toString("hex")}`
+  const tokenHash = createHash("sha256").update(githubToken).digest("hex")
+  const headerHash = createHash("sha256")
+    .update(`Authorization: Bearer ${githubToken}\n`)
+    .digest("hex")
   await writeFile(
     state,
     JSON.stringify({
@@ -105,10 +111,27 @@ async function harness(t, scenario = {}) {
     }),
   )
 
-  const fake = `#!/usr/bin/env node
+  const fake = `#!/usr/bin/node
+import crypto from "node:crypto"
 import fs from "node:fs"
 const tool = process.argv[1].split("/").pop()
 const args = process.argv.slice(2)
+const digest = value => crypto.createHash("sha256").update(value).digest("hex")
+const tokenLength = Number(process.env.EXPECTED_GITHUB_TOKEN_LENGTH)
+const containsCredential = value => {
+  for (let offset = 0; offset + tokenLength <= value.length; offset += 1) {
+    if (digest(value.slice(offset, offset + tokenLength)) === process.env.EXPECTED_GITHUB_TOKEN_HASH) return true
+  }
+  return false
+}
+if (
+  Object.hasOwn(process.env, "GITHUB_API_TOKEN") ||
+  Object.hasOwn(process.env, "github_api_token") ||
+  Object.values(process.env).some(containsCredential)
+) {
+  process.stderr.write("credential leaked to child environment\\n")
+  process.exit(90)
+}
 fs.appendFileSync(process.env.CALL_LOG, JSON.stringify([tool, ...args]) + "\\n")
 const scenario = JSON.parse(process.env.SCENARIO)
 const statePath = process.env.STATE_FILE
@@ -117,7 +140,23 @@ const save = () => fs.writeFileSync(statePath, JSON.stringify(state))
 const out = value => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value))
 if (tool === "sleep") process.exit(0)
 if (tool === "curl") {
+  if (!args.some((value, index) => value === "--header" && args[index + 1] === "@-")) {
+    process.stderr.write("missing authorization header stdin option\\n")
+    process.exit(91)
+  }
+  const headers = fs.readFileSync(0, "utf8")
+  if (digest(headers) !== process.env.EXPECTED_GITHUB_HEADER_HASH) {
+    process.stderr.write("missing or invalid authorization header\\n")
+    process.exit(91)
+  }
   const url = args.at(-1)
+  state.curlCalls = (state.curlCalls ?? 0) + 1
+  save()
+  if (scenario.githubFailureAt === state.curlCalls) {
+    const status = scenario.githubFailureStatus
+    process.stderr.write(status ? "GitHub request failed with HTTP " + status + "\\n" : "GitHub request failed\\n")
+    process.exit(scenario.githubFailureCode ?? 22)
+  }
   if (scenario.githubMismatch) {
     out(url.endsWith("customization/sub") ? { use_default: true, use_immutable_subject: false, sub_claim_prefix: "legacy" } : { full_name: "wrong/repo" })
   } else if (url.endsWith("customization/sub")) {
@@ -168,18 +207,87 @@ else { process.stderr.write("unexpected az command: " + command); process.exit(6
     await chmod(path, 0o700)
   }
 
-  function run(args) {
-    return spawnSync("bash", [script, ...args], {
+  const fakeNode = `#!/usr/bin/node
+import crypto from "node:crypto"
+import fs from "node:fs"
+import { spawnSync } from "node:child_process"
+const digest = value => crypto.createHash("sha256").update(value).digest("hex")
+const tokenLength = Number(process.env.EXPECTED_GITHUB_TOKEN_LENGTH)
+const containsCredential = value => {
+  for (let offset = 0; offset + tokenLength <= value.length; offset += 1) {
+    if (digest(value.slice(offset, offset + tokenLength)) === process.env.EXPECTED_GITHUB_TOKEN_HASH) return true
+  }
+  return false
+}
+if (
+  Object.hasOwn(process.env, "GITHUB_API_TOKEN") ||
+  Object.hasOwn(process.env, "github_api_token") ||
+  Object.values(process.env).some(containsCredential)
+) {
+  process.stderr.write("credential leaked to node environment\\n")
+  process.exit(90)
+}
+fs.appendFileSync(process.env.CALL_LOG, JSON.stringify(["node", ...process.argv.slice(2)]) + "\\n")
+const result = spawnSync("/usr/bin/node", process.argv.slice(2), { stdio: "inherit", env: process.env })
+if (result.error || result.signal || result.status === null) process.exit(92)
+process.exit(result.status)
+`
+  const nodePath = join(bin, "node")
+  await writeFile(nodePath, fakeNode)
+  await chmod(nodePath, 0o700)
+
+  function run(args, options = {}) {
+    const environment = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      CALL_LOG: log,
+      STATE_FILE: state,
+      SCENARIO: JSON.stringify(scenario),
+      SENTINEL_SECRET: "never-print-this",
+      EXPECTED_GITHUB_TOKEN_HASH: tokenHash,
+      EXPECTED_GITHUB_TOKEN_LENGTH: String(githubToken.length),
+      EXPECTED_GITHUB_HEADER_HASH: headerHash,
+    }
+    delete environment.github_api_token
+    if (options.omitToken) {
+      delete environment.GITHUB_API_TOKEN
+    } else {
+      environment.GITHUB_API_TOKEN = options.token ?? githubToken
+    }
+    if (options.exportLowercase) {
+      environment.github_api_token = githubToken
+    }
+    const shellOptions = [
+      ...(options.allexport ? ["-a"] : []),
+      ...(options.xtrace ? ["-x"] : []),
+    ]
+    return spawnSync("bash", [...shellOptions, script, ...args], {
       cwd: root,
       encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH}`,
-        CALL_LOG: log,
-        STATE_FILE: state,
-        SCENARIO: JSON.stringify(scenario),
-        SENTINEL_SECRET: "never-print-this",
-      },
+      env: environment,
+      input: "",
+    })
+  }
+
+  function probeWrappedCredential(tool) {
+    const environment = {
+      ...process.env,
+      CALL_LOG: log,
+      STATE_FILE: state,
+      SCENARIO: JSON.stringify(scenario),
+      EXPECTED_GITHUB_TOKEN_HASH: tokenHash,
+      EXPECTED_GITHUB_TOKEN_LENGTH: String(githubToken.length),
+      EXPECTED_GITHUB_HEADER_HASH: headerHash,
+      LEAK_PROBE: `Bearer ${githubToken}`,
+    }
+    delete environment.GITHUB_API_TOKEN
+    delete environment.github_api_token
+    const args = tool === "node" ? ["-e", "process.exit(0)"] : []
+    return spawnSync(join(bin, tool), args, {
+      cwd: root,
+      encoding: "utf8",
+      env: environment,
+      input: "",
     })
   }
 
@@ -196,18 +304,60 @@ else { process.stderr.write("unexpected az command: " + command); process.exit(6
     }
   }
 
-  return { run, calls, state: () => readFile(state, "utf8").then(JSON.parse) }
+  async function artifacts() {
+    const paths = [log, state, ...["az", "curl", "sleep", "node"].map((name) => join(bin, name))]
+    const contents = await Promise.all(
+      paths.map((path) => readFile(path, "utf8").catch(() => "")),
+    )
+    return contents.join("\n")
+  }
+
+  return {
+    run,
+    calls,
+    artifacts,
+    probeWrappedCredential,
+    token: githubToken,
+    state: () => readFile(state, "utf8").then(JSON.parse),
+  }
 }
 
 test("dry-run prints exact immutable intent and performs no external calls", async (t) => {
   const h = await harness(t)
-  const result = h.run([...baseArgs, "--dry-run"])
+  const result = h.run([...baseArgs, "--dry-run"], { omitToken: true })
   assert.equal(result.status, 0)
   assert.equal(
     result.stdout,
     `repository=francescostumpo/legal-callegarin\ngithub_owner_id=55147498\ngithub_repository_id=1365534753\napplication_display_name=legal-callegarin-github-production\nfederated_credential_name=github-production\nissuer=https://token.actions.githubusercontent.com\nsubject=${subject}\naudience=api://AzureADTokenExchange\nrole_definition_id=${role}\nAZURE_TENANT_ID=${tenant}\nAZURE_SUBSCRIPTION_ID=${subscription}\nAZURE_RESOURCE_GROUP=legal-callegarin-prod\nresource_group_scope=/subscriptions/${subscription}/resourceGroups/legal-callegarin-prod\nchanges_applied=false\n`,
   )
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /GITHUB_API_TOKEN|Authorization|Bearer/i)
   assert.deepEqual(await h.calls(), [])
+})
+
+test("live token validation fails before every child tool without disclosure", async (t) => {
+  const cases = [
+    ["missing", { omitToken: true }],
+    ["empty", { token: "" }],
+    ["short", { token: "short" }],
+    ["space", { token: "github_pat_invalid token" }],
+    ["tab", { token: "github_pat_invalid\ttoken" }],
+    ["carriage return", { token: "github_pat_invalid\rtoken" }],
+    ["line feed", { token: "github_pat_invalid\ntoken" }],
+    ["colon", { token: "github_pat_invalid:token" }],
+    ["excessive", { token: "a".repeat(256) }],
+  ]
+
+  for (const [name, options] of cases) {
+    const h = await harness(t)
+    const result = h.run(baseArgs, options)
+    assert.notEqual(result.status, 0, name)
+    assert.equal(result.stdout, "", name)
+    assert.equal(result.stderr, "error: invalid GitHub API token\n", name)
+    assert.deepEqual(await h.calls(), [], name)
+    if ("token" in options && options.token) {
+      assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(options.token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), name)
+    }
+  }
 })
 
 test("help and invalid invocations fail offline without calling tools", async (t) => {
@@ -244,7 +394,24 @@ test("create path performs verified ordered mutations and secure FIC handoff", a
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /SENTINEL_SECRET/)
   const calls = await h.calls()
   const joined = calls.map((call) => call.join(" ")).join("\n")
-  assert.match(joined, /curl --fail --silent --show-error --location/)
+  const curlCalls = calls.filter((call) => call[0] === "curl")
+  assert.equal(curlCalls.length, 2)
+  for (const call of curlCalls) {
+    assert.deepEqual(call.slice(0, 9), [
+      "curl",
+      "--disable",
+      "--no-location",
+      "--fail",
+      "--silent",
+      "--show-error",
+      "--header",
+      "@-",
+      "--header",
+    ])
+    assert.equal(call.includes("--location"), false)
+    assert.equal(call.includes("-L"), false)
+    assert.doesNotMatch(call.join(" "), new RegExp(h.token))
+  }
   assert.match(joined, /Accept: application\/vnd\.github\+json/)
   assert.match(joined, /X-GitHub-Api-Version: 2026-03-10/)
   assert.match(
@@ -338,6 +505,8 @@ test("create path performs verified ordered mutations and secure FIC handoff", a
     joined,
     /login|create-for-rbac|credential reset|access-token|\bdelete\b|\bupdate\b|github\.com.*(?:PUT|POST|PATCH)/i,
   )
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(h.token))
+  assert.doesNotMatch(await h.artifacts(), new RegExp(h.token))
   const firstMutation = calls.findIndex((call) => call.includes("create"))
   assert.ok(firstMutation > calls.findIndex((call) => call[1] === "group"))
   const final = await h.state()
@@ -355,6 +524,70 @@ test("create path performs verified ordered mutations and secure FIC handoff", a
   )
   assert.match(scriptSource, /trap 'cleanup_fic; exit 130' INT/)
   assert.match(scriptSource, /trap 'cleanup_fic; exit 143' TERM/)
+})
+
+for (const [name, scenario, expectedCurlCalls] of [
+  ["first GitHub request 401", { githubFailureAt: 1, githubFailureStatus: 401 }, 1],
+  ["second GitHub request 403", { githubFailureAt: 2, githubFailureStatus: 403 }, 2],
+  ["first GitHub transport failure", { githubFailureAt: 1 }, 1],
+]) {
+  test(`${name} stops before Azure and Node`, async (t) => {
+    const h = await harness(t, scenario)
+    const result = h.run(baseArgs)
+    assert.notEqual(result.status, 0)
+    const calls = await h.calls()
+    assert.equal(calls.filter((call) => call[0] === "curl").length, expectedCurlCalls)
+    assert.equal(calls.filter((call) => call[0] === "az").length, 0)
+    assert.equal(calls.filter((call) => call[0] === "node").length, 0)
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(h.token))
+    assert.doesNotMatch(await h.artifacts(), new RegExp(h.token))
+  })
+}
+
+test("bash xtrace is disabled before the live credential is handled", async (t) => {
+  const h = await harness(t, {
+    app: app(),
+    sp: sp(),
+    fic: fic(),
+    rbac: assignment(),
+  })
+  const result = h.run(baseArgs, { xtrace: true })
+  assert.equal(result.status, 0, result.stderr)
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(h.token))
+  assert.doesNotMatch(await h.artifacts(), new RegExp(h.token))
+})
+
+for (const [name, options] of [
+  ["an inherited exported lowercase token", { exportLowercase: true }],
+  ["bash allexport", { allexport: true }],
+]) {
+  test(`${name} cannot export the private token to child tools`, async (t) => {
+    const h = await harness(t, {
+      app: app(),
+      sp: sp(),
+      fic: fic(),
+      rbac: assignment(),
+    })
+    const result = h.run(baseArgs, options)
+    assert.equal(result.status, 0, result.stderr)
+    const calls = await h.calls()
+    for (const tool of ["curl", "node", "az"]) {
+      assert.ok(calls.some((call) => call[0] === tool), tool)
+    }
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(h.token))
+    assert.doesNotMatch(await h.artifacts(), new RegExp(h.token))
+  })
+}
+
+test("fake child scanners detect a credential inside an environment wrapper", async (t) => {
+  const h = await harness(t)
+  for (const tool of ["sleep", "node"]) {
+    const result = h.probeWrappedCredential(tool)
+    assert.equal(result.status, 90, tool)
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(h.token))
+  }
+  assert.deepEqual(await h.calls(), [])
+  assert.doesNotMatch(await h.artifacts(), new RegExp(h.token))
 })
 
 test("exact reuse is idempotent and applies no mutation", async (t) => {
