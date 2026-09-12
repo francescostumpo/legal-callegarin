@@ -35,13 +35,63 @@ function positionOf(source, pattern, label) {
   return match.index
 }
 
-function jobBlock(id, nextId) {
-  const start = positionOf(workflow, new RegExp(`^  ${id}:$`, "m"), `${id} job`)
+function jobBlock(id, nextId, source = workflow) {
+  const start = positionOf(source, new RegExp(`^  ${id}:$`, "m"), `${id} job`)
   const end = nextId
-    ? positionOf(workflow, new RegExp(`^  ${nextId}:$`, "m"), `${nextId} job`)
-    : workflow.length
+    ? positionOf(source, new RegExp(`^  ${nextId}:$`, "m"), `${nextId} job`)
+    : source.length
   assert.ok(start < end, `${id} must precede ${nextId}`)
-  return workflow.slice(start, end)
+  return source.slice(start, end)
+}
+
+function indentation(line) {
+  return line.match(/^ */)[0].length
+}
+
+function mappingBlock(source, key, indent, label) {
+  const lines = source.replaceAll("\r\n", "\n").split("\n")
+  const header = `${" ".repeat(indent)}${key}:`
+  const starts = lines
+    .map((line, index) => (line === header ? index : -1))
+    .filter((index) => index >= 0)
+  assert.equal(starts.length, 1, `expected exactly one ${label} mapping`)
+
+  const start = starts[0]
+  let end = lines.length
+  for (let index = start + 1; index < lines.length; index++) {
+    if (lines[index].trim() === "") continue
+    if (indentation(lines[index]) <= indent) {
+      end = index
+      break
+    }
+  }
+  return lines.slice(start, end).join("\n").trimEnd()
+}
+
+function assertPermissionMappings(source) {
+  const publish = jobBlock("publish", "deploy-production", source)
+  const deploy = jobBlock("deploy-production", undefined, source)
+
+  assert.equal(
+    mappingBlock(source, "permissions", 0, "workflow permissions"),
+    "permissions:\n  contents: read",
+  )
+  assert.equal(
+    mappingBlock(publish, "permissions", 4, "publish permissions"),
+    "    permissions:\n      contents: read\n      packages: write",
+  )
+  assert.equal(
+    mappingBlock(deploy, "permissions", 4, "deploy permissions"),
+    "    permissions:\n      contents: read\n      id-token: write",
+  )
+}
+
+function assertPublishOutputMapping(source) {
+  const publish = jobBlock("publish", "deploy-production", source)
+  assert.equal(
+    mappingBlock(publish, "outputs", 4, "publish outputs"),
+    "    outputs:\n      image_ref: ${{ steps.verify.outputs.image_ref }}",
+  )
 }
 
 test("production publication has only the exact main push and manual triggers", () => {
@@ -99,22 +149,50 @@ test("permissions, dependency, environment, and concurrency are least privilege"
   const publish = jobBlock("publish", "deploy-production")
   const deploy = jobBlock("deploy-production")
 
-  assert.match(
-    publish,
-    /^    permissions:\n      contents: read\n      packages: write$/m,
-  )
+  assertPermissionMappings(workflow)
   assert.doesNotMatch(publish, /^\s+id-token:|^\s+environment:/m)
   assert.match(deploy, /^    needs: publish$/m)
   assert.match(deploy, /^    environment: production$/m)
-  assert.match(
-    deploy,
-    /^    permissions:\n      contents: read\n      id-token: write$/m,
-  )
   assert.doesNotMatch(deploy, /^\s+packages:/m)
   assert.match(
     deploy,
     /^    concurrency:\n      group: production-deploy\n      cancel-in-progress: false$/m,
   )
+})
+
+test("permission mappings reject an additional capability at every level", () => {
+  const mutations = [
+    [
+      "workflow",
+      workflow.replace(
+        "permissions:\n  contents: read",
+        "permissions:\n  contents: read\n  issues: read",
+      ),
+    ],
+    [
+      "publish",
+      workflow.replace(
+        "      packages: write",
+        "      packages: write\n      issues: read",
+      ),
+    ],
+    [
+      "deploy",
+      workflow.replace(
+        "      id-token: write",
+        "      id-token: write\n      actions: read",
+      ),
+    ],
+  ]
+
+  for (const [label, mutation] of mutations) {
+    assert.notEqual(mutation, workflow, `${label} fixture must mutate source`)
+    assert.throws(
+      () => assertPermissionMappings(mutation),
+      { name: "AssertionError" },
+      `${label} mapping accepted an additional permission`,
+    )
+  }
 })
 
 test("remote actions are exact, ordered, immutable, and checkouts do not persist credentials", () => {
@@ -192,11 +270,7 @@ test("publish validates identity before ephemeral GHCR login and pushes one amd6
 
 test("publish independently verifies the pushed digest and exports only the immutable reference", () => {
   const publish = jobBlock("publish", "deploy-production")
-  assert.match(
-    publish,
-    /^    outputs:\n      image_ref: \$\{\{ steps\.verify\.outputs\.image_ref \}\}$/m,
-  )
-  assert.equal([...publish.matchAll(/^      [a-z0-9_]+: \$\{\{ steps\./gm)].length, 1)
+  assertPublishOutputMapping(workflow)
   assert.match(publish, /^          BUILD_DIGEST: \$\{\{ steps\.build\.outputs\.digest \}\}$/m)
   assert.match(publish, /\^sha256:\[0-9a-f\]\{64\}\$/)
   assert.match(
@@ -232,6 +306,20 @@ test("publish independently verifies the pushed digest and exports only the immu
     positionOf(publish, /image_ref=%s@%s/, "immutable job output"),
   ]
   assert.deepEqual(digestSequence, [...digestSequence].sort((left, right) => left - right))
+})
+
+test("publish outputs reject an additional non-step value", () => {
+  const mutation = workflow.replace(
+    "      image_ref: ${{ steps.verify.outputs.image_ref }}",
+    "      image_ref: ${{ steps.verify.outputs.image_ref }}\n      mutable_ref: literal",
+  )
+
+  assert.notEqual(mutation, workflow, "output fixture must mutate source")
+  assert.throws(
+    () => assertPublishOutputMapping(mutation),
+    { name: "AssertionError" },
+    "publish mapping accepted an additional output",
+  )
 })
 
 test("deploy uses environment-backed OIDC and the verified cross-job digest", () => {
