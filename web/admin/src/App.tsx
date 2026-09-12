@@ -1166,6 +1166,14 @@ function ArticleEditor({ client }: { client: AdminClient }) {
     useCallback(() => dirty && !allowNavigation.current, [dirty]),
   )
   const editor = useEditor({
+    injectCSS: false,
+    editorProps: {
+      attributes: {
+        role: "textbox",
+        "aria-label": "Contenuto articolo",
+        "aria-multiline": "true",
+      },
+    },
     extensions: [
       StarterKit.configure({
         heading: { levels: [2, 3] },

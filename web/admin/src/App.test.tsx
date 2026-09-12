@@ -1205,11 +1205,13 @@ describe("article console", () => {
       expect(screen.getByRole("button", { name: control })).toBeInTheDocument()
     expect(screen.queryByText(/HTML/i)).not.toBeInTheDocument()
     expect(document.querySelector('input[type="file"]')).toBeNull()
-    expect(
-      within(screen.getByLabelText("Copertina"))
-        .getAllByRole("option")
-        .map((option) => (option as HTMLOptionElement).value),
-    ).toEqual(["", ...expectedCoverIDs])
+    await waitFor(() =>
+      expect(
+        within(screen.getByLabelText("Copertina"))
+          .getAllByRole("option")
+          .map((option) => (option as HTMLOptionElement).value),
+      ).toEqual(["", ...expectedCoverIDs]),
+    )
     expect(
       fetchMock.mock.calls.some(
         ([path, init]) =>
@@ -1221,6 +1223,14 @@ describe("article console", () => {
     })
     const editor = document.querySelector(".ProseMirror")
     if (!(editor instanceof HTMLElement)) throw new Error("missing editor")
+    expect(editor).toHaveAttribute("role", "textbox")
+    expect(editor).toHaveAttribute("aria-label", "Contenuto articolo")
+    expect(editor).toHaveAttribute("aria-multiline", "true")
+    expect(editor).toHaveAttribute("contenteditable", "true")
+    expect(screen.getByRole("textbox", { name: "Contenuto articolo" })).toBe(
+      editor,
+    )
+    expect(document.querySelector("style[data-tiptap-style]")).toBeNull()
     fireEvent.paste(editor, {
       clipboardData: {
         types: ["text/html", "text/plain"],

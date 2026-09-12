@@ -8,7 +8,16 @@ export type ExactAdminHTTPError = {
   method: string
   pathname: string
   search?: string
-  status: 401 | 503
+  status: 401 | 409 | 503
+  count?: number
+}
+
+export type ExactAdminPostResponseAbort = {
+  method: string
+  pathname: string
+  search?: string
+  status: number
+  errorText: string
   count?: number
 }
 
@@ -16,6 +25,19 @@ type ObservedAdminHTTPError = {
   method: string
   target: string
   status: number
+}
+
+type ObservedAdminHTTPResponse = ObservedAdminHTTPError & {
+  request: object
+  sequence: number
+}
+
+type ObservedAdminRequestAbort = {
+  request: object
+  sequence: number
+  method: string
+  target: string
+  errorText: string
 }
 
 type AdminPageAuditOptions = {
@@ -27,11 +49,15 @@ type AdminPageAuditOptions = {
 export function installAdminAudit(
   page: Page,
   allowedHTTPError: ExactAdminHTTPError[] = [],
+  allowedPostResponseAbort: ExactAdminPostResponseAbort[] = [],
 ) {
   const issues: string[] = []
   const pending: Promise<void>[] = []
   const observedHTTPError: ObservedAdminHTTPError[] = []
+  const observedHTTPResponse: ObservedAdminHTTPResponse[] = []
+  const observedRequestAbort: ObservedAdminRequestAbort[] = []
   const resourceConsoleError: string[] = []
+  let observationSequence = 0
 
   page.on("request", (request) => {
     const url = new URL(request.url())
@@ -53,15 +79,27 @@ export function installAdminAudit(
   page.on("requestfailed", (request) => {
     const url = new URL(request.url())
     if (url.origin === adminOrigin) {
-      issues.push(
-        `same-origin request failed: ${request.method()} ${requestTarget(url)} (${request.failure()?.errorText ?? "unknown"})`,
-      )
+      observedRequestAbort.push({
+        request,
+        sequence: ++observationSequence,
+        method: request.method(),
+        target: requestTarget(url),
+        errorText: request.failure()?.errorText ?? "unknown",
+      })
     }
   })
   page.on("response", (response) => {
     const request = response.request()
     const url = new URL(response.url())
     if (url.origin !== adminOrigin) return
+
+    observedHTTPResponse.push({
+      request,
+      sequence: ++observationSequence,
+      method: request.method(),
+      target: requestTarget(url),
+      status: response.status(),
+    })
 
     if (response.status() >= 400) {
       observedHTTPError.push({
@@ -81,7 +119,13 @@ export function installAdminAudit(
 
   return {
     async assertPage(options: AdminPageAuditOptions) {
-      await page.waitForLoadState("networkidle")
+      await page.waitForLoadState("domcontentloaded")
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      )
       await assertAxe(page)
       await assertSemanticStructure(page, options.authenticatedShell ?? false)
       await assertHorizontalBounds(page)
@@ -99,10 +143,55 @@ export function installAdminAudit(
           observedHTTPError,
           resourceConsoleError,
         ),
+        ...auditExpectedAdminPostResponseAborts(
+          allowedPostResponseAbort,
+          observedHTTPResponse,
+          observedRequestAbort,
+        ),
       )
       expect(issues, "admin browser audit events").toEqual([])
     },
   }
+}
+
+export function auditExpectedAdminPostResponseAborts(
+  allowed: ExactAdminPostResponseAbort[],
+  observedResponses: ObservedAdminHTTPResponse[],
+  observedAborts: ObservedAdminRequestAbort[],
+) {
+  const issues: string[] = []
+  const credited = allowed.map(() => 0)
+
+  for (const abort of observedAborts) {
+    const allowanceIndex = allowed.findIndex((entry, index) => {
+      const target = `${entry.pathname}${entry.search ?? ""}`
+      if (
+        credited[index] >= (entry.count ?? 1) ||
+        entry.method.toUpperCase() !== abort.method.toUpperCase() ||
+        target !== abort.target ||
+        entry.errorText !== abort.errorText
+      ) {
+        return false
+      }
+      return observedResponses.some(
+        (response) =>
+          response.request === abort.request &&
+          response.sequence < abort.sequence &&
+          response.method.toUpperCase() === entry.method.toUpperCase() &&
+          response.target === target &&
+          response.status === entry.status,
+      )
+    })
+    if (allowanceIndex < 0) {
+      issues.push(
+        `same-origin request failed: ${abort.method} ${abort.target} (${abort.errorText})`,
+      )
+      continue
+    }
+    credited[allowanceIndex]++
+  }
+
+  return issues
 }
 
 export function auditExpectedAdminHTTPErrors(
@@ -163,12 +252,17 @@ export function auditExpectedAdminHTTPErrors(
 
 function chromiumResourceErrorStatus(message: string) {
   const match =
-    /^Failed to load resource: the server responded with a status of (401|503) \((Unauthorized|Service Unavailable)?\)$/.exec(
+    /^Failed to load resource: the server responded with a status of (401|409|503) \((Unauthorized|Conflict|Service Unavailable)?\)$/.exec(
       message,
     )
   if (!match) return null
   const status = Number.parseInt(match[1], 10)
-  const expectedReason = status === 401 ? "Unauthorized" : "Service Unavailable"
+  const expectedReason =
+    status === 401
+      ? "Unauthorized"
+      : status === 409
+        ? "Conflict"
+        : "Service Unavailable"
   return match[2] === undefined || match[2] === expectedReason ? status : null
 }
 
@@ -296,11 +390,11 @@ async function assertHorizontalBounds(page: Page) {
       clipped,
     }
   })
+  expect(result.clipped, "admin elements clipped horizontally").toEqual([])
   expect(
     result.overflow,
     "admin document horizontal overflow",
   ).toBeLessThanOrEqual(0)
-  expect(result.clipped, "admin elements clipped horizontally").toEqual([])
 }
 
 async function assertDesktopAccountControlsDoNotOverlap(page: Page) {
