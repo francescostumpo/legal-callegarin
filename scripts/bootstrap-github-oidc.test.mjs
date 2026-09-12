@@ -140,12 +140,26 @@ else if (command.startsWith("ad app federated-credential list ")) out(scenario.f
 else if (command.startsWith("ad app federated-credential create ")) {
   const parameter = args[args.indexOf("--parameters") + 1]
   const path = parameter.startsWith("@") ? parameter.slice(1) : parameter
-  state.ficCapture = { body: JSON.parse(fs.readFileSync(path, "utf8")), mode: fs.statSync(path).mode & 0o777 }
+  state.ficCapture = { path, body: JSON.parse(fs.readFileSync(path, "utf8")), mode: fs.statSync(path).mode & 0o777 }
+  save()
+  if (scenario.ficConflictIncompatible) {
+    state.fic = ${JSON.stringify(fic({ subject: "incompatible-after-conflict" }))}
+    save()
+    process.exit(1)
+  }
   if (!scenario.ficTimeout) { state.fic = ${JSON.stringify(fic())}; save() }
   if (scenario.ficConflict) process.exit(1)
 }
 else if (command.startsWith("role assignment list ")) out(scenario.rbacTimeout ? [] : scenario.rbacDirectEmpty && args.includes("--all") ? [] : state.rbac === null ? [] : Array.isArray(state.rbac) ? state.rbac : [state.rbac])
-else if (command.startsWith("role assignment create ")) { if (!scenario.rbacTimeout) { state.rbac = ${JSON.stringify(assignment())}; save() }; if (scenario.rbacConflict) process.exit(1) }
+else if (command.startsWith("role assignment create ")) {
+  if (scenario.rbacConflictIncompatible) {
+    state.rbac = ${JSON.stringify(assignment({ roleDefinitionId: `/subscriptions/${subscription}/providers/Microsoft.Authorization/roleDefinitions/66666666-6666-4666-8666-666666666666` }))}
+    save()
+    process.exit(1)
+  }
+  if (!scenario.rbacTimeout) { state.rbac = ${JSON.stringify(assignment())}; save() }
+  if (scenario.rbacConflict) process.exit(1)
+}
 else { process.stderr.write("unexpected az command: " + command); process.exit(64) }
 `
   for (const name of ["az", "curl", "sleep"]) {
@@ -334,6 +348,11 @@ test("create path performs verified ordered mutations and secure FIC handoff", a
     subject,
     audiences: ["api://AzureADTokenExchange"],
   })
+  assert.equal(typeof final.ficCapture.path, "string")
+  await assert.rejects(
+    readFile(final.ficCapture.path),
+    (error) => error.code === "ENOENT",
+  )
   assert.match(scriptSource, /trap 'cleanup_fic; exit 130' INT/)
   assert.match(scriptSource, /trap 'cleanup_fic; exit 143' TERM/)
 })
@@ -392,6 +411,34 @@ for (const [name, scenario] of [
     { app: app(), sp: sp(), fic: fic({ subject: "legacy" }) },
   ],
   [
+    "extra FIC",
+    {
+      app: app(),
+      sp: sp(),
+      fic: [fic(), fic({ name: "unexpected-extra" })],
+    },
+  ],
+  [
+    "duplicate RBAC",
+    {
+      app: app(),
+      sp: sp(),
+      fic: fic(),
+      rbac: [assignment(), assignment({ id: "assignment-2" })],
+    },
+  ],
+  [
+    "different-role RBAC",
+    {
+      app: app(),
+      sp: sp(),
+      fic: fic(),
+      rbac: assignment({
+        roleDefinitionId: `/subscriptions/${subscription}/providers/Microsoft.Authorization/roleDefinitions/66666666-6666-4666-8666-666666666666`,
+      }),
+    },
+  ],
+  [
     "broader RBAC",
     {
       app: app(),
@@ -426,6 +473,9 @@ for (const [name, scenario] of [
     assert.notEqual(result.status, 0)
     const joined = (await h.calls()).map((v) => v.join(" ")).join("\n")
     assert.doesNotMatch(joined, /\bdelete\b|\bupdate\b|credential reset/)
+    if (name === "app credential" || name === "SP credential") {
+      assert.doesNotMatch(`${result.stdout}${result.stderr}`, /SENTINEL_SECRET/)
+    }
   })
 }
 
@@ -451,6 +501,39 @@ for (const [name, scenario] of [
       (await h.calls()).filter(([tool]) => tool === "sleep").length,
       12,
     )
+  })
+}
+
+test("failed FIC creation removes its mode-0600 temporary payload", async (t) => {
+  const h = await harness(t, { app: app(), sp: sp(), ficTimeout: true })
+  const result = h.run(baseArgs)
+  assert.notEqual(result.status, 0)
+  const final = await h.state()
+  assert.equal(final.ficCapture.mode, 0o600)
+  assert.equal(typeof final.ficCapture.path, "string")
+  await assert.rejects(
+    readFile(final.ficCapture.path),
+    (error) => error.code === "ENOENT",
+  )
+})
+
+for (const [name, scenario] of [
+  ["FIC", { app: app(), sp: sp(), ficConflictIncompatible: true }],
+  [
+    "RBAC",
+    {
+      app: app(),
+      sp: sp(),
+      fic: fic(),
+      rbacConflictIncompatible: true,
+    },
+  ],
+]) {
+  test(`${name} nonzero create with incompatible reread fails closed`, async (t) => {
+    const h = await harness(t, scenario)
+    const result = h.run(baseArgs)
+    assert.notEqual(result.status, 0)
+    assert.doesNotMatch(result.stdout, /changes_applied=/)
   })
 }
 
