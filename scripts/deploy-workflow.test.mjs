@@ -48,6 +48,11 @@ function indentation(line) {
   return line.match(/^ */)[0].length
 }
 
+function isIgnorableMappingLine(line) {
+  const trimmed = line.trim()
+  return trimmed === "" || trimmed.startsWith("#")
+}
+
 function mappingBlock(source, key, indent, label) {
   const lines = source.replaceAll("\r\n", "\n").split("\n")
   const header = `${" ".repeat(indent)}${key}:`
@@ -59,13 +64,16 @@ function mappingBlock(source, key, indent, label) {
   const start = starts[0]
   let end = lines.length
   for (let index = start + 1; index < lines.length; index++) {
-    if (lines[index].trim() === "") continue
+    if (isIgnorableMappingLine(lines[index])) continue
     if (indentation(lines[index]) <= indent) {
       end = index
       break
     }
   }
-  return lines.slice(start, end).join("\n").trimEnd()
+  return lines
+    .slice(start, end)
+    .filter((line) => !isIgnorableMappingLine(line))
+    .join("\n")
 }
 
 function assertPermissionMappings(source) {
@@ -181,6 +189,27 @@ test("permission mappings reject an additional capability at every level", () =>
       workflow.replace(
         "      id-token: write",
         "      id-token: write\n      actions: read",
+      ),
+    ],
+    [
+      "workflow after comment",
+      workflow.replace(
+        "permissions:\n  contents: read",
+        "permissions:\n  contents: read\n# ignored YAML comment\n  issues: read",
+      ),
+    ],
+    [
+      "publish after comment",
+      workflow.replace(
+        "      packages: write",
+        "      packages: write\n    # ignored YAML comment\n      issues: read",
+      ),
+    ],
+    [
+      "deploy after comment",
+      workflow.replace(
+        "      id-token: write",
+        "      id-token: write\n    # ignored YAML comment\n      actions: read",
       ),
     ],
   ]
@@ -309,17 +338,25 @@ test("publish independently verifies the pushed digest and exports only the immu
 })
 
 test("publish outputs reject an additional non-step value", () => {
-  const mutation = workflow.replace(
-    "      image_ref: ${{ steps.verify.outputs.image_ref }}",
-    "      image_ref: ${{ steps.verify.outputs.image_ref }}\n      mutable_ref: literal",
-  )
+  const mutations = [
+    workflow.replace(
+      "      image_ref: ${{ steps.verify.outputs.image_ref }}",
+      "      image_ref: ${{ steps.verify.outputs.image_ref }}\n      mutable_ref: literal",
+    ),
+    workflow.replace(
+      "      image_ref: ${{ steps.verify.outputs.image_ref }}",
+      "      image_ref: ${{ steps.verify.outputs.image_ref }}\n    # ignored YAML comment\n      mutable_ref: literal",
+    ),
+  ]
 
-  assert.notEqual(mutation, workflow, "output fixture must mutate source")
-  assert.throws(
-    () => assertPublishOutputMapping(mutation),
-    { name: "AssertionError" },
-    "publish mapping accepted an additional output",
-  )
+  for (const mutation of mutations) {
+    assert.notEqual(mutation, workflow, "output fixture must mutate source")
+    assert.throws(
+      () => assertPublishOutputMapping(mutation),
+      { name: "AssertionError" },
+      "publish mapping accepted an additional output",
+    )
+  }
 })
 
 test("deploy uses environment-backed OIDC and the verified cross-job digest", () => {
