@@ -248,6 +248,41 @@ func TestArticlePagesHaveReadableEditorialTypography(t *testing.T) {
 	assertCSSRuleContains(t, css, ".article-body", "max-width:", "font-size:", "line-height:")
 }
 
+func TestSingleArticleLayoutUsesDedicatedModifiers(t *testing.T) {
+	t.Parallel()
+
+	for filename, cardClass := range map[string]string{
+		"templates/pages/home.html":     "article-card article-card--media",
+		"templates/pages/articles.html": "article-card article-card--media",
+		"templates/pages/standard.html": "article-card article-card--text",
+	} {
+		content, err := fs.ReadFile(webassets.Files, filename)
+		if err != nil {
+			t.Fatalf("read %s: %v", filename, err)
+		}
+		markup := string(content)
+		for _, modifier := range []string{"area-grid article-grid", cardClass} {
+			if !strings.Contains(markup, modifier) {
+				t.Errorf("%s lacks %q article-only modifier", filename, modifier)
+			}
+		}
+	}
+
+	cssBytes, err := fs.ReadFile(webassets.Files, "public/site.css")
+	if err != nil {
+		t.Fatalf("read site.css: %v", err)
+	}
+	css := string(cssBytes)
+	for _, selector := range []string{
+		".article-grid > .article-card:only-child",
+		".article-grid > .article-card--media:only-child",
+	} {
+		if !strings.Contains(css, selector+" {") {
+			t.Errorf("site.css lacks dedicated rule for %q", selector)
+		}
+	}
+}
+
 func TestMobileCloseControlRequiresJavaScriptEnhancement(t *testing.T) {
 	t.Parallel()
 

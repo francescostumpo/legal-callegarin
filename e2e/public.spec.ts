@@ -119,6 +119,80 @@ test.describe("public Chromium journeys", () => {
     expect(await context.cookies()).toEqual([])
   })
 
+  test("a single media article fills its grid and stacks only on mobile", async ({
+    context,
+    page,
+  }) => {
+    const audit = installPublicAudit(page)
+    const isolateSeededArticle = async () => {
+      const cards = page.locator(
+        '[aria-labelledby="published-articles"] .article-grid > .article-card',
+      )
+      const retained = await cards.evaluateAll((articles, href) => {
+        let count = 0
+        for (const article of articles) {
+          if (article.querySelector(`a[href="${href}"]`) && count === 0) {
+            count++
+          } else {
+            article.remove()
+          }
+        }
+        return count
+      }, articleSlug)
+      expect(retained).toBe(1)
+      await expect(cards).toHaveCount(1)
+    }
+    const geometry = async () =>
+      page
+        .locator('[aria-labelledby="published-articles"] .area-grid')
+        .evaluate((grid) => {
+          const card = grid.querySelector<HTMLElement>(".area-card")
+          const media = card?.querySelector<HTMLElement>(".area-card__media")
+          const copy = card?.querySelector<HTMLElement>(".area-card__body")
+          if (!card || !media || !copy)
+            throw new Error("article fixture missing")
+          const bounds = (element: HTMLElement) => {
+            const box = element.getBoundingClientRect()
+            return {
+              left: box.left,
+              right: box.right,
+              top: box.top,
+              bottom: box.bottom,
+              width: box.width,
+            }
+          }
+          return {
+            grid: bounds(grid as HTMLElement),
+            card: bounds(card),
+            media: bounds(media),
+            copy: bounds(copy),
+          }
+        })
+
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto("/sentenze-e-riflessioni")
+    await isolateSeededArticle()
+    const desktop = await geometry()
+    expect(desktop.card.width).toBeGreaterThanOrEqual(desktop.grid.width - 2)
+    expect(Math.abs(desktop.media.top - desktop.copy.top)).toBeLessThanOrEqual(
+      1,
+    )
+    expect(desktop.media.right).toBeLessThanOrEqual(desktop.copy.left + 1)
+    expect(desktop.media.width).toBeGreaterThan(desktop.card.width * 0.4)
+    expect(desktop.copy.width).toBeGreaterThan(desktop.card.width * 0.4)
+    await audit.assertPage()
+
+    await page.setViewportSize({ width: 360, height: 800 })
+    await page.goto("/sentenze-e-riflessioni")
+    await isolateSeededArticle()
+    const mobile = await geometry()
+    expect(mobile.card.width).toBeGreaterThanOrEqual(mobile.grid.width - 2)
+    expect(mobile.copy.top).toBeGreaterThanOrEqual(mobile.media.bottom - 1)
+    await audit.assertPage()
+    await audit.assertClean()
+    expect(await context.cookies()).toEqual([])
+  })
+
   test("enhanced contact form validates fields and follows one successful PRG", async ({
     context,
     page,

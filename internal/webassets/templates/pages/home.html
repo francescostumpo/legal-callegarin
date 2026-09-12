@@ -87,9 +87,9 @@
       >
     </div>
     {{if .Articles}}
-    <div class="area-grid">
+    <div class="area-grid article-grid">
       {{range .Articles}}
-      <article class="area-card">
+      <article class="area-card article-card article-card--media">
         <a class="area-card__media" href="{{.Href}}"
           >{{template "editorial-picture" .Image}}</a
         >

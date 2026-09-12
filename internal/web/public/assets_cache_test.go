@@ -32,10 +32,15 @@ func TestAssetURLsEmittedForRealEmbeddedFilesAreContentHashedAndImmutable(t *tes
 
 	cssURL := firstAssetURL(t, home.Body.String(), `href=['"](/assets/site-[0-9a-f]{12}\.css)['"]`)
 	jsURL := firstAssetURL(t, home.Body.String(), `src=['"](/assets/nav-[0-9a-f]{12}\.js)['"]`)
+	faviconURL := firstAssetURL(t, home.Body.String(), `rel=['"]icon['"][^>]*href=['"](/assets/favicon-[0-9a-f]{12}\.svg)['"]`)
 	coverURL := firstAssetURL(t, home.Body.String(), `src="(/assets/covers/hero-architecture-landscape-[0-9a-f]{12}\.webp)"`)
 	css := assertContentHashedImmutableAsset(t, handler, cssURL)
 	assertContentHashedImmutableAsset(t, handler, jsURL)
+	favicon := assertContentHashedImmutableAsset(t, handler, faviconURL)
 	assertContentHashedImmutableAsset(t, handler, coverURL)
+	if !strings.Contains(string(favicon), "<svg") {
+		t.Fatalf("GET %s does not contain an SVG document", faviconURL)
+	}
 
 	fontURL := firstAssetURL(t, string(css), `url\("(/assets/fonts/fraunces-latin-variable-[0-9a-f]{12}\.woff2)"\)`)
 	assertContentHashedImmutableAsset(t, handler, fontURL)
