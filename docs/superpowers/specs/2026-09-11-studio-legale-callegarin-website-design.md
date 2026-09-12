@@ -352,12 +352,12 @@ ZRS protects against a zone failure, not operator deletion. Blob versioning, Blo
 - one Standard ZRS StorageV2 account containing Table and private Blob services;
 - one system-assigned Managed Identity and narrow RBAC assignments;
 - one minimally configured Log Analytics workspace;
-- one free managed TLS certificate bound to the custom domain;
+- two free managed TLS certificates, one for the apex hostname and one for `www`;
 - no Azure Container Registry;
 - no Azure DNS when the registrar's DNS is sufficient;
 - no Dedicated plan, private endpoint, premium planned maintenance, CDN, Front Door, WAF, Redis, SQL database, or Key Vault in the first release.
 
-The apex domain uses the required A and verification records. `www` uses a direct CNAME to the generated Container App hostname and redirects to the selected canonical host. Certificate requirements are validated before DNS cutover.
+The apex domain uses the required A and verification records. `www` uses a direct CNAME to the generated Container App hostname and redirects to the selected canonical host. DNS and CAA prerequisites are validated before cutover; managed-certificate issuance then runs after the A/CNAME records point directly to Container Apps, as required by Azure.
 
 ### 15.2 Bicep
 
