@@ -15,6 +15,7 @@ const notebookCoverAlt =
 const seededArticlePath =
   "/sentenze-e-riflessioni/affidamento-condiviso-guida-e2e"
 const seededArticleTitle = "Affidamento condiviso: guida essenziale"
+const constrainedAdminViewport = { width: 360, height: 800 }
 const mobileViewport = { width: 390, height: 844 }
 const desktopViewport = { width: 1440, height: 900 }
 
@@ -397,6 +398,17 @@ test("article draft, preview, publication, conflict, and logout lifecycle", asyn
       const desktopWidth = (await frame.boundingBox())?.width ?? 0
       expect(desktopWidth).toBeGreaterThan(768)
       await assertFrameHasNoHorizontalOverflow(frame)
+
+      await page.setViewportSize(constrainedAdminViewport)
+      await page.getByRole("button", { name: "360", exact: true }).click()
+      await expect(frame).toHaveClass(/preview-frame--mobile/)
+      await assertAdminHasNoHorizontalOverflow(page)
+      await assertFrameFitsAvailableWidth(frame)
+      await assertFrameHasNoHorizontalOverflow(frame)
+
+      await page.setViewportSize(desktopViewport)
+      await page.getByRole("button", { name: "Desktop", exact: true }).click()
+      await expect(frame).toHaveClass(/preview-frame--desktop/)
       await auditAtBothViewports(page, () =>
         audit.assertPage({ authenticatedShell: true, cookie: "authenticated" }),
       )
@@ -649,6 +661,48 @@ async function assertFrameHasNoHorizontalOverflow(
     return root.scrollWidth - root.clientWidth
   })
   expect(overflow, "preview document horizontal overflow").toBe(0)
+}
+
+async function assertAdminHasNoHorizontalOverflow(page: Page) {
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  )
+  expect(overflow, "admin document horizontal overflow").toBe(0)
+}
+
+async function assertFrameFitsAvailableWidth(
+  frame: ReturnType<Page["getByTitle"]>,
+) {
+  const geometry = await frame.evaluate((element) => {
+    const frameRect = element.getBoundingClientRect()
+    const containerRect = element.parentElement?.getBoundingClientRect()
+    return {
+      frameLeft: frameRect.left,
+      frameRight: frameRect.right,
+      containerLeft: containerRect?.left ?? Number.NaN,
+      containerRight: containerRect?.right ?? Number.NaN,
+      viewportWidth: document.documentElement.clientWidth,
+    }
+  })
+
+  expect(
+    geometry.frameLeft,
+    "preview left edge within container",
+  ).toBeGreaterThanOrEqual(geometry.containerLeft)
+  expect(
+    geometry.frameRight,
+    "preview right edge within container",
+  ).toBeLessThanOrEqual(geometry.containerRight)
+  expect(
+    geometry.frameLeft,
+    "preview left edge within viewport",
+  ).toBeGreaterThanOrEqual(0)
+  expect(
+    geometry.frameRight,
+    "preview right edge within viewport",
+  ).toBeLessThanOrEqual(geometry.viewportWidth)
 }
 
 function waitForResponse(

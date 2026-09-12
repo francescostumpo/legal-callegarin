@@ -159,8 +159,9 @@
   display: block;
   max-width: 100%;
   height: 44rem;
-  border: 1px solid var(--line, #d9d5ce);
+  border: 0;
   background: #fff;
+  box-shadow: inset 0 0 0 1px var(--line, #d9d5ce);
 }
 .preview-frame--mobile {
   width: 360px;
