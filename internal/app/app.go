@@ -31,7 +31,7 @@ type Options struct {
 	ContactService    contacts.ContactService
 	SessionSigningKey []byte
 	RateClock         func() time.Time
-	TrustedProxy      bool
+	TrustedProxyHops  int
 	Storage           *storagebundle.Bundle
 }
 
@@ -94,7 +94,7 @@ func New(options Options) (http.Handler, error) {
 			publicweb.WithContactService(contactService, signingKey),
 			publicweb.WithContactClock(clock),
 			publicweb.WithContactLogger(options.Logger),
-			publicweb.WithContactTrustedProxy(options.TrustedProxy || options.Config.TrustedProxy),
+			publicweb.WithContactTrustedProxyHops(effectiveTrustedProxyHops(options)),
 		)
 	}
 	renderer, err := publicweb.NewRenderer(options.Assets, options.Config.PublicBaseURL, rendererOptions...)
@@ -106,6 +106,7 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("GET /health/live", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("GET /health/ready", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -114,62 +115,83 @@ func New(options Options) (http.Handler, error) {
 			defer cancel()
 			if err := bundle.Readiness.Ready(ctx); err != nil {
 				response.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = response.Write([]byte("unavailable\n"))
 				return
 			}
 		}
 		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write([]byte("ok\n"))
 	})
 	if err := publicweb.RegisterRoutes(mux, renderer, options.Assets); err != nil {
 		return nil, fmt.Errorf("register public routes: %w", err)
-	}
-	if !adminConfigured {
-		return mux, nil
-	}
-	if bundle == nil || bundle.Sessions == nil {
-		return nil, errors.New("admin authentication requires a session repository")
 	}
 	signingKey := options.SessionSigningKey
 	if len(signingKey) == 0 {
 		signingKey = options.Config.SessionKey
 	}
-	sessions, err := auth.NewSessionService(bundle.Sessions, options.Config.AdminUsername, auth.CredentialVersion(options.Config.AdminPasswordHash), rand.Reader, clock)
-	if err != nil {
-		return nil, fmt.Errorf("initialize admin sessions: %w", err)
+	var authenticator webmiddleware.Authenticator
+	if adminConfigured {
+		if bundle == nil || bundle.Sessions == nil {
+			return nil, errors.New("admin authentication requires a session repository")
+		}
+		sessions, sessionErr := auth.NewSessionService(bundle.Sessions, options.Config.AdminUsername, auth.CredentialVersion(options.Config.AdminPasswordHash), rand.Reader, clock)
+		if sessionErr != nil {
+			return nil, fmt.Errorf("initialize admin sessions: %w", sessionErr)
+		}
+		authenticator = sessions
+		adminHandler, adminErr := adminapi.New(adminapi.Options{
+			Credentials:        credentials,
+			ConfiguredUsername: options.Config.AdminUsername,
+			Sessions:           sessions,
+			Contacts:           contactService,
+			Articles:           articleService,
+			Renderer:           renderer,
+			Assets:             options.Assets,
+			SessionKey:         signingKey,
+			PublicBaseURL:      options.Config.PublicBaseURL,
+			Now:                clock,
+			TrustedProxyHops:   effectiveTrustedProxyHops(options),
+		})
+		if adminErr != nil {
+			return nil, fmt.Errorf("initialize admin handler: %w", adminErr)
+		}
+		mux.Handle("GET /admin", adminHandler)
+		mux.Handle("GET /admin/", adminHandler)
+		mux.Handle("POST /admin/login", adminHandler)
+		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions} {
+			mux.Handle(method+" /api/admin", adminHandler)
+			mux.Handle(method+" /api/admin/", adminHandler)
+		}
 	}
-	adminHandler, err := adminapi.New(adminapi.Options{
-		Credentials:        credentials,
-		ConfiguredUsername: options.Config.AdminUsername,
-		Sessions:           sessions,
-		Contacts:           contactService,
-		Articles:           articleService,
-		Renderer:           renderer,
-		Assets:             options.Assets,
-		SessionKey:         signingKey,
-		PublicBaseURL:      options.Config.PublicBaseURL,
-		Now:                clock,
-		TrustedProxy:       options.TrustedProxy || options.Config.TrustedProxy,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("initialize admin handler: %w", err)
-	}
-	mux.Handle("GET /admin", adminHandler)
-	mux.Handle("GET /admin/", adminHandler)
-	mux.Handle("POST /admin/login", adminHandler)
-	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions} {
-		mux.Handle(method+" /api/admin", adminHandler)
-		mux.Handle(method+" /api/admin/", adminHandler)
+	handlerTimeout := time.Duration(0)
+	if options.Config.Environment == "production" {
+		handlerTimeout = 25 * time.Second
 	}
 	secured, err := webmiddleware.New(mux, webmiddleware.Options{
-		Authenticator: sessions,
-		SessionKey:    signingKey,
-		PublicBaseURL: options.Config.PublicBaseURL,
-		Logger:        options.Logger,
-		Now:           clock,
+		Authenticator:    authenticator,
+		SessionKey:       signingKey,
+		PublicBaseURL:    options.Config.PublicBaseURL,
+		Logger:           options.Logger,
+		Now:              clock,
+		Environment:      options.Config.Environment,
+		TrustedProxyHops: effectiveTrustedProxyHops(options),
+		HandlerTimeout:   handlerTimeout,
+		ErrorRenderer:    renderer.WriteError,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize HTTP security middleware: %w", err)
 	}
 	return secured, nil
+}
+
+func effectiveTrustedProxyHops(options Options) int {
+	if options.Config.Environment != "production" {
+		return 0
+	}
+	if options.TrustedProxyHops > 0 {
+		return options.TrustedProxyHops
+	}
+	return options.Config.TrustedProxyHops
 }
 
 type appClock struct {

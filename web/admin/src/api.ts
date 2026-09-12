@@ -98,12 +98,22 @@ export type APIResult<T> = {
 export class APIError extends Error {
   readonly status: number
   readonly code: string
+  readonly requestId: string
+  readonly fields: Record<string, string>
 
-  constructor(status: number, message: string, code = "") {
+  constructor(
+    status: number,
+    message: string,
+    code = "",
+    requestId = "",
+    fields: Record<string, string> = {},
+  ) {
     super(message)
     this.name = "APIError"
     this.status = status
     this.code = code
+    this.requestId = requestId
+    this.fields = fields
   }
 }
 
@@ -147,19 +157,39 @@ export class AdminClient {
     if (!response.ok) {
       let message = "Richiesta non riuscita"
       let code = ""
+      let requestId = ""
+      let fields: Record<string, string> = {}
       try {
         const payload = (await response.json()) as {
-          error?: string
+          error?:
+            | string
+            | {
+                code?: string
+                message?: string
+                requestId?: string
+                fields?: Record<string, string>
+              }
           code?: string
         }
-        if (typeof payload.error === "string" && payload.error !== "") {
+        if (typeof payload.error === "object" && payload.error !== null) {
+          if (
+            typeof payload.error.message === "string" &&
+            payload.error.message !== ""
+          ) {
+            message = payload.error.message
+          }
+          code = payload.error.code ?? ""
+          requestId = payload.error.requestId ?? ""
+          fields = payload.error.fields ?? {}
+        } else if (typeof payload.error === "string" && payload.error !== "") {
+          // Compatibility for a response produced during a rolling deployment.
           message = payload.error
+          code = payload.code ?? ""
         }
-        code = payload.code ?? ""
       } catch {
         // The UI intentionally falls back to one generic message.
       }
-      throw new APIError(response.status, message, code)
+      throw new APIError(response.status, message, code, requestId, fields)
     }
     if (response.status === 204) {
       return { data: undefined as T, etag: response.headers.get("ETag") }

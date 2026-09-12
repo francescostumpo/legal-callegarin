@@ -23,6 +23,7 @@ type Renderer struct {
 	articleIndex *template.Template
 	article      *template.Template
 	contact      *template.Template
+	errorPage    *template.Template
 	pages        map[string]PageData
 	images       map[string]EditorialImage
 	articles     ArticleReader
@@ -32,13 +33,13 @@ type Renderer struct {
 }
 
 type rendererOptions struct {
-	articles      ArticleReader
-	now           func() time.Time
-	events        *ArticleEventSink
-	contacts      contacts.ContactService
-	contactKey    []byte
-	contactLogger *slog.Logger
-	trustedProxy  bool
+	articles         ArticleReader
+	now              func() time.Time
+	events           *ArticleEventSink
+	contacts         contacts.ContactService
+	contactKey       []byte
+	contactLogger    *slog.Logger
+	trustedProxyHops int
 }
 
 type RendererOption func(*rendererOptions)
@@ -70,8 +71,8 @@ func WithContactLogger(logger *slog.Logger) RendererOption {
 	return func(options *rendererOptions) { options.contactLogger = logger }
 }
 
-func WithContactTrustedProxy(trusted bool) RendererOption {
-	return func(options *rendererOptions) { options.trustedProxy = trusted }
+func WithContactTrustedProxyHops(hops int) RendererOption {
+	return func(options *rendererOptions) { options.trustedProxyHops = hops }
 }
 
 type assetManifest struct {
@@ -122,6 +123,10 @@ func NewRenderer(files fs.FS, publicBaseURL string, optionFunctions ...RendererO
 	if err != nil {
 		return nil, fmt.Errorf("parse contact templates: %w", err)
 	}
+	errorPage, err := parsePageTemplate(files, assets, "templates/pages/error.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse error templates: %w", err)
+	}
 	images, err := loadEditorialImages(files, assets)
 	if err != nil {
 		return nil, err
@@ -143,6 +148,7 @@ func NewRenderer(files fs.FS, publicBaseURL string, optionFunctions ...RendererO
 		articleIndex: articleIndex,
 		article:      article,
 		contact:      contact,
+		errorPage:    errorPage,
 		pages:        pageCatalog(images), images: images, articles: options.articles,
 		cache:  newHTMLCache(options.now, publicCacheMaxEntries, publicCacheMaxBytes, publicCacheTTL),
 		assets: assets,
@@ -152,7 +158,7 @@ func NewRenderer(files fs.FS, publicBaseURL string, optionFunctions ...RendererO
 		if err != nil {
 			return nil, err
 		}
-		renderer.contactForm = newContactHandler(renderer, options.contacts, signer, options.now, options.contactLogger, options.trustedProxy)
+		renderer.contactForm = newContactHandler(renderer, options.contacts, signer, options.now, options.contactLogger, options.trustedProxyHops)
 	}
 	options.events.subscribe(renderer)
 	return renderer, nil
@@ -182,7 +188,7 @@ func RegisterRoutes(mux *http.ServeMux, renderer *Renderer, _ fs.FS) error {
 	}
 	mux.HandleFunc("GET /sentenze-e-riflessioni/{slug}", renderer.articleDetailHandler())
 	mux.HandleFunc("GET /", func(response http.ResponseWriter, _ *http.Request) {
-		writePublicError(response, http.StatusNotFound, "page not found")
+		renderer.WriteError(response, nil, http.StatusNotFound, "not_found", "")
 	})
 	return nil
 }
@@ -199,7 +205,7 @@ func (renderer *Renderer) pageHandler(path string) http.HandlerFunc {
 			return renderer.renderPage(ctx, path)
 		})
 		if err != nil {
-			writePublicError(response, http.StatusServiceUnavailable, "content temporarily unavailable")
+			renderer.WriteError(response, request, http.StatusServiceUnavailable, "content_unavailable", "")
 			return
 		}
 		writeRevalidatingHTML(response, request, body)

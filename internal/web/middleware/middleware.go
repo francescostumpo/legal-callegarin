@@ -7,8 +7,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/auth"
+	"github.com/francescostumpo/legal-callegarin/internal/web/clientinfo"
 )
 
 const (
@@ -38,6 +39,10 @@ type Options struct {
 	MaxAdminResponseBytes int64
 	RequestID             func() string
 	Now                   func() time.Time
+	Environment           string
+	TrustedProxyHops      int
+	HandlerTimeout        time.Duration
+	ErrorRenderer         func(http.ResponseWriter, *http.Request, int, string, string)
 }
 
 type Principal struct {
@@ -48,10 +53,20 @@ type Principal struct {
 
 type principalContextKey struct{}
 type requestIDContextKey struct{}
+type cspNonceContextKey struct{}
 
 func New(next http.Handler, options Options) (http.Handler, error) {
-	if next == nil || len(options.SessionKey) < 32 {
-		return nil, errors.New("middleware requires a handler and a session key of at least 32 bytes")
+	if next == nil {
+		return nil, errors.New("middleware requires a handler")
+	}
+	if len(options.SessionKey) > 0 && len(options.SessionKey) < 32 {
+		return nil, errors.New("middleware session key must contain at least 32 bytes")
+	}
+	if len(options.SessionKey) == 0 {
+		options.SessionKey = make([]byte, 32)
+		if _, err := rand.Read(options.SessionKey); err != nil {
+			return nil, errors.New("generate middleware signing key")
+		}
 	}
 	base, err := url.Parse(options.PublicBaseURL)
 	if err != nil || !secureOrigin(base) || base.User != nil || base.Path != "" || base.RawQuery != "" || base.Fragment != "" {
@@ -72,6 +87,10 @@ func New(next http.Handler, options Options) (http.Handler, error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
+	clientHashKey := make([]byte, 32)
+	if _, err := rand.Read(clientHashKey); err != nil {
+		return nil, errors.New("generate client correlation key")
+	}
 	expectedOrigin := base.Scheme + "://" + base.Host
 
 	handler := next
@@ -79,9 +98,15 @@ func New(next http.Handler, options Options) (http.Handler, error) {
 	handler = origin(handler, expectedOrigin)
 	handler = authenticate(handler, options.Authenticator, options.Now)
 	handler = bodyLimit(handler, options.MaxBodyBytes)
-	handler = accessLog(handler, options.Logger, options.Now)
-	handler = securityHeaders(handler)
-	handler = recoverPanics(handler, options.Logger, options.MaxAdminResponseBytes)
+	if options.HandlerTimeout > 0 {
+		handler = timeout(handler, options.HandlerTimeout, options.ErrorRenderer)
+	}
+	if options.Environment == "production" {
+		handler = canonicalRedirect(handler, base, options.TrustedProxyHops)
+	}
+	handler = accessLog(handler, options.Logger, options.Now, options.TrustedProxyHops, clientHashKey)
+	handler = securityHeaders(handler, options.Environment == "production")
+	handler = recoverPanics(handler, options.Logger, options.MaxAdminResponseBytes, options.ErrorRenderer)
 	handler = requestID(handler, options.RequestID)
 	return handler, nil
 }
@@ -105,6 +130,11 @@ func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 func RequestIDFromContext(ctx context.Context) string {
 	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
 	return requestID
+}
+
+func CSPNonceFromContext(ctx context.Context) string {
+	nonce, _ := ctx.Value(cspNonceContextKey{}).(string)
+	return nonce
 }
 
 func CSRFToken(raw string, key []byte) string {
@@ -142,15 +172,36 @@ func ClearSessionCookie(response http.ResponseWriter, now time.Time) {
 
 func requestID(next http.Handler, generate func() string) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		id := generate()
+		id := request.Header.Get("X-Request-ID")
+		if !validRequestID(id) {
+			id = generate()
+		}
+		if !validRequestID(id) {
+			id = secureRequestID()
+		}
+		nonce := secureNonce()
 		response.Header().Set("X-Request-ID", id)
-		next.ServeHTTP(response, request.WithContext(context.WithValue(request.Context(), requestIDContextKey{}, id)))
+		ctx := context.WithValue(request.Context(), requestIDContextKey{}, id)
+		ctx = context.WithValue(ctx, cspNonceContextKey{}, nonce)
+		next.ServeHTTP(response, request.WithContext(ctx))
 	})
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+func validRequestID(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+func securityHeaders(next http.Handler, production bool) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		applySecurityHeaders(response.Header(), request.URL.Path)
+		applySecurityHeaders(response.Header(), request.URL.Path, production, CSPNonceFromContext(request.Context()))
 		next.ServeHTTP(response, request)
 	})
 }
@@ -179,14 +230,14 @@ func authenticate(next http.Handler, authenticator Authenticator, now func() tim
 				return
 			}
 			if !errors.Is(err, auth.ErrUnauthenticated) {
-				writeAPIError(response, http.StatusServiceUnavailable, "authentication temporarily unavailable")
+				WriteAPIError(response, request, http.StatusServiceUnavailable, "authentication_unavailable", "Autenticazione temporaneamente non disponibile.", nil)
 				return
 			}
 			ClearSessionCookie(response, now())
 		}
 		response.Header().Set("Cache-Control", "no-store")
 		if strings.HasPrefix(request.URL.Path, "/api/admin/") || request.URL.Path == "/api/admin" {
-			writeAPIError(response, http.StatusUnauthorized, "authentication required")
+			WriteAPIError(response, request, http.StatusUnauthorized, "authentication_required", "Autenticazione richiesta.", nil)
 			return
 		}
 		http.Redirect(response, request, "/admin/login", http.StatusSeeOther)
@@ -196,7 +247,7 @@ func authenticate(next http.Handler, authenticator Authenticator, now func() tim
 func origin(next http.Handler, expected string) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if unsafeAdminAPI(request) && request.Header.Get("Origin") != expected {
-			writeAPIError(response, http.StatusForbidden, "request rejected")
+			WriteAPIError(response, request, http.StatusForbidden, "request_rejected", "Richiesta rifiutata.", nil)
 			return
 		}
 		next.ServeHTTP(response, request)
@@ -210,7 +261,7 @@ func csrf(next http.Handler, key []byte) http.Handler {
 			expected := CSRFToken(principal.Token, key)
 			provided := request.Header.Get("X-CSRF-Token")
 			if !ok || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
-				writeAPIError(response, http.StatusForbidden, "request rejected")
+				WriteAPIError(response, request, http.StatusForbidden, "request_rejected", "Richiesta rifiutata.", nil)
 				return
 			}
 		}
@@ -232,11 +283,38 @@ func unsafeAdminAPI(request *http.Request) bool {
 	return request.URL.Path == "/api/admin" || strings.HasPrefix(request.URL.Path, "/api/admin/")
 }
 
-func writeAPIError(response http.ResponseWriter, status int, message string) {
+type APIError struct {
+	Code      string            `json:"code"`
+	Message   string            `json:"message"`
+	RequestID string            `json:"requestId"`
+	Fields    map[string]string `json:"fields"`
+}
+
+func WriteAPIError(response http.ResponseWriter, request *http.Request, status int, code, message string, fields map[string]string) {
+	requestID := ""
+	if request != nil {
+		requestID = RequestIDFromContext(request.Context())
+	}
+	if requestID == "" {
+		requestID = response.Header().Get("X-Request-ID")
+	}
+	writeAPIErrorResponse(response, status, code, message, requestID, fields)
+}
+
+func WriteAPIErrorResponse(response http.ResponseWriter, status int, code, message string, fields map[string]string) {
+	writeAPIErrorResponse(response, status, code, message, response.Header().Get("X-Request-ID"), fields)
+}
+
+func writeAPIErrorResponse(response http.ResponseWriter, status int, code, message, requestID string, fields map[string]string) {
+	if fields == nil {
+		fields = map[string]string{}
+	}
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
 	response.WriteHeader(status)
-	_, _ = fmt.Fprintf(response, "{\"error\":%q}\n", message)
+	_ = json.NewEncoder(response).Encode(struct {
+		Error APIError `json:"error"`
+	}{Error: APIError{Code: code, Message: message, RequestID: requestID, Fields: fields}})
 }
 
 func secureRequestID() string {
@@ -245,4 +323,35 @@ func secureRequestID() string {
 		return "request-id-unavailable"
 	}
 	return base64.RawURLEncoding.EncodeToString(buffer)
+}
+
+func secureNonce() string {
+	buffer := make([]byte, 18)
+	if _, err := rand.Read(buffer); err != nil {
+		return secureRequestID()
+	}
+	return base64.RawURLEncoding.EncodeToString(buffer)
+}
+
+func canonicalRedirect(next http.Handler, base *url.URL, trustedProxyHops int) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/health/live" || request.URL.Path == "/health/ready" {
+			next.ServeHTTP(response, request)
+			return
+		}
+		identity, _ := clientinfo.Resolve(request, trustedProxyHops)
+		scheme := identity.Scheme
+		if scheme == "" {
+			scheme = "http"
+		}
+		if !strings.EqualFold(request.Host, base.Host) || scheme != base.Scheme {
+			target := base.Scheme + "://" + base.Host + request.URL.EscapedPath()
+			if request.URL.RawQuery != "" {
+				target += "?" + request.URL.RawQuery
+			}
+			http.Redirect(response, request, target, http.StatusPermanentRedirect)
+			return
+		}
+		next.ServeHTTP(response, request)
+	})
 }

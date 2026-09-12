@@ -288,6 +288,53 @@ func TestContactFormStorageFailureAndPanicDoNotLeakOrClaimSuccess(t *testing.T) 
 	}
 }
 
+func TestContactJSONNegotiationKeepsPIIOffFailureResponsesAndReturnsSafeFields(t *testing.T) {
+	clock := &contactTestClock{now: time.Date(2026, 9, 11, 12, 0, 10, 0, time.UTC)}
+	service := &contactRecordingService{err: errors.New("storage contains persona-segreta@example.test")}
+	handler := newContactTestHandler(t, service, clock, nil, false)
+	form := validContactForm(t, clock.now.Add(-contactMinimumCompletionTime))
+	form.Set("name", "Nome Segreto")
+	form.Set("email", "persona-segreta@example.test")
+	response := submitContactJSON(handler, form, "192.0.2.80:1234")
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Content-Type") != "application/json; charset=utf-8" {
+		t.Fatalf("storage JSON = status %d headers %#v body %q", response.Code, response.Header(), response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"contact_unavailable"`) || !strings.Contains(response.Body.String(), `"fields":{}`) || strings.Contains(response.Body.String(), "Nome Segreto") || strings.Contains(response.Body.String(), "persona-segreta@example.test") {
+		t.Fatalf("storage JSON body = %q", response.Body.String())
+	}
+
+	service.err = fmt.Errorf("%w: persona-segreta@example.test", contacts.ErrCommitUnknown)
+	response = submitContactJSON(handler, form, "192.0.2.83:1234")
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"contact_commit_unknown"`) || strings.Contains(response.Body.String(), "persona-segreta@example.test") {
+		t.Fatalf("unknown-commit JSON = status %d body %q", response.Code, response.Body.String())
+	}
+
+	service.err = nil
+	invalid := validContactForm(t, clock.now.Add(-contactMinimumCompletionTime))
+	invalid.Set("email", "invalid")
+	response = submitContactJSON(handler, invalid, "192.0.2.81:1234")
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), `"code":"contact_validation"`) || !strings.Contains(response.Body.String(), `"email":"Inserisci un indirizzo email valido."`) || strings.Contains(response.Body.String(), `"name":"Mario Rossi"`) {
+		t.Fatalf("validation JSON = status %d body %q", response.Code, response.Body.String())
+	}
+
+	response = submitContactJSON(handler, validContactForm(t, clock.now.Add(-contactMinimumCompletionTime)), "192.0.2.82:1234")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"redirect":"/contatti?esito=`) || response.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("success JSON = status %d headers %#v body %q", response.Code, response.Header(), response.Body.String())
+	}
+}
+
+func TestContactJSONRateLimitUsesSafeNestedError(t *testing.T) {
+	clock := &contactTestClock{now: time.Date(2026, 9, 11, 12, 0, 10, 0, time.UTC)}
+	handler := newContactTestHandler(t, &contactRecordingService{}, clock, nil, false)
+	var response *httptest.ResponseRecorder
+	for attempt := 0; attempt <= contactRateCapacity; attempt++ {
+		response = submitContactJSON(handler, validContactForm(t, clock.now.Add(-contactMinimumCompletionTime)), "192.0.2.90:1234")
+	}
+	if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body.String(), `"code":"contact_rate_limited"`) || !strings.Contains(response.Body.String(), `"fields":{}`) {
+		t.Fatalf("rate-limit JSON = status %d body %q", response.Code, response.Body.String())
+	}
+}
+
 func TestContactFormUnknownCommitWarnsAgainstDuplicateSubmissionWithoutLeakingData(t *testing.T) {
 	t.Parallel()
 
@@ -416,7 +463,7 @@ func newContactTestHandler(t *testing.T, service contacts.ContactService, clock 
 	options := []RendererOption{
 		WithContactService(service, contactTestKey),
 		WithContactClock(clock.Now),
-		WithContactTrustedProxy(trustedProxy),
+		WithContactTrustedProxyHops(map[bool]int{false: 0, true: 1}[trustedProxy]),
 	}
 	if logger != nil {
 		options = append(options, WithContactLogger(logger))
@@ -438,6 +485,17 @@ func submitContactForm(handler http.Handler, form url.Values, host, origin, remo
 	request.RemoteAddr = remoteAddress
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Origin", origin)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func submitContactJSON(handler http.Handler, form url.Values, remoteAddress string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodPost, "https://studio.example.test/contatti", strings.NewReader(form.Encode()))
+	request.RemoteAddr = remoteAddress
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "https://studio.example.test")
+	request.Header.Set("Accept", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response

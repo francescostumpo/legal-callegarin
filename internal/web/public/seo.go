@@ -37,7 +37,10 @@ type schemaRef struct {
 	ID string `json:"@id"`
 }
 
+const cspNoncePlaceholder = "__CALLEGARIN_CSP_NONCE__"
+
 func (renderer *Renderer) applyPageSEO(page *PageData, graphType string, image EditorialImage, article *articles.Article) {
+	page.CSPNonce = cspNoncePlaceholder
 	page.OpenGraphType = graphType
 	page.OpenGraphURL = page.CanonicalURL
 	page.OpenGraphImageURL = renderer.baseURL + "/assets/covers/" + image.LandscapeWebP
@@ -73,7 +76,7 @@ func (renderer *Renderer) sitemapHandler() http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		body, err := renderer.cache.GetOrFill(request.Context(), cacheKeySitemap, renderer.renderSitemap)
 		if err != nil {
-			writePublicError(response, http.StatusServiceUnavailable, "content temporarily unavailable")
+			renderer.WriteError(response, request, http.StatusServiceUnavailable, "sitemap_unavailable", "")
 			return
 		}
 		writeRevalidating(response, request, body, "application/xml; charset=utf-8")

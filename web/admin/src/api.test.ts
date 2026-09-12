@@ -57,4 +57,37 @@ describe("AdminClient", () => {
       }),
     )
   })
+
+  it("parses the nested safe error contract including request reference and fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "article_validation",
+                message: "Controlla i dati inseriti.",
+                requestId: "request-safe-1",
+                fields: { title: "Inserisci un titolo." },
+              },
+            }),
+            { status: 422, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    )
+
+    const client = new AdminClient(vi.fn())
+    await expect(
+      client.fetchJSON("/api/admin/articles/id/draft"),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<APIError>>({
+        status: 422,
+        code: "article_validation",
+        message: "Controlla i dati inseriti.",
+        requestId: "request-safe-1",
+        fields: { title: "Inserisci un titolo." },
+      }),
+    )
+  })
 })

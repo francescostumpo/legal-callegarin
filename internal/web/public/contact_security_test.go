@@ -92,37 +92,28 @@ func TestContactClientKeyUsesForwardedHeadersOnlyForTrustedProxy(t *testing.T) {
 	}
 	request := httptest.NewRequest("POST", "https://studio.example.test/contatti", nil)
 	request.RemoteAddr = "192.0.2.44:1234"
-	request.Header.Set("Forwarded", `for="[2001:db8:abcd:1234::7]:4711"`)
 	request.Header.Set("X-Forwarded-For", "203.0.113.20")
 
-	direct, err := signer.clientKey(request, false)
+	direct, err := signer.clientKey(request, 0)
 	if err != nil {
 		t.Fatalf("clientKey(untrusted) error = %v", err)
 	}
-	forwarded, err := signer.clientKey(request, true)
+	forwarded, err := signer.clientKey(request, 1)
 	if err != nil {
 		t.Fatalf("clientKey(trusted) error = %v", err)
 	}
 	if direct == forwarded {
 		t.Fatal("trusted Forwarded address did not change client key")
 	}
-	for _, raw := range []string{"192.0.2.44", "2001:db8", "203.0.113.20"} {
+	for _, raw := range []string{"192.0.2.44", "203.0.113.20"} {
 		if strings.Contains(direct, raw) || strings.Contains(forwarded, raw) {
 			t.Fatalf("client key contains raw address fragment %q", raw)
 		}
 	}
 
-	request.Header.Del("Forwarded")
-	xff, err := signer.clientKey(request, true)
-	if err != nil {
-		t.Fatalf("clientKey(X-Forwarded-For) error = %v", err)
-	}
-	if xff == direct || xff == forwarded {
-		t.Fatalf("X-Forwarded-For client key collision: direct=%q forwarded=%q xff=%q", direct, forwarded, xff)
-	}
 }
 
-func TestContactClientKeyRejectsMalformedTrustedForwarding(t *testing.T) {
+func TestContactClientKeyFailsClosedForMalformedTrustedForwarding(t *testing.T) {
 	t.Parallel()
 
 	signer, err := newContactSigner([]byte("0123456789abcdef0123456789abcdef"))
@@ -132,11 +123,16 @@ func TestContactClientKeyRejectsMalformedTrustedForwarding(t *testing.T) {
 	request := httptest.NewRequest("POST", "https://studio.example.test/contatti", nil)
 	request.RemoteAddr = "192.0.2.44:1234"
 	request.Header.Set("X-Forwarded-For", "not-an-ip")
-	if _, err := signer.clientKey(request, true); err == nil {
-		t.Fatal("clientKey(malformed trusted header) error = nil")
+	trusted, err := signer.clientKey(request, 1)
+	if err != nil {
+		t.Fatalf("clientKey(malformed trusted header) error = %v", err)
 	}
-	if _, err := signer.clientKey(request, false); err != nil {
+	direct, err := signer.clientKey(request, 0)
+	if err != nil {
 		t.Fatalf("clientKey(untrusted malformed header) error = %v", err)
+	}
+	if trusted != direct {
+		t.Fatalf("malformed header did not fall back to RemoteAddr: trusted=%q direct=%q", trusted, direct)
 	}
 }
 

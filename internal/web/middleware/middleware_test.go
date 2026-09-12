@@ -112,13 +112,16 @@ func TestMiddlewareAddsSecurityHeadersRequestIDAndRecoversWithoutLeaking(t *test
 			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin/login", nil))
-			if response.Code != http.StatusInternalServerError || response.Body.String() != "Internal Server Error\n" {
+			if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "Richiesta non disponibile") {
 				t.Fatalf("recovery response = %d %q", response.Code, response.Body.String())
 			}
-			for header := range map[string]bool{"Content-Security-Policy": true, "Strict-Transport-Security": true, "X-Content-Type-Options": true, "Referrer-Policy": true} {
+			for header := range map[string]bool{"Content-Security-Policy": true, "X-Content-Type-Options": true, "Referrer-Policy": true} {
 				if response.Header().Get(header) == "" {
 					t.Errorf("missing %s", header)
 				}
+			}
+			if response.Header().Get("Strict-Transport-Security") != "" {
+				t.Fatal("test response unexpectedly emits HSTS")
 			}
 			if response.Header().Get("X-Request-ID") != "request-123" || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("X-Robots-Tag") != "noindex, nofollow" {
 				t.Fatalf("request/recovery headers = %#v", response.Header())
@@ -194,7 +197,7 @@ func TestAdminResponseBufferFailsClosedAtBoundWithoutPartialOutput(t *testing.T)
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin/login", nil))
-	if response.Code != http.StatusInternalServerError || response.Body.String() != "Internal Server Error\n" {
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "Richiesta non disponibile") {
 		t.Fatalf("overflow response = %d %q", response.Code, response.Body.String())
 	}
 	if !strings.Contains(logs.String(), "status=500") || !strings.Contains(logs.String(), "outcome=response_too_large") {

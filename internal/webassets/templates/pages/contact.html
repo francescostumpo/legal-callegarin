@@ -107,7 +107,19 @@
     </div>
     {{end}}
 
-    <form class="contact-form" action="/contatti" method="post" novalidate>
+    <form
+      class="contact-form"
+      action="/contatti"
+      method="post"
+      novalidate
+      data-contact-form
+    >
+      <div
+        class="form-error-summary"
+        data-contact-feedback
+        tabindex="-1"
+        hidden
+      ></div>
       <div class="form-field">
         <label for="name">Nome e cognome</label>
         <input

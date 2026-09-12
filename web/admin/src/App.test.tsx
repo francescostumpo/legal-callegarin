@@ -148,6 +148,43 @@ describe("admin shell", () => {
     await waitFor(() => expect(redirect).toHaveBeenCalledTimes(1))
   })
 
+  it("lets the administrator retry a failed session bootstrap", async () => {
+    let attempts = 0
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input)
+        if (path === "/api/admin/session") {
+          attempts++
+          if (attempts === 1) throw new TypeError("network unavailable")
+          return jsonResponse({ username: "admin", csrfToken: "csrf" })
+        }
+        if (path === "/api/admin/contacts/purge-due")
+          return jsonResponse({ purged: 0 })
+        if (path === "/api/admin/dashboard")
+          return jsonResponse({
+            new: 0,
+            read: 0,
+            archived: 0,
+            deletionScheduled: 0,
+            retentionReview: 0,
+            purged: 0,
+          })
+        throw new Error(`unexpected ${path}`)
+      }),
+    )
+
+    render(<App />)
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Impossibile verificare la sessione",
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Riprova" }))
+    expect(
+      await screen.findByRole("heading", { name: "Panoramica" }),
+    ).toBeInTheDocument()
+    expect(attempts).toBe(2)
+  })
+
   it("shows useful loading, empty, error, bounded debounced search, and filters", async () => {
     window.history.replaceState({}, "", "/admin/contatti")
     let resolveList: ((response: Response) => void) | undefined
@@ -1644,11 +1681,12 @@ describe("article console", () => {
     const frame = screen.getByTitle("Anteprima articolo salvato")
     const initialSource = frame.getAttribute("src")
     await user.click(screen.getByRole("button", { name: "360" }))
-    expect(frame).toHaveStyle({ width: "360px" })
+    expect(frame).toHaveClass("preview-frame--mobile")
     await user.click(screen.getByRole("button", { name: "768" }))
-    expect(frame).toHaveStyle({ width: "768px" })
+    expect(frame).toHaveClass("preview-frame--tablet")
     await user.click(screen.getByRole("button", { name: "Desktop" }))
-    expect(frame).toHaveStyle({ width: "100%" })
+    expect(frame).toHaveClass("preview-frame--desktop")
+    expect(frame).not.toHaveAttribute("style")
 
     await user.clear(screen.getByLabelText("Titolo"))
     await user.type(screen.getByLabelText("Titolo"), "Titolo salvato")

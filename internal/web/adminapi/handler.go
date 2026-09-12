@@ -28,7 +28,7 @@ const (
 	loginTokenMaxAge  = 10 * time.Minute
 	loginTokenSkew    = 5 * time.Second
 	defaultLoginLimit = 5
-	defaultMaxBuckets = 2048
+	defaultMaxBuckets = 5000
 )
 
 type CredentialVerifier interface {
@@ -51,26 +51,26 @@ type Options struct {
 	SessionKey         []byte
 	PublicBaseURL      string
 	Now                func() time.Time
-	TrustedProxy       bool
+	TrustedProxyHops   int
 	LoginCapacity      int
 	MaxBuckets         int
 }
 
 type handler struct {
-	credentials    CredentialVerifier
-	sessions       SessionController
-	contacts       contacts.ContactService
-	articles       articles.ArticleService
-	renderer       *publicweb.Renderer
-	adminFiles     http.Handler
-	index          []byte
-	sessionKey     []byte
-	formKey        []byte
-	expectedOrigin string
-	now            func() time.Time
-	trustedProxy   bool
-	limiter        *loginLimiter
-	template       *template.Template
+	credentials      CredentialVerifier
+	sessions         SessionController
+	contacts         contacts.ContactService
+	articles         articles.ArticleService
+	renderer         *publicweb.Renderer
+	adminFiles       http.Handler
+	index            []byte
+	sessionKey       []byte
+	formKey          []byte
+	expectedOrigin   string
+	now              func() time.Time
+	trustedProxyHops int
+	limiter          *loginLimiter
+	template         *template.Template
 }
 
 type loginView struct {
@@ -109,20 +109,20 @@ func New(options Options) (http.Handler, error) {
 	}
 	configuredUsernameKey := keyedValue(options.SessionKey, "callegarin/admin-login-username/v1", normalizeUsername(options.ConfiguredUsername))
 	instance := &handler{
-		credentials:    options.Credentials,
-		sessions:       options.Sessions,
-		contacts:       options.Contacts,
-		articles:       options.Articles,
-		renderer:       options.Renderer,
-		adminFiles:     http.FileServer(http.FS(adminFS)),
-		index:          index,
-		sessionKey:     append([]byte(nil), options.SessionKey...),
-		formKey:        deriveKey(options.SessionKey, "callegarin/admin-login-form/v1"),
-		expectedOrigin: base.Scheme + "://" + base.Host,
-		now:            options.Now,
-		trustedProxy:   options.TrustedProxy,
-		limiter:        newLoginLimiter(options.LoginCapacity, time.Minute, time.Hour, options.MaxBuckets, configuredUsernameKey),
-		template:       loginTemplate,
+		credentials:      options.Credentials,
+		sessions:         options.Sessions,
+		contacts:         options.Contacts,
+		articles:         options.Articles,
+		renderer:         options.Renderer,
+		adminFiles:       http.FileServer(http.FS(adminFS)),
+		index:            index,
+		sessionKey:       append([]byte(nil), options.SessionKey...),
+		formKey:          deriveKey(options.SessionKey, "callegarin/admin-login-form/v1"),
+		expectedOrigin:   base.Scheme + "://" + base.Host,
+		now:              options.Now,
+		trustedProxyHops: options.TrustedProxyHops,
+		limiter:          newLoginLimiter(options.LoginCapacity, 3*time.Minute, time.Hour, options.MaxBuckets, configuredUsernameKey),
+		template:         loginTemplate,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /admin/login", instance.loginGET)
@@ -187,7 +187,7 @@ func (handler *handler) loginPOST(response http.ResponseWriter, request *http.Re
 		handler.renderLogin(response, http.StatusBadRequest, "Richiesta non valida")
 		return
 	}
-	addressKey, err := loginAddressKey(request, handler.trustedProxy, handler.sessionKey)
+	addressKey, err := loginAddressKey(request, handler.trustedProxyHops, handler.sessionKey)
 	if err != nil {
 		handler.renderLogin(response, http.StatusBadRequest, "Richiesta non valida")
 		return
@@ -335,10 +335,63 @@ func keyedValue(key []byte, domain, value string) string {
 }
 
 func writeJSONError(response http.ResponseWriter, status int, message string) {
-	setPrivateAdminHeaders(response)
-	response.Header().Set("Content-Type", "application/json; charset=utf-8")
-	response.WriteHeader(status)
-	_ = json.NewEncoder(response).Encode(map[string]string{"error": message})
+	code := genericAPIErrorCode(status)
+	_ = message
+	webmiddleware.WriteAPIErrorResponse(response, status, code, safeAPIMessage(code), nil)
+}
+
+func genericAPIErrorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "invalid_request"
+	case http.StatusUnauthorized:
+		return "authentication_required"
+	case http.StatusForbidden:
+		return "request_rejected"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	case http.StatusUnprocessableEntity:
+		return "validation_failed"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	default:
+		return "service_unavailable"
+	}
+}
+
+func safeAPIMessage(code string) string {
+	switch code {
+	case "authentication_required":
+		return "Autenticazione richiesta."
+	case "request_rejected":
+		return "Richiesta rifiutata."
+	case "article_not_found":
+		return "Articolo non trovato."
+	case "article_validation", "invalid_json", "invalid_query", "invalid_status", "invalid_request", "validation_failed":
+		return "Controlla i dati inviati."
+	case "slug_taken":
+		return "Questo indirizzo è già utilizzato da un altro articolo."
+	case "article_conflict", "conflict":
+		return "L’articolo è stato modificato. Ricarica i dati prima di riprovare."
+	case "invalid_transition":
+		return "Questa operazione non è disponibile nello stato corrente."
+	case "commit_unknown":
+		return "L’esito del salvataggio non è certo. Ricarica prima di decidere come procedere."
+	case "request_too_large":
+		return "La richiesta è troppo grande."
+	case "unsupported_media_type":
+		return "Il formato della richiesta non è supportato."
+	case "if_match_required":
+		return "Ricarica i dati prima di riprovare."
+	case "not_found":
+		return "Risorsa non trovata."
+	case "rate_limited":
+		return "Troppe richieste. Attendi prima di riprovare."
+	default:
+		return "Servizio temporaneamente non disponibile."
+	}
 }
 
 func setPrivateAdminHeaders(response http.ResponseWriter) {

@@ -34,7 +34,7 @@ func TestSEOPublicPagesHaveOpenGraphAndStructuredData(t *testing.T) {
 		`<meta property="og:description"`,
 		`<meta property="og:type" content="website"`,
 		`<meta property="og:url" content="https://studio.example.test/"`,
-		`<script type="application/ld+json">`,
+		`<script type="application/ld+json" nonce="`,
 		`"@type":"LegalService"`,
 		`"@type":"Person"`,
 	} {

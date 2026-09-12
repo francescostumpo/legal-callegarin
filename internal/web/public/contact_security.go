@@ -4,15 +4,15 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/francescostumpo/legal-callegarin/internal/web/clientinfo"
 )
 
 const (
@@ -105,11 +105,12 @@ func validateContactTimedToken(key []byte, token string) (time.Time, bool) {
 	return time.Unix(seconds, 0).UTC(), true
 }
 
-func (signer *contactSigner) clientKey(request *http.Request, trustedProxy bool) (string, error) {
-	address, err := contactClientAddress(request, trustedProxy)
+func (signer *contactSigner) clientKey(request *http.Request, trustedProxyHops int) (string, error) {
+	identity, err := clientinfo.Resolve(request, trustedProxyHops)
 	if err != nil {
 		return "", err
 	}
+	address := identity.Address
 	prefixBits := 56
 	if address.Is4() {
 		prefixBits = 24
@@ -118,51 +119,6 @@ func (signer *contactSigner) clientKey(request *http.Request, trustedProxy bool)
 	mac := hmac.New(sha256.New, signer.addressKey)
 	_, _ = mac.Write(masked.AsSlice())
 	return rawURL.EncodeToString(mac.Sum(nil)[:16]), nil
-}
-
-func contactClientAddress(request *http.Request, trustedProxy bool) (netip.Addr, error) {
-	if trustedProxy {
-		if forwarded := request.Header.Get("Forwarded"); forwarded != "" {
-			return parseForwardedAddress(forwarded)
-		}
-		if forwardedFor := request.Header.Get("X-Forwarded-For"); forwardedFor != "" {
-			first, _, _ := strings.Cut(forwardedFor, ",")
-			return parseContactAddress(strings.TrimSpace(first))
-		}
-	}
-	host := request.RemoteAddr
-	if splitHost, _, err := net.SplitHostPort(host); err == nil {
-		host = splitHost
-	}
-	return parseContactAddress(host)
-}
-
-func parseForwardedAddress(header string) (netip.Addr, error) {
-	first, _, _ := strings.Cut(header, ",")
-	for _, parameter := range strings.Split(first, ";") {
-		name, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
-		if !found || !strings.EqualFold(name, "for") {
-			continue
-		}
-		value = strings.Trim(strings.TrimSpace(value), `"`)
-		return parseContactAddress(value)
-	}
-	return netip.Addr{}, errors.New("forwarded header lacks a valid for parameter")
-}
-
-func parseContactAddress(raw string) (netip.Addr, error) {
-	if raw == "" || strings.EqualFold(raw, "unknown") || strings.HasPrefix(raw, "_") {
-		return netip.Addr{}, errors.New("client address is invalid")
-	}
-	if host, _, err := net.SplitHostPort(raw); err == nil {
-		raw = host
-	}
-	raw = strings.Trim(raw, "[]")
-	address, err := netip.ParseAddr(raw)
-	if err != nil {
-		return netip.Addr{}, errors.New("client address is invalid")
-	}
-	return address.Unmap(), nil
 }
 
 type contactBucket struct {

@@ -272,7 +272,7 @@ func TestLoginLimiterPinsConfiguredUsernameAgainstChurnAndRefills(t *testing.T) 
 		t.Fatalf("blocked/admission-denied churn reached verifier %d times", verifier.calls)
 	}
 
-	now = now.Add(time.Minute)
+	now = now.Add(3 * time.Minute)
 	if response := submitLoginFrom(handler, token, "admin", "wrong", "203.0.114.1:1000"); response.Code != http.StatusUnauthorized {
 		t.Fatalf("target after refill status = %d, want 401", response.Code)
 	}

@@ -119,10 +119,15 @@ func TestNewRejectsPartialOrMalformedAdminCredentials(t *testing.T) {
 type readinessProbe struct {
 	err         error
 	hasDeadline bool
+	remaining   time.Duration
 }
 
 func (probe *readinessProbe) Ready(ctx context.Context) error {
-	_, probe.hasDeadline = ctx.Deadline()
+	deadline, ok := ctx.Deadline()
+	probe.hasDeadline = ok
+	if ok {
+		probe.remaining = time.Until(deadline)
+	}
 	return probe.err
 }
 
@@ -141,6 +146,9 @@ func TestHealthReadinessIsDependencyAwareAndLivenessIsProcessOnly(t *testing.T) 
 	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
 	if ready.Code != http.StatusServiceUnavailable || !probe.hasDeadline {
 		t.Fatalf("readiness = status %d, deadline %t", ready.Code, probe.hasDeadline)
+	}
+	if probe.remaining <= 0 || probe.remaining > 2*time.Second {
+		t.Fatalf("readiness deadline remaining = %s, want at most 2s", probe.remaining)
 	}
 	live := httptest.NewRecorder()
 	handler.ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/health/live", nil))
@@ -214,6 +222,70 @@ func TestHandler(t *testing.T) {
 	}
 }
 
+func TestGlobalMiddlewareAndDesignedNotFoundWorkWithoutAdminCredentials(t *testing.T) {
+	handler, err := New(Options{
+		Config: config.Config{
+			Environment:   "test",
+			PublicBaseURL: "https://studio.example.test",
+			StorageMode:   "memory",
+			SessionKey:    []byte("0123456789abcdef0123456789abcdef"),
+		},
+		Assets: webassets.Files,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/", "/pagina-che-non-esiste"} {
+		request := httptest.NewRequest(http.MethodGet, "https://studio.example.test"+path, nil)
+		request.AddCookie(&http.Cookie{Name: "irrelevant-public-cookie", Value: "ignored"})
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Header().Get("X-Request-ID") == "" || response.Header().Get("Content-Security-Policy") == "" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Fatalf("global middleware headers for %s = %#v", path, response.Header())
+		}
+		if response.Header().Get("Set-Cookie") != "" || strings.Contains(response.Header().Get("Vary"), "Cookie") {
+			t.Fatalf("public route varied by cookie for %s: %#v", path, response.Header())
+		}
+		if path != "/" {
+			body := response.Body.String()
+			if response.Code != http.StatusNotFound || !strings.Contains(body, "Studio Legale Alessandro Callegarin") || !strings.Contains(body, "/contatti") || !strings.Contains(body, "Telefono: DATO DA CONFERMARE") || !strings.Contains(body, response.Header().Get("X-Request-ID")) {
+				t.Fatalf("designed 404 = status %d body %q", response.Code, body)
+			}
+		}
+	}
+}
+
+func TestStructuredDataNonceIsPerResponseAndMatchesCSP(t *testing.T) {
+	handler, err := New(Options{
+		Config: config.Config{Environment: "test", PublicBaseURL: "https://studio.example.test"},
+		Assets: webassets.Files,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noncePattern := regexp.MustCompile(`<script type="application/ld\+json" nonce="([^"]+)">`)
+	var previous string
+	for attempt := 0; attempt < 2; attempt++ {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test/", nil))
+		match := noncePattern.FindStringSubmatch(response.Body.String())
+		if len(match) != 2 {
+			t.Fatalf("structured-data nonce missing from body: %q", response.Body.String())
+		}
+		nonce := match[1]
+		if !strings.Contains(response.Header().Get("Content-Security-Policy"), "'nonce-"+nonce+"'") {
+			t.Fatalf("CSP %q does not authorize body nonce %q", response.Header().Get("Content-Security-Policy"), nonce)
+		}
+		if strings.Contains(response.Body.String(), `<script nonce="`+nonce+`" src=`) {
+			t.Fatal("nonce must be scoped to inline structured data only")
+		}
+		if previous == nonce {
+			t.Fatalf("nonce reused across responses: %q", nonce)
+		}
+		previous = nonce
+	}
+}
+
 func TestNewComposesDevelopmentContactFormWithInjectedClockAndSigningKey(t *testing.T) {
 	t.Parallel()
 
@@ -270,7 +342,7 @@ func TestNewInjectsContactService(t *testing.T) {
 		ContactService:    service,
 		SessionSigningKey: []byte("0123456789abcdef0123456789abcdef"),
 		RateClock:         func() time.Time { return now },
-		TrustedProxy:      true,
+		TrustedProxyHops:  1,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

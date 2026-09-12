@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
+	webmiddleware "github.com/francescostumpo/legal-callegarin/internal/web/middleware"
 )
 
 const articlePageSize = 6
@@ -106,7 +107,7 @@ func (renderer *Renderer) articleIndexHandler() http.HandlerFunc {
 			return renderer.renderArticleIndex(ctx, cursor)
 		})
 		if err != nil {
-			writeArticleReadError(response, err)
+			renderer.writeArticleReadError(response, request, err)
 			return
 		}
 		writeRevalidatingHTML(response, request, body)
@@ -161,7 +162,7 @@ func (renderer *Renderer) articleDetailHandler() http.HandlerFunc {
 				http.Redirect(response, request, "/sentenze-e-riflessioni/"+redirect.slug, http.StatusPermanentRedirect)
 				return
 			}
-			writeArticleReadError(response, err)
+			renderer.writeArticleReadError(response, request, err)
 			return
 		}
 		writeRevalidatingHTML(response, request, body)
@@ -194,16 +195,30 @@ func (renderer *Renderer) editorialImage(id string) EditorialImage {
 	return renderer.images["article-notebook"]
 }
 
-func writeArticleReadError(response http.ResponseWriter, err error) {
+func (renderer *Renderer) writeArticleReadError(response http.ResponseWriter, request *http.Request, err error) {
 	if errors.Is(err, articles.ErrNotFound) || errors.Is(err, articles.ErrValidation) {
-		writePublicError(response, http.StatusNotFound, "page not found")
+		renderer.WriteError(response, request, http.StatusNotFound, "article_not_found", "")
 		return
 	}
-	writePublicError(response, http.StatusServiceUnavailable, "content temporarily unavailable")
+	renderer.WriteError(response, request, http.StatusServiceUnavailable, "articles_unavailable", "")
 }
 
 func writeRevalidatingHTML(response http.ResponseWriter, request *http.Request, body []byte) {
-	writeRevalidating(response, request, body, "text/html; charset=utf-8")
+	if setRevalidationHeaders(response, request, body) {
+		response.WriteHeader(http.StatusNotModified)
+		return
+	}
+	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(withResponseNonce(body, request))
+}
+
+func withResponseNonce(body []byte, request *http.Request) []byte {
+	nonce := ""
+	if request != nil {
+		nonce = webmiddleware.CSPNonceFromContext(request.Context())
+	}
+	return bytes.ReplaceAll(body, []byte(cspNoncePlaceholder), []byte(nonce))
 }
 
 func setRevalidationHeaders(response http.ResponseWriter, request *http.Request, body []byte) bool {

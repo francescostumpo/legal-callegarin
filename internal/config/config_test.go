@@ -31,14 +31,14 @@ func TestLoadDefaults(t *testing.T) {
 			env: map[string]string{
 				"APP_ENV":            "test",
 				"SESSION_KEY_BASE64": validSessionKey,
-				"TRUSTED_PROXY":      "true",
+				"TRUSTED_PROXY_HOPS": "2",
 			},
 			want: Config{
-				Environment:  "test",
-				HTTPAddress:  ":8080",
-				StorageMode:  "memory",
-				SessionKey:   []byte("0123456789abcdef0123456789abcdef"),
-				TrustedProxy: true,
+				Environment:      "test",
+				HTTPAddress:      ":8080",
+				StorageMode:      "memory",
+				SessionKey:       []byte("0123456789abcdef0123456789abcdef"),
+				TrustedProxyHops: 2,
 			},
 		},
 	}
@@ -68,6 +68,7 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		"ADMIN_USERNAME":            "admin",
 		"ADMIN_PASSWORD_HASH":       "$argon2id$fixture",
 		"SESSION_KEY_BASE64":        validSessionKey,
+		"TRUSTED_PROXY_HOPS":        "1",
 	}
 
 	tests := []struct {
@@ -141,9 +142,19 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 			wantError: "32 bytes",
 		},
 		{
-			name:      "trusted proxy is not canonical boolean",
-			env:       withOverride(validProduction, "TRUSTED_PROXY", "TRUE"),
+			name:      "obsolete trusted proxy is rejected in production",
+			env:       withOverride(validProduction, "TRUSTED_PROXY", "true"),
 			wantError: "TRUSTED_PROXY",
+		},
+		{
+			name:      "production requires one trusted proxy hop",
+			env:       withOverride(validProduction, "TRUSTED_PROXY_HOPS", "0"),
+			wantError: "TRUSTED_PROXY_HOPS",
+		},
+		{
+			name:      "trusted proxy hops must be a small non-negative integer",
+			env:       withOverride(validProduction, "TRUSTED_PROXY_HOPS", "-1"),
+			wantError: "TRUSTED_PROXY_HOPS",
 		},
 		{
 			name:      "invalid article storage schema mode",
@@ -218,6 +229,7 @@ func TestLoadAcceptsExplicitArticleStorageSchemaModes(t *testing.T) {
 				"ADMIN_USERNAME":              "admin",
 				"ADMIN_PASSWORD_HASH":         "$argon2id$fixture",
 				"SESSION_KEY_BASE64":          validSessionKey,
+				"TRUSTED_PROXY_HOPS":          "1",
 			}))
 			if err != nil || got.ArticleStorageSchemaMode != mode {
 				t.Fatalf("Load() mode = %q, %v", got.ArticleStorageSchemaMode, err)
@@ -251,7 +263,7 @@ func assertConfig(t *testing.T, got, want Config) {
 		got.ArticleStorageSchemaMode != want.ArticleStorageSchemaMode ||
 		got.AdminUsername != want.AdminUsername ||
 		got.AdminPasswordHash != want.AdminPasswordHash ||
-		got.TrustedProxy != want.TrustedProxy ||
+		got.TrustedProxyHops != want.TrustedProxyHops ||
 		string(got.SessionKey) != string(want.SessionKey) {
 		t.Fatalf("Load() = %#v, want %#v", got, want)
 	}

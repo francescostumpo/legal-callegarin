@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/francescostumpo/legal-callegarin/internal/storage/azureurl"
 )
@@ -29,7 +30,7 @@ type Config struct {
 	AzureStorageAccountURL, AzureStorageConnectionString string
 	AdminUsername, AdminPasswordHash                     string
 	SessionKey                                           []byte
-	TrustedProxy                                         bool
+	TrustedProxyHops                                     int
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -52,6 +53,15 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("AZURE_ACCOUNT_URL has been renamed to AZURE_STORAGE_ACCOUNT_URL")
 	}
 
+	if getenv("TRUSTED_PROXY") != "" {
+		return Config{}, errors.New("TRUSTED_PROXY is obsolete; use TRUSTED_PROXY_HOPS")
+	}
+	trustedProxyHops, err := loadTrustedProxyHops(getenv("TRUSTED_PROXY_HOPS"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.TrustedProxyHops = trustedProxyHops
+
 	if err := applyDefaults(&cfg); err != nil {
 		return Config{}, err
 	}
@@ -64,12 +74,6 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.SessionKey = sessionKey
-
-	trustedProxy, err := loadTrustedProxy(getenv("TRUSTED_PROXY"))
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.TrustedProxy = trustedProxy
 
 	return cfg, nil
 }
@@ -117,6 +121,9 @@ func validate(cfg Config) error {
 		}
 	}
 	if cfg.Environment == productionEnvironment {
+		if cfg.TrustedProxyHops != 1 {
+			return errors.New("TRUSTED_PROXY_HOPS must be exactly 1 in production")
+		}
 		if cfg.StorageMode == "memory" {
 			return errors.New("STORAGE_MODE=memory is not allowed in production")
 		}
@@ -169,13 +176,13 @@ func loadSessionKey(environment, encoded string) ([]byte, error) {
 	return key, nil
 }
 
-func loadTrustedProxy(raw string) (bool, error) {
-	switch raw {
-	case "", "false":
-		return false, nil
-	case "true":
-		return true, nil
-	default:
-		return false, errors.New("TRUSTED_PROXY must be true or false")
+func loadTrustedProxyHops(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
 	}
+	hops, err := strconv.Atoi(raw)
+	if err != nil || hops < 0 || hops > 3 || strconv.Itoa(hops) != raw {
+		return 0, errors.New("TRUSTED_PROXY_HOPS must be a canonical integer from 0 to 3")
+	}
+	return hops, nil
 }

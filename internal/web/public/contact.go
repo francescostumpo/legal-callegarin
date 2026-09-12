@@ -3,6 +3,7 @@ package public
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -15,27 +16,28 @@ import (
 	"unicode/utf8"
 
 	"github.com/francescostumpo/legal-callegarin/internal/contacts"
+	webmiddleware "github.com/francescostumpo/legal-callegarin/internal/web/middleware"
 )
 
 const (
 	contactConsentVersion     = "privacy-v1-2026-09-11"
 	contactMaxBodyBytes       = 16 << 10
 	contactRateCapacity       = 5
-	contactRateRefillInterval = time.Minute
+	contactRateRefillInterval = 3 * time.Minute
 	contactRateIdleExpiry     = 15 * time.Minute
-	contactRateMaxEntries     = 2048
+	contactRateMaxEntries     = 5000
 )
 
 var errContactServicePanic = errors.New("contact service panic")
 
 type contactHandler struct {
-	renderer     *Renderer
-	service      contacts.ContactService
-	signer       *contactSigner
-	now          func() time.Time
-	logger       *slog.Logger
-	trustedProxy bool
-	limiter      *contactRateLimiter
+	renderer         *Renderer
+	service          contacts.ContactService
+	signer           *contactSigner
+	now              func() time.Time
+	logger           *slog.Logger
+	trustedProxyHops int
+	limiter          *contactRateLimiter
 }
 
 type contactPageData struct {
@@ -67,12 +69,12 @@ type contactFieldError struct {
 	Message string
 }
 
-func newContactHandler(renderer *Renderer, service contacts.ContactService, signer *contactSigner, now func() time.Time, logger *slog.Logger, trustedProxy bool) *contactHandler {
+func newContactHandler(renderer *Renderer, service contacts.ContactService, signer *contactSigner, now func() time.Time, logger *slog.Logger, trustedProxyHops int) *contactHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &contactHandler{
-		renderer: renderer, service: service, signer: signer, now: now, logger: logger, trustedProxy: trustedProxy,
+		renderer: renderer, service: service, signer: signer, now: now, logger: logger, trustedProxyHops: trustedProxyHops,
 		limiter: newContactRateLimiter(contactRateCapacity, contactRateRefillInterval, contactRateIdleExpiry, contactRateMaxEntries),
 	}
 }
@@ -82,56 +84,60 @@ func (handler *contactHandler) get(response http.ResponseWriter, request *http.R
 	data := handler.pageData(contactFormValues{})
 	data.FormToken = handler.signer.newFormToken(now)
 	data.Success = handler.signer.validSuccessToken(request.URL.Query().Get("esito"), now)
-	handler.writePage(response, http.StatusOK, data)
+	handler.writePage(response, request, http.StatusOK, data)
 }
 
 func (handler *contactHandler) post(response http.ResponseWriter, request *http.Request) {
 	if !handler.sameOrigin(request) {
-		handler.writeSecurityError(response, http.StatusForbidden, "La richiesta non può essere verificata. Ricarica la pagina e riprova.")
+		handler.writeSecurityError(response, request, http.StatusForbidden, "contact_rejected", "La richiesta non può essere verificata. Ricarica la pagina e riprova.")
 		return
 	}
-	clientKey, err := handler.signer.clientKey(request, handler.trustedProxy)
+	clientKey, err := handler.signer.clientKey(request, handler.trustedProxyHops)
 	if err != nil {
-		handler.writeSecurityError(response, http.StatusBadRequest, "La richiesta non può essere verificata. Ricarica la pagina e riprova.")
+		handler.writeSecurityError(response, request, http.StatusBadRequest, "contact_rejected", "La richiesta non può essere verificata. Ricarica la pagina e riprova.")
 		return
 	}
 	if !handler.limiter.allow(clientKey, handler.now()) {
-		handler.writeSecurityError(response, http.StatusTooManyRequests, "Sono state inviate troppe richieste. Attendi un minuto e riprova.")
+		handler.writeSecurityError(response, request, http.StatusTooManyRequests, "contact_rate_limited", "Sono state inviate troppe richieste. Attendi qualche minuto e riprova.")
 		return
 	}
 
 	request.Body = http.MaxBytesReader(response, request.Body, contactMaxBodyBytes)
 	mediaType, _, contentTypeErr := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if contentTypeErr != nil || mediaType != "application/x-www-form-urlencoded" {
-		handler.writeSecurityError(response, http.StatusBadRequest, "Formato della richiesta non valido. Ricarica la pagina e riprova.")
+		handler.writeSecurityError(response, request, http.StatusBadRequest, "contact_invalid_request", "Formato della richiesta non valido. Ricarica la pagina e riprova.")
 		return
 	}
 	if err := request.ParseForm(); err != nil {
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
-			handler.writeSecurityError(response, http.StatusRequestEntityTooLarge, "La richiesta è troppo grande. Riduci il messaggio e riprova.")
+			handler.writeSecurityError(response, request, http.StatusRequestEntityTooLarge, "contact_too_large", "La richiesta è troppo grande. Riduci il messaggio e riprova.")
 			return
 		}
-		handler.writeSecurityError(response, http.StatusBadRequest, "Formato della richiesta non valido. Ricarica la pagina e riprova.")
+		handler.writeSecurityError(response, request, http.StatusBadRequest, "contact_invalid_request", "Formato della richiesta non valido. Ricarica la pagina e riprova.")
 		return
 	}
 
 	values, validShape := contactValues(request.PostForm)
 	if !validShape {
-		handler.writeSecurityError(response, http.StatusBadRequest, "Formato della richiesta non valido. Ricarica la pagina e riprova.")
+		handler.writeSecurityError(response, request, http.StatusBadRequest, "contact_invalid_request", "Formato della richiesta non valido. Ricarica la pagina e riprova.")
 		return
 	}
 	if request.PostForm.Get("website") != "" {
-		handler.writeSecurityError(response, http.StatusBadRequest, "La richiesta non può essere verificata. Ricarica la pagina e riprova.")
+		handler.writeSecurityError(response, request, http.StatusBadRequest, "contact_rejected", "La richiesta non può essere verificata. Ricarica la pagina e riprova.")
 		return
 	}
 	if !handler.signer.validFormToken(request.PostForm.Get("started"), handler.now()) {
-		handler.writeSecurityError(response, http.StatusBadRequest, "La richiesta è scaduta o non valida. Ricarica la pagina e riprova.")
+		handler.writeSecurityError(response, request, http.StatusBadRequest, "contact_expired", "La richiesta è scaduta o non valida. Ricarica la pagina e riprova.")
 		return
 	}
 
 	fieldErrors := validateContactValues(values)
 	if len(fieldErrors) != 0 {
+		if wantsJSON(request) {
+			webmiddleware.WriteAPIError(response, request, http.StatusUnprocessableEntity, "contact_validation", "Controlla i dati inseriti.", fieldErrors)
+			return
+		}
 		data := handler.pageData(values)
 		data.ErrorSummary = orderedContactErrors(fieldErrors)
 		data.NameError = fieldErrors["name"]
@@ -140,7 +146,7 @@ func (handler *contactHandler) post(response http.ResponseWriter, request *http.
 		data.MessageError = fieldErrors["message"]
 		data.PrivacyError = fieldErrors["privacy"]
 		data.FormToken = handler.signer.newFormToken(handler.now())
-		handler.writePage(response, http.StatusUnprocessableEntity, data)
+		handler.writePage(response, request, http.StatusUnprocessableEntity, data)
 		return
 	}
 
@@ -151,21 +157,35 @@ func (handler *contactHandler) post(response http.ResponseWriter, request *http.
 	_, err = safelySubmitContact(request.Context(), handler.service, submission)
 	if err != nil {
 		if errors.Is(err, contacts.ErrCommitUnknown) {
-			handler.logger.Error("contact submission outcome unknown", "event", "contact_submit", "outcome", "commit_unknown")
+			handler.logger.Error("contact submission outcome unknown", "event", "contact_submit", "outcome", "commit_unknown", "request_id", webmiddleware.RequestIDFromContext(request.Context()))
+			if wantsJSON(request) {
+				webmiddleware.WriteAPIError(response, request, http.StatusConflict, "contact_commit_unknown", "Non è possibile confermare la ricezione. Per evitare duplicati, non inviare di nuovo la richiesta.", nil)
+				return
+			}
 			data := handler.pageData(contactFormValues{})
 			data.StorageOutcomeUnknown = true
-			handler.writePage(response, http.StatusServiceUnavailable, data)
+			handler.writePage(response, request, http.StatusServiceUnavailable, data)
 			return
 		}
-		handler.logger.Error("contact submission unavailable", "event", "contact_submit", "outcome", "storage_error")
+		handler.logger.Error("contact submission unavailable", "event", "contact_submit", "outcome", "storage_error", "request_id", webmiddleware.RequestIDFromContext(request.Context()))
+		if wantsJSON(request) {
+			webmiddleware.WriteAPIError(response, request, http.StatusServiceUnavailable, "contact_unavailable", "Servizio temporaneamente non disponibile. Riprova tra poco.", nil)
+			return
+		}
 		data := handler.pageData(contactFormValues{})
 		data.StorageFailure = true
 		data.FormToken = handler.signer.newFormToken(handler.now())
-		handler.writePage(response, http.StatusServiceUnavailable, data)
+		handler.writePage(response, request, http.StatusServiceUnavailable, data)
 		return
 	}
-	handler.logger.Info("contact submission accepted", "event", "contact_submit", "outcome", "accepted")
+	handler.logger.Info("contact submission accepted", "event", "contact_submit", "outcome", "accepted", "request_id", webmiddleware.RequestIDFromContext(request.Context()))
 	success := handler.signer.newSuccessToken(handler.now())
+	if wantsJSON(request) {
+		response.Header().Set("Cache-Control", "no-store")
+		response.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(response).Encode(map[string]string{"redirect": "/contatti?esito=" + url.QueryEscape(success)})
+		return
+	}
 	http.Redirect(response, request, "/contatti?esito="+url.QueryEscape(success), http.StatusSeeOther)
 }
 
@@ -246,17 +266,25 @@ func (handler *contactHandler) pageData(values contactFormValues) contactPageDat
 	return contactPageData{PageData: page, Form: values}
 }
 
-func (handler *contactHandler) writeSecurityError(response http.ResponseWriter, status int, message string) {
+func (handler *contactHandler) writeSecurityError(response http.ResponseWriter, request *http.Request, status int, code, message string) {
+	if wantsJSON(request) {
+		webmiddleware.WriteAPIError(response, request, status, code, message, nil)
+		return
+	}
 	data := handler.pageData(contactFormValues{})
 	data.GlobalError = message
 	data.FormToken = handler.signer.newFormToken(handler.now())
-	handler.writePage(response, status, data)
+	handler.writePage(response, request, status, data)
 }
 
-func (handler *contactHandler) writePage(response http.ResponseWriter, status int, data contactPageData) {
+func wantsJSON(request *http.Request) bool {
+	return request != nil && strings.Contains(strings.ToLower(request.Header.Get("Accept")), "application/json")
+}
+
+func (handler *contactHandler) writePage(response http.ResponseWriter, request *http.Request, status int, data contactPageData) {
 	var output bytes.Buffer
 	if err := handler.renderer.contact.ExecuteTemplate(&output, "base", data); err != nil {
-		writePublicError(response, http.StatusServiceUnavailable, "content temporarily unavailable")
+		handler.renderer.WriteError(response, nil, http.StatusServiceUnavailable, "content_unavailable", "")
 		return
 	}
 	response.Header().Set("Cache-Control", "no-store")
@@ -265,5 +293,5 @@ func (handler *contactHandler) writePage(response http.ResponseWriter, status in
 	}
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	response.WriteHeader(status)
-	_, _ = response.Write(output.Bytes())
+	_, _ = response.Write(withResponseNonce(output.Bytes(), request))
 }

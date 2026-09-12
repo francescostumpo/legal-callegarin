@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,18 +24,20 @@ const shutdownTimeout = 20 * time.Second
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(logger); err != nil {
-		logger.Error("web server stopped", "error", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, logger); err != nil {
+		logger.Error("web server stopped", "event", "server_stopped", "outcome", "failed")
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run(ctx context.Context, logger *slog.Logger) error {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
 		return err
 	}
-	return runConfigured(context.Background(), cfg, logger, productionAzureRuntime{}, serveHTTP)
+	return runConfigured(ctx, cfg, logger, productionAzureRuntime{}, serveHTTP)
 }
 
 type azureRuntime interface {
@@ -108,47 +111,85 @@ func initializeStorage(ctx context.Context, cfg config.Config, now func() time.T
 	}
 }
 
-func runConfigured(ctx context.Context, cfg config.Config, logger *slog.Logger, runtime azureRuntime, serve func(config.Config, http.Handler, *slog.Logger) error) error {
-	bundle, migration, err := initializeStorage(ctx, cfg, time.Now, runtime)
+func runConfigured(ctx context.Context, cfg config.Config, logger *slog.Logger, runtime azureRuntime, serve func(context.Context, config.Config, http.Handler, *slog.Logger) error) error {
+	bundle, _, err := initializeStorage(ctx, cfg, time.Now, runtime)
 	if err != nil {
 		return err
 	}
 	if cfg.StorageMode == "azure" && cfg.ArticleStorageSchemaMode != config.ArticleStorageSchemaCompat {
-		logger.Info("article storage schema ready", "mode", cfg.ArticleStorageSchemaMode, "migrated", migration.Migrated, "scanned", migration.Scanned)
+		logger.Info("article storage schema ready", "event", "article_schema", "outcome", "ready")
 	}
 
 	handler, err := app.New(app.Options{Config: cfg, Assets: webassets.Files, Logger: logger, Storage: bundle})
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)
 	}
-	return serve(cfg, handler, logger)
+	return serve(ctx, cfg, handler, logger)
 }
 
-func serveHTTP(cfg config.Config, handler http.Handler, logger *slog.Logger) error {
-	server := &http.Server{
+func newHTTPServer(cfg config.Config, handler http.Handler, logger *slog.Logger) *http.Server {
+	return &http.Server{
 		Addr:              cfg.HTTPAddress,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    32 << 10,
+		ErrorLog:          log.New(redactedServerErrorWriter{logger: logger}, "", 0),
 	}
+}
 
-	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+func serveHTTP(ctx context.Context, cfg config.Config, handler http.Handler, logger *slog.Logger) error {
+	server := newHTTPServer(cfg, handler, logger)
+	logger.Info("web server starting", "event", "server_starting")
+	return serveServer(ctx, server, logger)
+}
 
-	shutdownResult := make(chan error, 1)
+type httpServerRuntime interface {
+	ListenAndServe() error
+	Shutdown(context.Context) error
+}
+
+func serveServer(ctx context.Context, server httpServerRuntime, logger *slog.Logger) error {
+	listenResult := make(chan error, 1)
 	go func() {
-		<-signalContext.Done()
-		shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		shutdownResult <- server.Shutdown(shutdownContext)
+		listenResult <- server.ListenAndServe()
 	}()
 
-	logger.Info("web server starting", "address", cfg.HTTPAddress)
-	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+	select {
+	case err := <-listenResult:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
 		return err
+	case <-ctx.Done():
 	}
 
-	return <-shutdownResult
+	logger.Info("web server shutdown requested", "event", "server_shutdown")
+	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownContext); err != nil {
+		return fmt.Errorf("shutdown HTTP server: %w", err)
+	}
+	select {
+	case err := <-listenResult:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	case <-shutdownContext.Done():
+		return fmt.Errorf("wait for HTTP server shutdown: %w", shutdownContext.Err())
+	}
+}
+
+type redactedServerErrorWriter struct {
+	logger *slog.Logger
+}
+
+func (writer redactedServerErrorWriter) Write(value []byte) (int, error) {
+	if writer.logger != nil {
+		writer.logger.Error("HTTP server internal error", "event", "http_server_error")
+	}
+	return len(value), nil
 }

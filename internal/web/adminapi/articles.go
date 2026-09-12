@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/francescostumpo/legal-callegarin/internal/articles"
+	webmiddleware "github.com/francescostumpo/legal-callegarin/internal/web/middleware"
 	"github.com/francescostumpo/legal-callegarin/internal/webassets"
 )
 
@@ -214,6 +215,7 @@ func (handler *handler) articlePreviewGET(w http.ResponseWriter, r *http.Request
 		writeArticleError(w, err)
 		return
 	}
+	data.CSPNonce = webmiddleware.CSPNonceFromContext(r.Context())
 	setPrivateAdminHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := handler.renderer.RenderArticle(w, data); err != nil {
@@ -313,8 +315,6 @@ func writeArticleError(w http.ResponseWriter, err error) {
 	}
 }
 func writeJSONCode(w http.ResponseWriter, status int, code, message string) {
-	setPrivateAdminHeaders(w)
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message, "code": code})
+	_ = message
+	webmiddleware.WriteAPIErrorResponse(w, status, code, safeAPIMessage(code), nil)
 }

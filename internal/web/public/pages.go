@@ -40,6 +40,7 @@ type PageData struct {
 	OpenGraphURL      string
 	OpenGraphImageURL string
 	StructuredData    template.JS
+	CSPNonce          string
 	Articles          []ArticleCard
 }
 

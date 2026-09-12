@@ -4,13 +4,12 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
-	"net"
 	"net/http"
 	"net/netip"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/francescostumpo/legal-callegarin/internal/web/clientinfo"
 )
 
 type loginBucket struct {
@@ -123,22 +122,12 @@ func (set *bucketSet) evictOldest() bool {
 	return true
 }
 
-func loginAddressKey(request *http.Request, trustedProxy bool, key []byte) (string, error) {
-	raw := request.RemoteAddr
-	if trustedProxy {
-		if forwarded := request.Header.Get("X-Forwarded-For"); forwarded != "" {
-			raw, _, _ = strings.Cut(forwarded, ",")
-			raw = strings.TrimSpace(raw)
-		}
-	}
-	if host, _, err := net.SplitHostPort(raw); err == nil {
-		raw = host
-	}
-	address, err := netip.ParseAddr(strings.Trim(raw, "[]"))
+func loginAddressKey(request *http.Request, trustedProxyHops int, key []byte) (string, error) {
+	identity, err := clientinfo.Resolve(request, trustedProxyHops)
 	if err != nil {
-		return "", errors.New("invalid client address")
+		return "", err
 	}
-	address = address.Unmap()
+	address := identity.Address
 	prefixBits := 56
 	if address.Is4() {
 		prefixBits = 24

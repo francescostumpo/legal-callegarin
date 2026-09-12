@@ -18,7 +18,7 @@
     </title>
     <link rel="canonical" href="{{.CanonicalURL}}" />
     {{if .StructuredData}}
-    <script type="application/ld+json">
+    <script type="application/ld+json" nonce="{{.CSPNonce}}">
       {{.StructuredData}}
     </script>
     {{end}}

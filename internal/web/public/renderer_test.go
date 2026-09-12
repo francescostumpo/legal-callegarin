@@ -63,6 +63,32 @@ func TestStaticRoutesRenderSemanticHTMLWithoutCookies(t *testing.T) {
 	}
 }
 
+func TestDesignedPublicErrorsCoverRecoverableStatusesWithoutInternalDetails(t *testing.T) {
+	renderer, err := publicweb.NewRenderer(webassets.Files, canonicalBaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []int{404, 409, 422, 429, 500, 503} {
+		response := httptest.NewRecorder()
+		response.Header().Set("X-Request-ID", "safe-reference")
+		renderer.WriteError(response, httptest.NewRequest(http.MethodGet, "/failure", nil), status, "internal-secret-code", "internal secret message")
+		body := response.Body.String()
+		if response.Code != status || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("X-Robots-Tag") != "noindex, nofollow" {
+			t.Fatalf("status %d error response = status %d headers %#v", status, response.Code, response.Header())
+		}
+		for _, required := range []string{"Studio Legale Alessandro Callegarin", "/contatti", "Telefono: DATO DA CONFERMARE", "safe-reference"} {
+			if !strings.Contains(body, required) {
+				t.Errorf("status %d body lacks %q", status, required)
+			}
+		}
+		for _, forbidden := range []string{"internal-secret-code", "internal secret message"} {
+			if strings.Contains(body, forbidden) {
+				t.Errorf("status %d leaked %q", status, forbidden)
+			}
+		}
+	}
+}
+
 func TestHomeFollowsApprovedSectionOrderAndLocality(t *testing.T) {
 	t.Parallel()
 

@@ -2,6 +2,10 @@ package middleware
 
 import (
 	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log/slog"
@@ -11,6 +15,7 @@ import (
 	"time"
 
 	"github.com/felixge/httpsnoop"
+	"github.com/francescostumpo/legal-callegarin/internal/web/clientinfo"
 )
 
 const defaultAdminResponseLimit = int64(2 << 20)
@@ -73,18 +78,15 @@ func (response *boundedAdminResponse) commit(destination http.ResponseWriter) {
 	}
 }
 
-func recoverPanics(next http.Handler, logger *slog.Logger, adminResponseLimit int64) http.Handler {
+func recoverPanics(next http.Handler, logger *slog.Logger, adminResponseLimit int64, renderError func(http.ResponseWriter, *http.Request, int, string, string)) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if !adminPath(request.URL.Path) {
+		if !atomicResponsePath(request.URL.Path) {
 			defer func() {
 				if recover() == nil {
 					return
 				}
 				logger.Error("request panic recovered", "request_id", RequestIDFromContext(request.Context()))
-				response.Header().Set("Cache-Control", "no-store")
-				response.Header().Set("Content-Type", "text/plain; charset=utf-8")
-				response.WriteHeader(http.StatusInternalServerError)
-				_, _ = response.Write([]byte("Internal Server Error\n"))
+				writeErrorResponse(response, request, http.StatusInternalServerError, "internal_error", "Si è verificato un errore. Riprova più tardi.", renderError)
 			}()
 			next.ServeHTTP(response, request)
 			return
@@ -103,17 +105,24 @@ func recoverPanics(next http.Handler, logger *slog.Logger, adminResponseLimit in
 		switch {
 		case panicked:
 			logger.Error("request panic recovered", "request_id", RequestIDFromContext(request.Context()))
-			writeAtomicAdminFailure(response, request.URL.Path)
+			writeAtomicFailure(response, request, buffered.header, http.StatusInternalServerError, "internal_error", "Si è verificato un errore. Riprova più tardi.", renderError)
 		case buffered.responseOverflowed():
-			logger.Error("admin response exceeded buffer", "request_id", RequestIDFromContext(request.Context()))
-			writeAtomicAdminFailure(response, request.URL.Path)
+			logger.Error("response exceeded buffer", "request_id", RequestIDFromContext(request.Context()))
+			writeAtomicFailure(response, request, buffered.header, http.StatusInternalServerError, "response_too_large", "Risposta temporaneamente non disponibile.", renderError)
 		default:
 			buffered.commit(response)
 		}
 	})
 }
 
-func accessLog(next http.Handler, logger *slog.Logger, now func() time.Time) http.Handler {
+func atomicResponsePath(path string) bool {
+	if path == "/health/live" || path == "/health/ready" || path == "/sitemap.xml" || path == "/robots.txt" || strings.HasPrefix(path, "/assets/") {
+		return false
+	}
+	return true
+}
+
+func accessLog(next http.Handler, logger *slog.Logger, now func() time.Time, trustedProxyHops int, clientHashKey []byte) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		started := now()
 		metrics, ok := response.(responseMetrics)
@@ -134,12 +143,17 @@ func accessLog(next http.Handler, logger *slog.Logger, now func() time.Time) htt
 				status = http.StatusInternalServerError
 				outcome = "recovered_panic"
 			}
+			route := request.Pattern
+			if route == "" {
+				route = "unmatched"
+			}
 			logger.Info("request completed",
 				"request_id", RequestIDFromContext(request.Context()),
 				"method", request.Method,
-				"path", request.URL.Path,
+				"route", route,
 				"status", status,
 				"outcome", outcome,
+				"client_hash", clientHash(request, trustedProxyHops, clientHashKey),
 				"duration_ms", now().Sub(started).Milliseconds(),
 			)
 			if panicValue != nil {
@@ -211,15 +225,24 @@ func (capture *responseCapture) responseStatus() int {
 
 func (*responseCapture) responseOverflowed() bool { return false }
 
-func applySecurityHeaders(header http.Header, path string) {
+func applySecurityHeaders(header http.Header, path string, production bool, nonce string) {
+	csp := "default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self'"
+	if nonce != "" {
+		csp += " 'nonce-" + nonce + "'"
+	}
+	csp += "; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors "
 	if exactArticlePreviewPath(path) {
-		header.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'; object-src 'none'")
+		header.Set("Content-Security-Policy", csp+"'self'")
 		header.Set("X-Frame-Options", "SAMEORIGIN")
 	} else {
-		header.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'")
+		header.Set("Content-Security-Policy", csp+"'none'")
 		header.Set("X-Frame-Options", "DENY")
 	}
-	header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	if production {
+		header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	} else {
+		header.Del("Strict-Transport-Security")
+	}
 	header.Set("Referrer-Policy", "no-referrer")
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
@@ -246,16 +269,10 @@ func exactArticlePreviewPath(path string) bool {
 	return true
 }
 
-func writeAtomicAdminFailure(response http.ResponseWriter, path string) {
-	requestID := response.Header().Get("X-Request-ID")
+func writeAtomicFailure(response http.ResponseWriter, request *http.Request, safeHeaders http.Header, status int, code, message string, renderError func(http.ResponseWriter, *http.Request, int, string, string)) {
 	clear(response.Header())
-	if requestID != "" {
-		response.Header().Set("X-Request-ID", requestID)
-	}
-	applySecurityHeaders(response.Header(), path)
-	response.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	response.WriteHeader(http.StatusInternalServerError)
-	_, _ = response.Write([]byte("Internal Server Error\n"))
+	copyHeaders(response.Header(), safeHeaders)
+	writeErrorResponse(response, request, status, code, message, renderError)
 }
 
 func copyHeaders(destination, source http.Header) {
@@ -267,4 +284,57 @@ func copyHeaders(destination, source http.Header) {
 
 func adminPath(path string) bool {
 	return path == "/admin" || strings.HasPrefix(path, "/admin/") || path == "/api/admin" || strings.HasPrefix(path, "/api/admin/")
+}
+
+func apiPath(path string) bool {
+	return path == "/api/admin" || strings.HasPrefix(path, "/api/admin/")
+}
+
+func writeErrorResponse(response http.ResponseWriter, request *http.Request, status int, code, message string, renderError func(http.ResponseWriter, *http.Request, int, string, string)) {
+	if apiPath(request.URL.Path) {
+		WriteAPIError(response, request, status, code, message, nil)
+		return
+	}
+	if renderError != nil {
+		renderError(response, request, status, code, message)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	response.WriteHeader(status)
+	_, _ = io.WriteString(response, "<!doctype html><html lang=\"it\"><title>Errore</title><main><h1>Richiesta non disponibile</h1></main></html>")
+}
+
+func clientHash(request *http.Request, trustedProxyHops int, key []byte) string {
+	identity, err := clientinfo.Resolve(request, trustedProxyHops)
+	if err != nil {
+		return "unknown"
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte("callegarin/http-client/v1\x00"))
+	_, _ = mac.Write(identity.Address.AsSlice())
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:9])
+}
+
+func timeout(next http.Handler, duration time.Duration, renderError func(http.ResponseWriter, *http.Request, int, string, string)) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		ctx, cancel := context.WithTimeout(request.Context(), duration)
+		defer cancel()
+		buffered := newBoundedAdminResponse(response.Header(), defaultAdminResponseLimit)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			next.ServeHTTP(buffered, request.WithContext(ctx))
+		}()
+		select {
+		case <-done:
+			if buffered.responseOverflowed() {
+				writeErrorResponse(response, request, http.StatusInternalServerError, "response_too_large", "Risposta temporaneamente non disponibile.", renderError)
+				return
+			}
+			buffered.commit(response)
+		case <-ctx.Done():
+			writeErrorResponse(response, request, http.StatusServiceUnavailable, "request_timeout", "Il servizio sta impiegando troppo tempo. Riprova.", renderError)
+		}
+	})
 }

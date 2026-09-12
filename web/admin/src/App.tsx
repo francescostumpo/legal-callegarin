@@ -48,7 +48,7 @@ type AppProps = {
 
 type SessionState =
   | { status: "loading" }
-  | { status: "error"; message: string }
+  | { status: "error"; message: string; retryable: boolean }
   | { status: "ready"; session: SessionDTO }
 
 export default function App({ onUnauthorized = redirectToLogin }: AppProps) {
@@ -57,6 +57,7 @@ export default function App({ onUnauthorized = redirectToLogin }: AppProps) {
     [onUnauthorized],
   )
   const [state, setState] = useState<SessionState>({ status: "loading" })
+  const [sessionAttempt, setSessionAttempt] = useState(0)
 
   useEffect(() => {
     let active = true
@@ -75,12 +76,13 @@ export default function App({ onUnauthorized = redirectToLogin }: AppProps) {
             error instanceof APIError && error.status === 401
               ? "Sessione scaduta"
               : "Impossibile verificare la sessione",
+          retryable: !(error instanceof APIError && error.status === 401),
         })
       })
     return () => {
       active = false
     }
-  }, [client])
+  }, [client, sessionAttempt])
 
   if (state.status === "loading") {
     return <StatusPage>Caricamento sessione…</StatusPage>
@@ -89,6 +91,17 @@ export default function App({ onUnauthorized = redirectToLogin }: AppProps) {
     return (
       <StatusPage>
         <span role="alert">{state.message}</span>
+        {state.retryable ? (
+          <button
+            type="button"
+            onClick={() => {
+              setState({ status: "loading" })
+              setSessionAttempt((attempt) => attempt + 1)
+            }}
+          >
+            Riprova
+          </button>
+        ) : null}
       </StatusPage>
     )
   }
@@ -1114,7 +1127,9 @@ function ArticleEditor({ client }: { client: AdminClient }) {
   })
   const [dirty, setDirty] = useState(false)
   const [reloadRequired, setReloadRequired] = useState(false)
-  const [previewWidth, setPreviewWidth] = useState("100%")
+  const [previewWidth, setPreviewWidth] = useState<
+    "mobile" | "tablet" | "desktop"
+  >("desktop")
   const [previewVersion, setPreviewVersion] = useState(0)
   const [message, setMessage] = useState("")
   const [pendingAction, setPendingAction] = useState<
@@ -1488,13 +1503,13 @@ function ArticleEditor({ client }: { client: AdminClient }) {
         <div className="preview-panel">
           <h2>Anteprima ultima bozza salvata</h2>
           <div className="preview-sizes">
-            <button type="button" onClick={() => setPreviewWidth("360px")}>
+            <button type="button" onClick={() => setPreviewWidth("mobile")}>
               360
             </button>
-            <button type="button" onClick={() => setPreviewWidth("768px")}>
+            <button type="button" onClick={() => setPreviewWidth("tablet")}>
               768
             </button>
-            <button type="button" onClick={() => setPreviewWidth("100%")}>
+            <button type="button" onClick={() => setPreviewWidth("desktop")}>
               Desktop
             </button>
             <a
@@ -1506,7 +1521,7 @@ function ArticleEditor({ client }: { client: AdminClient }) {
             </a>
           </div>
           <iframe
-            style={{ width: previewWidth }}
+            className={`preview-frame--${previewWidth}`}
             title="Anteprima articolo salvato"
             src={`/admin/preview/articles/${id}?saved=${previewVersion}`}
           />

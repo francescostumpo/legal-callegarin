@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,13 +82,81 @@ func TestStartupFailureDoesNotReachListener(t *testing.T) {
 		ArticleStorageSchemaMode: config.ArticleStorageSchemaMigrate,
 		AzureStorageAccountURL:   "https://example.blob.core.windows.net",
 	}
-	err := runConfigured(context.Background(), cfg, slog.Default(), runtime, func(_ config.Config, _ http.Handler, _ *slog.Logger) error {
+	err := runConfigured(context.Background(), cfg, slog.Default(), runtime, func(_ context.Context, _ config.Config, _ http.Handler, _ *slog.Logger) error {
 		listened = true
 		return nil
 	})
 	if err == nil || listened {
 		t.Fatalf("runConfigured() error = %v, listened = %t", err, listened)
 	}
+}
+
+func TestNewHTTPServerUsesBoundedProductionTimeoutsAndRedactedErrorLog(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	server := newHTTPServer(config.Config{HTTPAddress: ":8080"}, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), logger)
+	if server.ReadHeaderTimeout != 5*time.Second || server.ReadTimeout != 15*time.Second || server.WriteTimeout != 30*time.Second || server.IdleTimeout != 60*time.Second || server.MaxHeaderBytes != 32<<10 {
+		t.Fatalf("server hardening = header %s read %s write %s idle %s max-header %d", server.ReadHeaderTimeout, server.ReadTimeout, server.WriteTimeout, server.IdleTimeout, server.MaxHeaderBytes)
+	}
+	server.ErrorLog.Print("GET /secret?email=persona@example.test from 192.0.2.1")
+	line := output.String()
+	if !strings.Contains(line, `"event":"http_server_error"`) {
+		t.Fatalf("structured server error missing event: %s", line)
+	}
+	for _, secret := range []string{"/secret", "persona@example.test", "192.0.2.1"} {
+		if strings.Contains(line, secret) {
+			t.Fatalf("server error log leaked %q: %s", secret, line)
+		}
+	}
+}
+
+func TestServeServerShutsDownWithinBoundAfterContextCancellation(t *testing.T) {
+	runtime := newFakeHTTPServer()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- serveServer(ctx, runtime, slog.Default()) }()
+	<-runtime.started
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("serveServer() error = %v", err)
+	}
+	if runtime.shutdownDeadline.IsZero() {
+		t.Fatal("shutdown context had no deadline")
+	}
+	remaining := time.Until(runtime.shutdownDeadline)
+	if remaining <= 0 || remaining > shutdownTimeout {
+		t.Fatalf("shutdown deadline remaining = %s", remaining)
+	}
+}
+
+func TestServeServerReturnsListenerFailureWithoutWaitingForSignal(t *testing.T) {
+	want := errors.New("listen failed")
+	runtime := &fakeHTTPServer{started: make(chan struct{}), listenResult: make(chan error, 1)}
+	runtime.listenResult <- want
+	if err := serveServer(context.Background(), runtime, slog.Default()); !errors.Is(err, want) {
+		t.Fatalf("serveServer() error = %v, want %v", err, want)
+	}
+}
+
+type fakeHTTPServer struct {
+	started          chan struct{}
+	listenResult     chan error
+	shutdownDeadline time.Time
+}
+
+func newFakeHTTPServer() *fakeHTTPServer {
+	return &fakeHTTPServer{started: make(chan struct{}), listenResult: make(chan error, 1)}
+}
+
+func (server *fakeHTTPServer) ListenAndServe() error {
+	close(server.started)
+	return <-server.listenResult
+}
+
+func (server *fakeHTTPServer) Shutdown(ctx context.Context) error {
+	server.shutdownDeadline, _ = ctx.Deadline()
+	server.listenResult <- http.ErrServerClosed
+	return nil
 }
 
 type recordingAzureRuntime struct {
