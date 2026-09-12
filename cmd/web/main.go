@@ -40,11 +40,15 @@ func main() {
 }
 
 func run(ctx context.Context, logger *slog.Logger) error {
-	cfg, err := config.Load(os.Getenv)
+	getenv, err := prepareRuntimeEnvironment(os.Getenv)
 	if err != nil {
 		return err
 	}
-	return runConfigured(ctx, cfg, logger, productionAzureRuntime{}, serveHTTP)
+	cfg, err := config.Load(getenv)
+	if err != nil {
+		return err
+	}
+	return runConfigured(ctx, cfg, logger, productionAzureRuntime{}, serveRuntimeHTTP)
 }
 
 type azureRuntime interface {
@@ -119,12 +123,15 @@ func initializeStorage(ctx context.Context, cfg config.Config, now func() time.T
 }
 
 func runConfigured(ctx context.Context, cfg config.Config, logger *slog.Logger, runtime azureRuntime, serve func(context.Context, config.Config, http.Handler, *slog.Logger) error) error {
-	bundle, _, err := initializeStorage(ctx, cfg, time.Now, runtime)
+	bundle, _, err := initializeStorage(ctx, cfg, storageNow, runtime)
 	if err != nil {
 		return err
 	}
 	if cfg.StorageMode == "azure" && cfg.ArticleStorageSchemaMode != config.ArticleStorageSchemaCompat {
 		logger.Info("article storage schema ready", "event", "article_schema", "outcome", "ready")
+	}
+	if err := seedRuntimeData(ctx, bundle); err != nil {
+		return fmt.Errorf("initialize runtime data: %w", err)
 	}
 
 	handler, err := app.New(app.Options{Config: cfg, Assets: webassets.Files, Logger: logger, Storage: bundle})

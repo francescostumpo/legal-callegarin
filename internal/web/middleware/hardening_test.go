@@ -227,7 +227,7 @@ func TestHandlerTimeoutRecoversWorkerPanicsAsAtomicRouteErrors(t *testing.T) {
 	}
 }
 
-func TestDefaultSecurityHeadersAreExplicitAndDoNotEmitDevelopmentHSTS(t *testing.T) {
+func TestDefaultSecurityHeadersPreserveSameOriginFormOriginAndDoNotEmitDevelopmentHSTS(t *testing.T) {
 	handler, err := New(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {}), Options{
 		SessionKey:    []byte("0123456789abcdef0123456789abcdef"),
 		PublicBaseURL: "https://studio.example.test",
@@ -250,7 +250,7 @@ func TestDefaultSecurityHeadersAreExplicitAndDoNotEmitDevelopmentHSTS(t *testing
 	if strings.Contains(csp, "unsafe-inline") {
 		t.Fatalf("CSP contains unsafe-inline: %q", csp)
 	}
-	if response.Header().Get("X-Content-Type-Options") != "nosniff" || response.Header().Get("Referrer-Policy") != "no-referrer" || response.Header().Get("Permissions-Policy") == "" || response.Header().Get("X-Frame-Options") != "DENY" {
+	if response.Header().Get("X-Content-Type-Options") != "nosniff" || response.Header().Get("Referrer-Policy") != "same-origin" || response.Header().Get("Permissions-Policy") == "" || response.Header().Get("X-Frame-Options") != "DENY" {
 		t.Fatalf("security headers = %#v", response.Header())
 	}
 }

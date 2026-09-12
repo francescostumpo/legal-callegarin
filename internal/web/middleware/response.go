@@ -269,7 +269,7 @@ func applySecurityHeaders(header http.Header, path string, production bool, nonc
 	} else {
 		header.Del("Strict-Transport-Security")
 	}
-	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("Referrer-Policy", "same-origin")
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
 	if adminPath(path) {
