@@ -14,11 +14,13 @@ require_rollout_configuration() {
   : "${ROLLOUT_ID:?ROLLOUT_ID is required}"
 
   case "$CONTAINER_APP" in
-    '' | [!a-z]* | *[!a-z0-9-]* | *-) fail "invalid Container Apps app name: $CONTAINER_APP" ;;
+    '' | [!a-z]* | *[!a-z0-9-]* | *- | *--*) fail "invalid Container Apps app name: $CONTAINER_APP" ;;
   esac
+  test "${#CONTAINER_APP}" -ge 2 || fail "Container Apps app name is shorter than 2 characters"
+  test "${#CONTAINER_APP}" -lt 32 || fail "Container Apps app name must be shorter than 32 characters"
 
   case "$ROLLOUT_ID" in
-    '' | [!a-z]* | *[!a-z0-9-]* | *-) fail "invalid ROLLOUT_ID: $ROLLOUT_ID" ;;
+    '' | [!a-z]* | *[!a-z0-9-]* | *- | *--*) fail "invalid ROLLOUT_ID: $ROLLOUT_ID" ;;
   esac
   test "${#ROLLOUT_ID}" -le 16 || fail "ROLLOUT_ID exceeds 16 characters"
 
@@ -48,6 +50,31 @@ validate_revision_name() {
   esac
 }
 
+validate_revision_suffix() {
+  revision_suffix=$1
+  case "$revision_suffix" in
+    '' | [!a-z]* | *[!a-z0-9-]* | *- | *--*) fail "invalid Container Apps revision suffix: $revision_suffix" ;;
+  esac
+  test "${#revision_suffix}" -le 64 || fail "Container Apps revision suffix exceeds 64 characters: $revision_suffix"
+  revision_name_length=$((${#CONTAINER_APP} + 1 + ${#revision_suffix}))
+  test "$revision_name_length" -le 64 || fail "Container Apps revision name exceeds 64 characters: $CONTAINER_APP-$revision_suffix"
+}
+
+validate_repair_revision_argument() {
+  repair_revision=$1
+  validate_revision_name "$repair_revision"
+  case "$repair_revision" in
+    "$CONTAINER_APP"-*) ;;
+    *) fail "repair revision does not belong to $CONTAINER_APP: $repair_revision" ;;
+  esac
+  repair_revision_suffix=${repair_revision#"$CONTAINER_APP"-}
+  validate_revision_suffix "$repair_revision_suffix"
+}
+
+assert_distinct_revisions() {
+  test "$1" != "$2" || fail "repair and migrate revisions must be distinct: $1"
+}
+
 observe_revisions() {
   az containerapp revision list \
     --resource-group "$RESOURCE_GROUP" \
@@ -62,13 +89,54 @@ assert_revision_suffix_available() {
     az containerapp revision list \
       --resource-group "$RESOURCE_GROUP" \
       --name "$CONTAINER_APP" \
-      --query "length([?name == '$expected_revision'])" \
+      --all \
+      --query "length([?name == '$expected_revision'].name)" \
       --output tsv
   )"
   case "$suffix_match_count" in
     '' | *[!0-9]*) fail "invalid suffix match count for $expected_revision: $suffix_match_count" ;;
   esac
   test "$suffix_match_count" = 0 || fail "revision suffix already exists: $expected_revision"
+}
+
+assert_revision_exists() {
+  expected_revision=$1
+  revision_match_count="$(
+    az containerapp revision list \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$CONTAINER_APP" \
+      --all \
+      --query "length([?name == '$expected_revision'])" \
+      --output tsv
+  )"
+  case "$revision_match_count" in
+    '' | *[!0-9]*) fail "invalid revision match count for $expected_revision: $revision_match_count" ;;
+  esac
+  test "$revision_match_count" = 1 || fail "repair revision does not exist exactly once: $expected_revision"
+}
+
+assert_named_only_traffic() {
+  traffic_facts="$(
+    az containerapp show \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$CONTAINER_APP" \
+      --query "[[length(properties.configuration.ingress.traffic),length(properties.configuration.ingress.traffic[?latestRevision == \`true\` || revisionName == \`null\` || revisionName == ''])]]" \
+      --output tsv
+  )"
+
+  old_ifs=$IFS
+  IFS="$(printf '\t')"
+  set -- $traffic_facts
+  IFS=$old_ifs
+  test "$#" -eq 2 || fail 'could not verify named-only ingress traffic'
+
+  traffic_rule_count=$1
+  unsafe_traffic_rule_count=$2
+  case "$traffic_rule_count:$unsafe_traffic_rule_count" in
+    *[!0-9:]*) fail "invalid ingress traffic counts: $traffic_rule_count $unsafe_traffic_rule_count" ;;
+  esac
+  test "$traffic_rule_count" -gt 0 || fail 'ingress traffic has no explicit named revision rule'
+  test "$unsafe_traffic_rule_count" = 0 || fail 'ingress traffic can target the latest revision; replace it manually with named revision weights before recovery'
 }
 
 create_revision() {
@@ -159,8 +227,11 @@ assert_no_legacy_article_rows() {
 quiesce_and_create_repair() {
   require_rollout_configuration
   repair_suffix="repair-$ROLLOUT_ID"
-  expected_repair_revision="$CONTAINER_APP--$repair_suffix"
+  validate_revision_suffix "$repair_suffix"
+  expected_repair_revision="$CONTAINER_APP-$repair_suffix"
   validate_revision_name "$expected_repair_revision"
+
+  assert_named_only_traffic
 
   active_revisions="$(
     az containerapp revision list \
@@ -203,6 +274,7 @@ quiesce_and_create_repair() {
 
   set_and_verify_multiple_mode
   assert_revision_suffix_available "$expected_repair_revision"
+  assert_named_only_traffic
   repair_revision="$(
     create_revision repair "$repair_suffix" "$expected_repair_revision"
   )"
@@ -215,14 +287,20 @@ quiesce_and_create_repair() {
 create_and_promote_recovery_migrate() {
   require_rollout_configuration
   repair_revision=$1
-  validate_revision_name "$repair_revision"
+  validate_repair_revision_argument "$repair_revision"
 
   migrate_suffix="migrate-$ROLLOUT_ID"
-  expected_migrate_revision="$CONTAINER_APP--$migrate_suffix"
+  validate_revision_suffix "$migrate_suffix"
+  expected_migrate_revision="$CONTAINER_APP-$migrate_suffix"
   validate_revision_name "$expected_migrate_revision"
+  assert_distinct_revisions "$repair_revision" "$expected_migrate_revision"
+
+  assert_revision_exists "$repair_revision"
+  verify_revision "$repair_revision" repair
 
   set_and_verify_multiple_mode
   assert_revision_suffix_available "$expected_migrate_revision"
+  assert_named_only_traffic
   recovery_revision="$(
     create_revision migrate "$migrate_suffix" "$expected_migrate_revision"
   )"
@@ -236,6 +314,8 @@ create_and_promote_recovery_migrate() {
     --name "$CONTAINER_APP" \
     --revision-weight "$recovery_revision=100" >/dev/null
 
+  assert_distinct_revisions "$repair_revision" "$recovery_revision"
+  verify_revision "$repair_revision" repair
   az containerapp revision deactivate \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP" \

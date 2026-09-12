@@ -43,8 +43,10 @@ az containerapp show \
 
 `ROLLOUT_ID` must be unique for the recovery attempt, begin with a lowercase
 letter, contain only lowercase letters, digits, and hyphens, end with a letter
-or digit, and contain at most 16 characters. The script derives distinct
-`repair-$ROLLOUT_ID` and `migrate-$ROLLOUT_ID` revision suffixes. Record
+or digit, contain no consecutive hyphens, and contain at most 16 characters.
+The script derives distinct `repair-$ROLLOUT_ID` and
+`migrate-$ROLLOUT_ID` revision suffixes and validates both suffixes plus the
+complete Container Apps revision-name length before any Azure call. Record
 `IMAGE_DIGEST`, `ROLLOUT_ID`, the Git commit, UTC time, and operator in the
 change ticket. That digest is the rollback floor: after the migration marker
 exists, never activate an older image that can write direct-ID rows.
@@ -257,11 +259,69 @@ in Container Apps, because it can create legacy rows behind the marker.
 ## Recovery after a late legacy write
 
 `repair` is deliberately a downtime procedure. Do not delete or edit the
-migration marker. First quiesce all writers by deactivating every active
-revision, verify a fresh active-revision query returns zero, and wait the full
-30-second application write timeout for in-flight requests to finish. The
-versioned rollout script performs that sequence and will not accept a shorter
-drain interval:
+migration marker. Recovery requires ingress traffic to contain at least one
+rule and every rule to name an exact `revisionName`. A default or residual
+`latestRevision: true` rule, or any rule without a revision name, could route a
+new repair revision automatically and is forbidden. The script checks this
+precondition before any deactivation and fails without changing traffic.
+
+If the precondition fails, stop and inspect all revisions. Select an exact
+currently serving revision only after confirming its health, image, and schema
+mode. Replace the placeholders below and perform this traffic preparation as a
+separate, deliberate operator action before invoking recovery; the rollout
+script will not perform it for you:
+
+```bash
+set -eu
+
+SAFE_CURRENT_REVISION='<exact-verified-current-revision-name>'
+
+az containerapp revision list \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$CONTAINER_APP" \
+  --all \
+  --query '[].{name:name,active:properties.active,health:properties.healthState,image:properties.template.containers[0].image,mode:properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0]}' \
+  --output table
+
+az containerapp revision show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$CONTAINER_APP" \
+  --revision "$SAFE_CURRENT_REVISION" \
+  --query '{active:properties.active,health:properties.healthState,image:properties.template.containers[0].image,mode:properties.template.containers[0].env[?name==`ARTICLE_STORAGE_SCHEMA_MODE`].value|[0]}' \
+  --output json
+
+az containerapp revision set-mode \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$CONTAINER_APP" \
+  --mode multiple
+
+ACTIVE_REVISIONS_MODE="$(
+  az containerapp show \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_APP" \
+    --query properties.configuration.activeRevisionsMode \
+    --output tsv
+)"
+test "$ACTIVE_REVISIONS_MODE" = Multiple
+
+az containerapp ingress traffic set \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$CONTAINER_APP" \
+  --revision-weight "$SAFE_CURRENT_REVISION=100"
+
+az containerapp show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$CONTAINER_APP" \
+  --query properties.configuration.ingress.traffic \
+  --output json
+```
+
+Confirm manually that the final JSON contains only named revision weights and
+no `latestRevision: true` rule. Then invoke recovery. The script rechecks the
+same property before quiescence, deactivates every active revision, verifies a
+fresh active-revision query returns zero, and waits the full 30-second
+application write timeout for in-flight requests to finish. It will not accept
+a shorter drain interval:
 
 ```bash
 set -eu
@@ -276,10 +336,12 @@ printf 'verified repair revision: %s\n' "$REPAIR_REVISION"
 each exact name. It then makes a new count query and aborts before both the
 drain and update unless that count is zero. Only after `sleep 30` does it set
 multiple-revision mode and freshly require the exact property value
-`Multiple`. It also rejects an already existing `repair-$ROLLOUT_ID` revision
-before update. The update uses that unique suffix and returns its own
+`Multiple`. It rejects an already existing `repair-$ROLLOUT_ID` revision by
+listing all revisions, including inactive ones. Immediately before update it
+again requires at least one named-only traffic rule and no implicit latest
+rule. The update uses the unique suffix and returns its own
 `properties.latestRevisionName`; the script requires the response to equal
-`$CONTAINER_APP--repair-$ROLLOUT_ID`, rather than making an app-wide latest
+`$CONTAINER_APP-repair-$ROLLOUT_ID`, rather than making an app-wide latest
 revision query. It then lists revisions for operator observation and requires
 that exact generated revision to have `active=true`, `healthState=Healthy`, the
 exact `IMAGE_DIGEST`, and `ARTICLE_STORAGE_SCHEMA_MODE=repair` before returning
@@ -311,17 +373,27 @@ RECOVERY_MIGRATE_REVISION="$(
 printf 'promoted recovery migrate revision: %s\n' "$RECOVERY_MIGRATE_REVISION"
 ```
 
-Before the migration update, the script freshly sets and verifies
-`activeRevisionsMode=Multiple` and rejects an already existing
-`migrate-$ROLLOUT_ID` revision. The update uses that unique suffix and captures
-its own `properties.latestRevisionName`; the response must equal
-`$CONTAINER_APP--migrate-$ROLLOUT_ID`. After listing revisions for observation,
-the script requires that exact revision to have `active=true`,
-`healthState=Healthy`, the exact `IMAGE_DIGEST`, and schema mode `migrate`.
-Immediately before promotion it again sets and freshly verifies
-`activeRevisionsMode=Multiple`; only then does it assign 100% traffic. The
-repair revision is deactivated only after the traffic command succeeds. No
-repair command assigns traffic implicitly or explicitly.
+Before the migration update, the supplied `REPAIR_REVISION` must belong
+exactly to `CONTAINER_APP`, have a
+valid suffix, differ from the expected migrate revision, and occur exactly once
+in an all-revisions lookup. That exact revision must still have `active=true`,
+`healthState=Healthy`, the exact `IMAGE_DIGEST`, and schema mode `repair`, or no
+migrate update occurs. The script then freshly sets and verifies
+`activeRevisionsMode=Multiple`, rejects an existing
+`migrate-$ROLLOUT_ID` revision across active and inactive revisions, and
+immediately rechecks named-only traffic before update. The update uses the
+unique suffix and captures its own `properties.latestRevisionName`; the
+response must equal `$CONTAINER_APP-migrate-$ROLLOUT_ID`.
+
+After listing revisions for observation, the script requires that exact
+migrate revision to have `active=true`, `healthState=Healthy`, the exact
+`IMAGE_DIGEST`, and schema mode `migrate`. Immediately before promotion it
+again sets and freshly verifies `activeRevisionsMode=Multiple`; only then does
+it assign 100% traffic. Before the final deactivation it reasserts that repair
+and migrate are distinct and reverifies every repair property. The repair
+revision is deactivated only after both the traffic command and this final
+verification succeed. No repair command assigns traffic implicitly or
+explicitly.
 
 Do not blindly retry either command with the same `ROLLOUT_ID`: an existing
 operation-specific suffix is a hard stop before update, while a stale,
