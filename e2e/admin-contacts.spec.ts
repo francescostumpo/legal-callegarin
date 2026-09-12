@@ -25,7 +25,7 @@ test("admin authentication, dashboard, and contact lifecycle", async ({
   await test.step("HTTP console errors require an exact observed response allowance", () => {
     const allowances = [
       { method: "GET", pathname: "/api/admin/dashboard", status: 503 as const },
-      { method: "GET", pathname: "/api/admin/contacts", status: 401 as const },
+      { method: "GET", pathname: "/api/admin/session", status: 401 as const },
     ]
     const chromium503 =
       "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
@@ -36,7 +36,7 @@ test("admin authentication, dashboard, and contact lifecycle", async ({
         allowances,
         [
           { method: "GET", target: "/api/admin/dashboard", status: 503 },
-          { method: "GET", target: "/api/admin/contacts", status: 401 },
+          { method: "GET", target: "/api/admin/session", status: 401 },
         ],
         [chromium503, chromium401],
       ),
@@ -49,7 +49,7 @@ test("admin authentication, dashboard, and contact lifecycle", async ({
       ],
       [
         allowances[1],
-        { method: "GET", target: "/api/admin/contacts", status: 401 },
+        { method: "GET", target: "/api/admin/session", status: 401 },
         "Failed to load resource: the server responded with a status of 401 ()",
       ],
     ] as const) {
@@ -92,7 +92,7 @@ test("admin authentication, dashboard, and contact lifecycle", async ({
   const audit = installAdminAudit(page, [
     { method: "POST", pathname: "/admin/login", status: 401 },
     { method: "GET", pathname: "/api/admin/dashboard", status: 503 },
-    { method: "GET", pathname: "/api/admin/contacts", status: 401 },
+    { method: "GET", pathname: "/api/admin/session", status: 401 },
   ])
   const mutationHeaders: Promise<{
     action: string
@@ -473,7 +473,7 @@ test("admin authentication, dashboard, and contact lifecycle", async ({
   await expect(scheduleButton).toBeFocused()
 
   await page.route(
-    `${adminOrigin}/api/admin/contacts`,
+    `${adminOrigin}/api/admin/session`,
     async (route) => {
       await route.fulfill({
         status: 401,
@@ -490,17 +490,17 @@ test("admin authentication, dashboard, and contact lifecycle", async ({
     },
     { times: 1 },
   )
-  const expiredContacts = waitForAdminResponse(
+  const expiredSession = waitForAdminResponse(
     page,
     "GET",
-    "/api/admin/contacts",
+    "/api/admin/session",
     401,
   )
   const loginNavigation = page.waitForURL(`${adminOrigin}/admin/login`, {
     waitUntil: "domcontentloaded",
   })
-  await page.getByRole("link", { name: "Tutti i contatti" }).click()
-  await Promise.all([expiredContacts, loginNavigation])
+  await page.reload({ waitUntil: "commit" })
+  await Promise.all([expiredSession, loginNavigation])
   await expect(
     page.getByRole("heading", { level: 1, name: "Accesso amministrazione" }),
   ).toBeVisible()
