@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -72,12 +73,14 @@ type handler struct {
 	limiter          *loginLimiter
 	template         *template.Template
 	loginStylesheet  string
+	loginFavicon     string
 }
 
 type loginView struct {
 	Token      string
 	Error      string
 	Stylesheet string
+	Favicon    string
 }
 
 func New(options Options) (http.Handler, error) {
@@ -110,10 +113,19 @@ func New(options Options) (http.Handler, error) {
 		return nil, fmt.Errorf("admin login template: %w", err)
 	}
 	loginStylesheet := ""
+	loginFavicon := ""
 	if options.Renderer != nil {
 		loginStylesheet, err = options.Renderer.PublicAssetURL("site.css")
 		if err != nil {
 			return nil, fmt.Errorf("admin login stylesheet: %w", err)
+		}
+		loginFavicon, err = options.Renderer.PublicAssetURL("favicon.svg")
+		if err != nil {
+			return nil, fmt.Errorf("admin favicon: %w", err)
+		}
+		index, err = injectAdminFavicon(index, loginFavicon)
+		if err != nil {
+			return nil, fmt.Errorf("admin index favicon: %w", err)
 		}
 	}
 	configuredUsernameKey := keyedValue(options.SessionKey, "callegarin/admin-login-username/v1", normalizeUsername(options.ConfiguredUsername))
@@ -133,6 +145,7 @@ func New(options Options) (http.Handler, error) {
 		limiter:          newLoginLimiter(options.LoginCapacity, 3*time.Minute, time.Hour, options.MaxBuckets, configuredUsernameKey),
 		template:         loginTemplate,
 		loginStylesheet:  loginStylesheet,
+		loginFavicon:     loginFavicon,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /admin/login", instance.loginGET)
@@ -277,7 +290,27 @@ func (handler *handler) renderLogin(response http.ResponseWriter, status int, me
 	setPrivateAdminHeaders(response)
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	response.WriteHeader(status)
-	_ = handler.template.Execute(response, loginView{Token: handler.newFormToken(), Error: message, Stylesheet: handler.loginStylesheet})
+	_ = handler.template.Execute(response, loginView{Token: handler.newFormToken(), Error: message, Stylesheet: handler.loginStylesheet, Favicon: handler.loginFavicon})
+}
+
+func injectAdminFavicon(index []byte, faviconURL string) ([]byte, error) {
+	headEnd := bytes.LastIndex(bytes.ToLower(index), []byte("</head>"))
+	if headEnd < 0 {
+		return nil, errors.New("admin index has no </head> insertion point")
+	}
+	linkTemplate, err := template.New("admin favicon").Parse(`<link rel="icon" type="image/svg+xml" href="{{.}}">`)
+	if err != nil {
+		return nil, err
+	}
+	var link bytes.Buffer
+	if err := linkTemplate.Execute(&link, faviconURL); err != nil {
+		return nil, err
+	}
+	result := make([]byte, 0, len(index)+link.Len())
+	result = append(result, index[:headEnd]...)
+	result = append(result, link.Bytes()...)
+	result = append(result, index[headEnd:]...)
+	return result, nil
 }
 
 func serveAdminIndex(response http.ResponseWriter, index []byte) {
@@ -411,7 +444,7 @@ func setPrivateAdminHeaders(response http.ResponseWriter) {
 
 const loginPage = `<!doctype html>
 <html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Accesso amministrazione</title>{{if .Stylesheet}}<link rel="stylesheet" href="{{.Stylesheet}}">{{end}}</head><body><main class="section shell reading-column"><h1>Accesso amministrazione</h1>
+<title>Accesso amministrazione</title>{{if .Stylesheet}}<link rel="stylesheet" href="{{.Stylesheet}}">{{end}}{{if .Favicon}}<link rel="icon" type="image/svg+xml" href="{{.Favicon}}">{{end}}</head><body><main class="section shell reading-column"><h1>Accesso amministrazione</h1>
 {{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
 <form method="post" action="/admin/login"><div class="contact-form">
 <input type="hidden" name="started" value="{{.Token}}">

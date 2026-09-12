@@ -86,6 +86,101 @@ func TestLoginGETUsesSharedAccessibleFormStyles(t *testing.T) {
 	}
 }
 
+func TestAdminDocumentsUseSharedFingerprintedFavicon(t *testing.T) {
+	handler, _, _, _ := newTestHandler(t)
+	renderer, err := publicweb.NewRenderer(webassets.Files, "https://studio.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantURL, err := renderer.PublicAssetURL("favicon.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^/assets/favicon-[0-9a-f]{12}\.svg$`).MatchString(wantURL) {
+		t.Fatalf("favicon URL = %q", wantURL)
+	}
+	wantDeclaration := `<link rel="icon" type="image/svg+xml" href="` + wantURL + `">`
+	iconDeclaration := regexp.MustCompile(`<link rel="icon" type="image/svg\+xml" href="[^"]+">`)
+	publicMux := http.NewServeMux()
+	if err := publicweb.RegisterRoutes(publicMux, renderer, webassets.Files); err != nil {
+		t.Fatal(err)
+	}
+	assetResponse := httptest.NewRecorder()
+	publicMux.ServeHTTP(assetResponse, httptest.NewRequest(http.MethodGet, "https://studio.example.test"+wantURL, nil))
+	if assetResponse.Code != http.StatusOK {
+		t.Fatalf("favicon asset response = %d %q", assetResponse.Code, assetResponse.Body.String())
+	}
+
+	for _, path := range []string{"/admin/login", "/admin", "/admin/articoli"} {
+		t.Run(path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test"+path, nil))
+			body := response.Body.String()
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d body = %q", response.Code, body)
+			}
+			declarations := iconDeclaration.FindAllString(body, -1)
+			if len(declarations) != 1 || declarations[0] != wantDeclaration {
+				t.Fatalf("favicon declarations = %#v body = %q", declarations, body)
+			}
+			if strings.Index(body, wantDeclaration) > strings.Index(strings.ToLower(body), "</head>") {
+				t.Fatalf("favicon declaration is outside head: %q", body)
+			}
+			if strings.Contains(body, "/favicon.ico") || strings.Contains(body, "data:image") || strings.Contains(body, "/admin/assets/favicon") {
+				t.Fatalf("favicon uses disallowed source: %q", body)
+			}
+			if path == "/admin/login" && (!strings.Contains(body, `<form method="post" action="/admin/login">`) || !strings.Contains(body, `name="started"`)) {
+				t.Fatalf("login form changed: %q", body)
+			}
+			assertPrivateAdminResponse(t, response)
+		})
+	}
+}
+
+func TestNewWithRendererRejectsAdminIndexWithoutHead(t *testing.T) {
+	renderer, err := publicweb.NewRenderer(webassets.Files, "https://studio.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = New(Options{
+		Credentials:        &verifierStub{},
+		ConfiguredUsername: "admin",
+		Sessions:           &sessionsStub{},
+		Renderer:           renderer,
+		Assets: fstest.MapFS{
+			"admin/dist/index.html": {Data: []byte("<!doctype html><title>Admin</title>")},
+		},
+		SessionKey:    []byte("0123456789abcdef0123456789abcdef"),
+		PublicBaseURL: "https://studio.example.test",
+	})
+	if err == nil || !strings.Contains(err.Error(), "admin index favicon") || !strings.Contains(err.Error(), "</head>") {
+		t.Fatalf("New() error = %v, want clear missing head error", err)
+	}
+}
+
+func TestNewWithoutRendererPreservesIndexWithoutFavicon(t *testing.T) {
+	index := "<!doctype html><title>Admin</title><div id=root></div>"
+	handler, err := New(Options{
+		Credentials:        &verifierStub{},
+		ConfiguredUsername: "admin",
+		Sessions:           &sessionsStub{},
+		Assets: fstest.MapFS{
+			"admin/dist/index.html": {Data: []byte(index)},
+		},
+		SessionKey:    []byte("0123456789abcdef0123456789abcdef"),
+		PublicBaseURL: "https://studio.example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://studio.example.test/admin", nil))
+	if response.Code != http.StatusOK || response.Body.String() != index || strings.Contains(response.Body.String(), `rel="icon"`) {
+		t.Fatalf("admin response = %d %q", response.Code, response.Body.String())
+	}
+	assertPrivateAdminResponse(t, response)
+}
+
 func TestLoginPOSTUniformFailureAndSecureSuccessCookie(t *testing.T) {
 	handler, verifier, sessions, _ := newTestHandler(t)
 	token := loginToken(t, handler)
@@ -336,7 +431,7 @@ func newTestHandler(t *testing.T) (http.Handler, *verifierStub, *sessionsStub, t
 	verifier := &verifierStub{}
 	sessions := &sessionsStub{}
 	assets := fstest.MapFS{
-		"admin/dist/index.html":           {Data: []byte("<!doctype html><title>Admin</title><div id=root></div>")},
+		"admin/dist/index.html":           {Data: []byte("<!doctype html><html><head><title>Admin</title></head><body><div id=root></div></body></html>")},
 		"admin/dist/assets/index-test.js": {Data: []byte("console.log('stub')")},
 	}
 	var assetFS fs.FS = assets
