@@ -54,7 +54,20 @@ var repositoryPath = startsWith(imageRepository, ghcrPrefix)
 var repositoryParts = split(repositoryPath, '/')
 var repositoryOwner = first(repositoryParts)
 var repositoryPackage = last(repositoryParts)
+var repositoryAlphaNumericCharacters = 'abcdefghijklmnopqrstuvwxyz0123456789'
 var allowedRepositoryCharacters = 'abcdefghijklmnopqrstuvwxyz0123456789._-'
+var malformedRepositorySeparatorPairs = [
+  '..'
+  '.-'
+  '._'
+  '-.'
+  '--'
+  '-_'
+  '_.'
+  '_-'
+  '__'
+]
+var repositoryPathMaxLength = 255
 var invalidOwnerCharacters = filter(
   map(range(0, length(repositoryOwner)), index => substring(repositoryOwner, index, 1)),
   character => !contains(allowedRepositoryCharacters, character)
@@ -63,12 +76,26 @@ var invalidPackageCharacters = filter(
   map(range(0, length(repositoryPackage)), index => substring(repositoryPackage, index, 1)),
   character => !contains(allowedRepositoryCharacters, character)
 )
+var repositoryOwnerBoundaryIsValid = !empty(repositoryOwner)
+  ? contains(repositoryAlphaNumericCharacters, substring(repositoryOwner, 0, 1)) && contains(repositoryAlphaNumericCharacters, substring(repositoryOwner, max(0, length(repositoryOwner) - 1), 1))
+  : false
+var repositoryPackageBoundaryIsValid = !empty(repositoryPackage)
+  ? contains(repositoryAlphaNumericCharacters, substring(repositoryPackage, 0, 1)) && contains(repositoryAlphaNumericCharacters, substring(repositoryPackage, max(0, length(repositoryPackage) - 1), 1))
+  : false
+var repositoryOwnerSeparatorsAreValid = empty(filter(
+  malformedRepositorySeparatorPairs,
+  separatorPair => contains(repositoryOwner, separatorPair)
+))
+var repositoryPackageSeparatorsAreValid = empty(filter(
+  malformedRepositorySeparatorPairs,
+  separatorPair => contains(repositoryPackage, separatorPair)
+))
 var allowedDigestCharacters = '0123456789abcdef'
 var invalidDigestCharacters = filter(
   map(range(0, length(imageDigest)), index => substring(imageDigest, index, 1)),
   character => !contains(allowedDigestCharacters, character)
 )
-var imageReferenceIsValid = length(imageParts) == 2 && startsWith(imageRepository, ghcrPrefix) && length(repositoryParts) == 2 && !empty(repositoryOwner) && !empty(repositoryPackage) && empty(invalidOwnerCharacters) && empty(invalidPackageCharacters) && length(imageDigest) == 64 && empty(invalidDigestCharacters) && imageReference == toLower(imageReference)
+var imageReferenceIsValid = length(imageParts) == 2 && startsWith(imageRepository, ghcrPrefix) && length(repositoryParts) == 2 && length(repositoryPath) <= repositoryPathMaxLength && repositoryOwnerBoundaryIsValid && repositoryPackageBoundaryIsValid && repositoryOwnerSeparatorsAreValid && repositoryPackageSeparatorsAreValid && empty(invalidOwnerCharacters) && empty(invalidPackageCharacters) && length(imageDigest) == 64 && empty(invalidDigestCharacters) && imageReference == toLower(imageReference)
 var validatedImageReference = imageReferenceIsValid
   ? imageReference
   : fail('imageReference must be an exact lowercase ghcr.io/<owner>/<package>@sha256:<64 lowercase hex> digest.')

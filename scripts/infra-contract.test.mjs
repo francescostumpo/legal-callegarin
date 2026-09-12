@@ -355,6 +355,86 @@ test("the Container App module has the exact private runtime contract", () => {
     template.variables.allowedRepositoryCharacters,
     "abcdefghijklmnopqrstuvwxyz0123456789._-",
   )
+  assert.equal(
+    template.variables.repositoryAlphaNumericCharacters,
+    "abcdefghijklmnopqrstuvwxyz0123456789",
+  )
+  assert.deepEqual(template.variables.malformedRepositorySeparatorPairs, [
+    "..",
+    ".-",
+    "._",
+    "-.",
+    "--",
+    "-_",
+    "_.",
+    "_-",
+    "__",
+  ])
+  assert.equal(template.variables.repositoryPathMaxLength, 255)
+  const repositoryComponentIsValid = (component) =>
+    component.length > 0 &&
+    template.variables.repositoryAlphaNumericCharacters.includes(
+      component[0],
+    ) &&
+    template.variables.repositoryAlphaNumericCharacters.includes(
+      component.at(-1),
+    ) &&
+    Array.from(component).every((character) =>
+      template.variables.allowedRepositoryCharacters.includes(character),
+    ) &&
+    !template.variables.malformedRepositorySeparatorPairs.some((pair) =>
+      component.includes(pair),
+    )
+  const repositoryPathIsValid = (owner, packageName) =>
+    repositoryComponentIsValid(owner) &&
+    repositoryComponentIsValid(packageName) &&
+    `${owner}/${packageName}`.length <=
+      template.variables.repositoryPathMaxLength
+
+  assert.equal(
+    repositoryPathIsValid("francescostumpo", "legal-callegarin"),
+    true,
+  )
+  for (const [owner, packageName] of [
+    ["-", "pkg"],
+    ["-owner", "pkg"],
+    ["owner-", "pkg"],
+    ["owner", ".pkg"],
+    ["owner", "pkg."],
+    ["owner", "_pkg"],
+    ["owner", "pkg_"],
+  ]) {
+    assert.equal(repositoryPathIsValid(owner, packageName), false)
+  }
+  for (const pair of template.variables.malformedRepositorySeparatorPairs) {
+    assert.equal(repositoryPathIsValid("owner", `pkg${pair}name`), false)
+  }
+  assert.equal(repositoryPathIsValid("a", "b".repeat(253)), true)
+  assert.equal(repositoryPathIsValid("a", "b".repeat(254)), false)
+  for (const component of ["Owner", "Package"]) {
+    assert.match(
+      template.variables[`repository${component}BoundaryIsValid`],
+      new RegExp(
+        `if\\(not\\(empty\\(variables\\('repository${component}'\\)\\)\\).*substring\\(variables\\('repository${component}'\\), 0, 1\\).*sub\\(length\\(variables\\('repository${component}'\\)\\), 1\\)`,
+      ),
+    )
+    assert.match(
+      template.variables[`repository${component}SeparatorsAreValid`],
+      new RegExp(
+        `filter\\(variables\\('malformedRepositorySeparatorPairs'\\).*contains\\(variables\\('repository${component}'\\)`,
+      ),
+    )
+    for (const invariant of ["BoundaryIsValid", "SeparatorsAreValid"]) {
+      assert.match(
+        template.variables.imageReferenceIsValid,
+        new RegExp(`variables\\('repository${component}${invariant}'\\)`),
+      )
+    }
+  }
+  assert.match(
+    template.variables.imageReferenceIsValid,
+    /lessOrEquals\(length\(variables\('repositoryPath'\)\), variables\('repositoryPathMaxLength'\)\)/,
+  )
   assert.match(template.variables.validatedPublicBaseUrl, /fail\(/)
   assert.equal(template.variables.httpsPrefix, "https://")
   assert.match(template.variables.publicBaseUrlIsValid, /publicAuthority/)
