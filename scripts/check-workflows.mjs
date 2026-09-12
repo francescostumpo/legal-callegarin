@@ -67,36 +67,138 @@ function unquote(value) {
   return trimmed
 }
 
+function escapedPattern(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function mappingValue(code, key, { sequenceItem = false } = {}) {
+  const escapedKey = escapedPattern(key)
+  const itemPrefix = sequenceItem ? "(?:-\\s*)?" : ""
+  const pattern = new RegExp(
+    `^\\s*${itemPrefix}(?:${escapedKey}|"${escapedKey}"|'${escapedKey}')\\s*:\\s*(.*?)\\s*$`,
+  )
+  const match = code.match(pattern)
+  return match ? match[1] : null
+}
+
 function usesValue(code) {
-  const match = code.match(
-    /^\s*(?:-\s*)?(?:uses|"uses"|'uses')\s*:\s*(.*?)\s*$/,
-  )
-  return match ? unquote(match[1]) : null
+  const value = mappingValue(code, "uses", { sequenceItem: true })
+  return value === null ? null : unquote(value)
 }
 
-function hasFlowStyleUses(code) {
-  return (
-    /^\s*-\s*\{/.test(code) &&
-    /(?:\{|,)\s*(?:uses|"uses"|'uses')\s*:/.test(code)
-  )
-}
+function flowKeyAt(code, start) {
+  let index = start
+  while (/\s/.test(code[index] ?? "")) index++
 
-function hasPullRequestTarget(record) {
-  if (
-    /^\s*(?:pull_request_target|"pull_request_target"|'pull_request_target')\s*:/i.test(
-      record.code,
-    )
-  ) {
-    return true
+  let key = ""
+  const quote = code[index]
+  if (quote === '"' || quote === "'") {
+    index++
+    while (index < code.length && code[index] !== quote) {
+      if (quote === '"' && code[index] === "\\" && index + 1 < code.length) {
+        index++
+      }
+      key += code[index]
+      index++
+    }
+    if (code[index] !== quote) return null
+    index++
+  } else {
+    const match = code.slice(index).match(/^([A-Za-z0-9_-]+)/)
+    if (!match) return null
+    key = match[1]
+    index += match[1].length
   }
 
-  const flow = record.code.match(/^\s*(?:on|"on"|'on')\s*:\s*\[(.*?)\]\s*$/i)
-  return (
-    flow !== null &&
-    /(?:^|,)\s*(?:pull_request_target|"pull_request_target"|'pull_request_target')\s*(?=,|$)/i.test(
-      flow[1],
-    )
-  )
+  while (/\s/.test(code[index] ?? "")) index++
+  return code[index] === ":" ? key : null
+}
+
+function hasFlowCollectionKey(code, expectedKey) {
+  let quote = ""
+  let escaped = false
+  let depth = 0
+
+  for (let index = 0; index < code.length; index++) {
+    const character = code[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (quote === '"' && character === "\\") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = ""
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      continue
+    }
+    if (character === "{" || character === "[") {
+      depth++
+      if (flowKeyAt(code, index + 1) === expectedKey) return true
+      continue
+    }
+    if (character === "}" || character === "]") {
+      depth = Math.max(0, depth - 1)
+      continue
+    }
+    if (character === "," && depth > 0) {
+      if (flowKeyAt(code, index + 1) === expectedKey) return true
+    }
+  }
+
+  return false
+}
+
+function eventValueHasPullRequestTarget(value) {
+  const target = "pull_request_target"
+  const trimmed = value.trim()
+  if (unquote(trimmed).toLowerCase() === target) return true
+  if (hasFlowCollectionKey(trimmed, target)) return true
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return false
+  return trimmed
+    .slice(1, -1)
+    .split(",")
+    .some((event) => unquote(event).toLowerCase() === target)
+}
+
+function pullRequestTargetLines(records) {
+  const lines = new Set()
+
+  for (let index = 0; index < records.length; index++) {
+    const record = records[index]
+    if (record.indent !== 0) continue
+    const onValue = mappingValue(record.code, "on")
+    if (onValue === null) continue
+    if (eventValueHasPullRequestTarget(onValue)) lines.add(record.line)
+    if (onValue) continue
+
+    for (
+      let childIndex = index + 1;
+      childIndex < records.length;
+      childIndex++
+    ) {
+      const child = records[childIndex]
+      if (child.trimmed && child.indent <= record.indent) break
+      const eventMapping = mappingValue(child.code, "pull_request_target", {
+        sequenceItem: true,
+      })
+      const sequence = child.code.match(/^\s*-\s*(.*?)\s*$/)
+      if (
+        eventMapping !== null ||
+        (sequence !== null && eventValueHasPullRequestTarget(sequence[1])) ||
+        hasFlowCollectionKey(child.code, "pull_request_target")
+      ) {
+        lines.add(child.line)
+      }
+    }
+  }
+
+  return lines
 }
 
 function recordsFor(contents) {
@@ -119,19 +221,10 @@ function recordsFor(contents) {
 function workflowPermissions(path, records) {
   for (let index = 0; index < records.length; index++) {
     const record = records[index]
-    if (/^\s*permissions\s*:\s*write-all\s*$/i.test(record.code)) {
-      addDiagnostic(
-        path,
-        record.line,
-        "workflow-permissions",
-        "permissions: write-all is forbidden; grant minimum job-scoped permissions",
-      )
-    }
     if (record.indent !== 0) continue
 
-    const match = record.code.match(/^permissions\s*:\s*(.*?)\s*$/)
-    if (!match) continue
-    const scalar = match[1]
+    const scalar = mappingValue(record.code, "permissions")
+    if (scalar === null) continue
     if (scalar) {
       if (/\bwrite(?:-all)?\b/i.test(scalar)) {
         addDiagnostic(
@@ -152,7 +245,7 @@ function workflowPermissions(path, records) {
       const child = records[childIndex]
       if (child.trimmed && child.indent <= record.indent) break
       const childPermission = child.trimmed.match(
-        /^[A-Za-z0-9_-]+\s*:\s*(.*?)\s*$/,
+        /^(?:[A-Za-z0-9_-]+|"[A-Za-z0-9_-]+"|'[A-Za-z0-9_-]+')\s*:\s*(.*?)\s*$/,
       )
       if (
         childPermission !== null &&
@@ -313,7 +406,7 @@ function productionJobs(path, records, azureLoginLines) {
 
   if (azureLoginLines.length > 0) {
     for (const record of records) {
-      if (/^\s*creds\s*:/i.test(record.code)) {
+      if (mappingValue(record.code, "creds") !== null) {
         addDiagnostic(
           path,
           record.line,
@@ -327,6 +420,7 @@ function productionJobs(path, records, azureLoginLines) {
 
 function scanWorkflow(path, contents) {
   const records = recordsFor(contents)
+  const forbiddenEventLines = pullRequestTargetLines(records)
   const azureLoginLines = []
   let runBlockIndent = null
 
@@ -373,7 +467,7 @@ function scanWorkflow(path, contents) {
     }
 
     if (!record.trimmed) continue
-    if (hasPullRequestTarget(record)) {
+    if (forbiddenEventLines.has(record.line)) {
       addDiagnostic(
         path,
         record.line,
@@ -390,9 +484,9 @@ function scanWorkflow(path, contents) {
       )
     }
 
-    const run = record.code.match(/^\s*(?:-\s*)?run\s*:\s*(.*?)\s*$/)
-    if (run) {
-      if (eventExpression.test(run[1])) {
+    const run = mappingValue(record.code, "run", { sequenceItem: true })
+    if (run !== null) {
+      if (eventExpression.test(run)) {
         addDiagnostic(
           path,
           record.line,
@@ -400,12 +494,12 @@ function scanWorkflow(path, contents) {
           "github.event.* must not be interpolated directly in run; use a validated env value",
         )
       }
-      if (/^[|>](?:[+-]|[1-9]|[+-][1-9]|[1-9][+-])?$/.test(run[1])) {
+      if (/^[|>](?:[+-]|[1-9]|[+-][1-9]|[1-9][+-])?$/.test(run)) {
         runBlockIndent = record.indent
       }
     }
 
-    if (hasFlowStyleUses(record.code)) {
+    if (hasFlowCollectionKey(record.code, "uses")) {
       addDiagnostic(
         path,
         record.line,

@@ -127,7 +127,7 @@ test("secure pinned workflows, local actions, comments, CRLF, and multiple files
       "    steps:",
       `      - uses: actions/setup-node@${pinnedAction} # v6.0.0`,
       `      - "uses": actions/checkout@${pinnedAction} # v4.2.2`,
-      "      - run: node --version",
+      "      - 'run': node --version",
       "",
     ].join("\n"),
   )
@@ -180,6 +180,36 @@ test("every forbidden workflow construct fails with file, line, and rule", async
       source: base.replace("on: [push]", 'on:\n  "pull_request_target":'),
     },
     {
+      name: "pull-request-target-scalar",
+      rule: "pull-request-target",
+      marker: "on: pull_request_target",
+      source: base.replace("on: [push]", "on: pull_request_target"),
+    },
+    {
+      name: "pull-request-target-quoted-scalar",
+      rule: "pull-request-target",
+      marker: 'on: "pull_request_target"',
+      source: base.replace("on: [push]", 'on: "pull_request_target"'),
+    },
+    {
+      name: "pull-request-target-block-sequence",
+      rule: "pull-request-target",
+      marker: "- pull_request_target",
+      source: base.replace(
+        "on: [push]",
+        "on:\n  - push\n  - pull_request_target",
+      ),
+    },
+    {
+      name: "pull-request-target-flow-mapping",
+      rule: "pull-request-target",
+      marker: "pull_request_target: {}",
+      source: base.replace(
+        "on: [push]",
+        "on: { push: {}, pull_request_target: {} }",
+      ),
+    },
+    {
       name: "unpinned-action",
       rule: "pinned-uses",
       marker: "actions/checkout@v4",
@@ -204,6 +234,15 @@ test("every forbidden workflow construct fails with file, line, and rule", async
       source: base.replace(
         "      - run: node --version",
         "      - { uses: actions/checkout@v4 }",
+      ),
+    },
+    {
+      name: "inline-flow-sequence-uses-fails-closed",
+      rule: "unsupported-uses-syntax",
+      marker: "{ uses: actions/checkout@v4 }",
+      source: base.replace(
+        "    steps:\n      - run: node --version",
+        "    steps: [{ uses: actions/checkout@v4 }]",
       ),
     },
     {
@@ -252,12 +291,48 @@ test("every forbidden workflow construct fails with file, line, and rule", async
       source: base.replace("contents: read", "packages: 'write'"),
     },
     {
+      name: "workflow-write-double-quoted-keys",
+      rule: "workflow-permissions",
+      marker: '"packages": "write"',
+      source: base.replace(
+        "permissions:\n  contents: read",
+        '"permissions":\n  "packages": "write"',
+      ),
+    },
+    {
+      name: "workflow-write-single-quoted-keys",
+      rule: "workflow-permissions",
+      marker: "'packages': 'write'",
+      source: base.replace(
+        "permissions:\n  contents: read",
+        "'permissions':\n  'packages': 'write'",
+      ),
+    },
+    {
       name: "azure-creds",
       rule: "azure-credentials",
       marker: "creds: ${{ secrets.AZURE_CREDENTIALS }}",
       source: secureDeployment().replace(
         `      - uses: azure/login@${pinnedAction} # v2.3.0`,
         `      - uses: azure/login@${pinnedAction} # v2.3.0\n        with:\n          creds: \${{ secrets.AZURE_CREDENTIALS }}`,
+      ),
+    },
+    {
+      name: "azure-creds-double-quoted-key",
+      rule: "azure-credentials",
+      marker: '"creds": ${{ secrets.AZURE_CREDENTIALS }}',
+      source: secureDeployment().replace(
+        `      - uses: azure/login@${pinnedAction} # v2.3.0`,
+        `      - uses: azure/login@${pinnedAction} # v2.3.0\n        with:\n          "creds": \${{ secrets.AZURE_CREDENTIALS }}`,
+      ),
+    },
+    {
+      name: "azure-creds-single-quoted-key",
+      rule: "azure-credentials",
+      marker: "'creds': ${{ secrets.AZURE_CREDENTIALS }}",
+      source: secureDeployment().replace(
+        `      - uses: azure/login@${pinnedAction} # v2.3.0`,
+        `      - uses: azure/login@${pinnedAction} # v2.3.0\n        with:\n          'creds': \${{ secrets.AZURE_CREDENTIALS }}`,
       ),
     },
     {
@@ -288,6 +363,24 @@ test("every forbidden workflow construct fails with file, line, and rule", async
       ),
     },
     {
+      name: "event-expression-inline-double-quoted-run-key",
+      rule: "event-in-run",
+      marker: "github.event.issue.title",
+      source: base.replace(
+        "      - run: node --version",
+        `      - "run": printf '%s' '\${{ github.event.issue.title }}'`,
+      ),
+    },
+    {
+      name: "event-expression-inline-single-quoted-run-key",
+      rule: "event-in-run",
+      marker: "github.event.issue.title",
+      source: base.replace(
+        "      - run: node --version",
+        `      - 'run': printf '%s' '\${{ github.event.issue.title }}'`,
+      ),
+    },
+    {
       name: "event-expression-block-run",
       rule: "event-in-run",
       marker: "github.event.pull_request.body",
@@ -305,6 +398,24 @@ test("every forbidden workflow construct fails with file, line, and rule", async
         `      - run: ${indicator}\n          node --version\n          printf '%s' '\${{ github.event.pull_request.body }}'`,
       ),
     })),
+    {
+      name: "event-expression-block-double-quoted-run-key",
+      rule: "event-in-run",
+      marker: "github.event.pull_request.body",
+      source: base.replace(
+        "      - run: node --version",
+        `      - "run": >+\n          node --version\n          printf '%s' '\${{ github.event.pull_request.body }}'`,
+      ),
+    },
+    {
+      name: "event-expression-block-single-quoted-run-key",
+      rule: "event-in-run",
+      marker: "github.event.pull_request.body",
+      source: base.replace(
+        "      - run: node --version",
+        `      - 'run': |-\n          node --version\n          printf '%s' '\${{ github.event.pull_request.body }}'`,
+      ),
+    },
     {
       name: "production-environment",
       rule: "production-environment",
