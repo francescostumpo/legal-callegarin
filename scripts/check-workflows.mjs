@@ -68,8 +68,35 @@ function unquote(value) {
 }
 
 function usesValue(code) {
-  const match = code.match(/^\s*(?:-\s*)?uses\s*:\s*(.*?)\s*$/)
+  const match = code.match(
+    /^\s*(?:-\s*)?(?:uses|"uses"|'uses')\s*:\s*(.*?)\s*$/,
+  )
   return match ? unquote(match[1]) : null
+}
+
+function hasFlowStyleUses(code) {
+  return (
+    /^\s*-\s*\{/.test(code) &&
+    /(?:\{|,)\s*(?:uses|"uses"|'uses')\s*:/.test(code)
+  )
+}
+
+function hasPullRequestTarget(record) {
+  if (
+    /^\s*(?:pull_request_target|"pull_request_target"|'pull_request_target')\s*:/i.test(
+      record.code,
+    )
+  ) {
+    return true
+  }
+
+  const flow = record.code.match(/^\s*(?:on|"on"|'on')\s*:\s*\[(.*?)\]\s*$/i)
+  return (
+    flow !== null &&
+    /(?:^|,)\s*(?:pull_request_target|"pull_request_target"|'pull_request_target')\s*(?=,|$)/i.test(
+      flow[1],
+    )
+  )
 }
 
 function recordsFor(contents) {
@@ -124,7 +151,13 @@ function workflowPermissions(path, records) {
     ) {
       const child = records[childIndex]
       if (child.trimmed && child.indent <= record.indent) break
-      if (/^[A-Za-z0-9_-]+\s*:\s*write\s*$/i.test(child.trimmed)) {
+      const childPermission = child.trimmed.match(
+        /^[A-Za-z0-9_-]+\s*:\s*(.*?)\s*$/,
+      )
+      if (
+        childPermission !== null &&
+        unquote(childPermission[1]).toLowerCase() === "write"
+      ) {
         addDiagnostic(
           path,
           child.line,
@@ -340,7 +373,7 @@ function scanWorkflow(path, contents) {
     }
 
     if (!record.trimmed) continue
-    if (/^pull_request_target\s*:/i.test(record.trimmed)) {
+    if (hasPullRequestTarget(record)) {
       addDiagnostic(
         path,
         record.line,
@@ -367,9 +400,18 @@ function scanWorkflow(path, contents) {
           "github.event.* must not be interpolated directly in run; use a validated env value",
         )
       }
-      if (run[1] === "|" || run[1] === ">") {
+      if (/^[|>](?:[+-]|[1-9]|[+-][1-9]|[1-9][+-])?$/.test(run[1])) {
         runBlockIndent = record.indent
       }
+    }
+
+    if (hasFlowStyleUses(record.code)) {
+      addDiagnostic(
+        path,
+        record.line,
+        "unsupported-uses-syntax",
+        "flow-style uses cannot be checked safely; use a block-style uses key pinned to an immutable SHA or digest",
+      )
     }
 
     const value = usesValue(record.code)

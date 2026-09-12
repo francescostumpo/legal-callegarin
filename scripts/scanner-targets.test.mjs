@@ -136,6 +136,7 @@ test("Make exposes exact pinned, hardened scanner contracts and ignores artifact
   )
   assert.match(makefile, /docker-archive:\/scan\/image\.tar/)
   assert.match(makefile, /type=bind,src=.*dst=\/scan,readonly/)
+  assert.match(makefile, /--tmpfs \/tmp:rw,nosuid,nodev,noexec,size=64m/)
   assert.match(makefile, /--output cyclonedx-json/)
   assert.match(makefile, /--source-name/)
   assert.match(makefile, /--scanners vuln/)
@@ -196,6 +197,10 @@ test("sbom exports once, validates CycloneDX identity, writes atomically, and cl
   assert.ok(syft.includes("ALL"))
   assert.ok(syft.includes("--security-opt"))
   assert.ok(syft.includes("no-new-privileges"))
+  assert.deepEqual(
+    syft.slice(syft.indexOf("--tmpfs"), syft.indexOf("--tmpfs") + 2),
+    ["--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m"],
+  )
   assert.ok(syft.includes(syftImage))
   assert.ok(syft.includes("docker-archive:/scan/image.tar"))
   assert.ok(syft.includes("--source-name"))

@@ -68,6 +68,7 @@ sbom:
 	chmod 0444 "$$archive"; \
 	"$$CONTAINER_ENGINE" run --rm --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
 		--mount "type=bind,src=$$work_dir,dst=/scan,readonly" \
 		"$$SYFT_IMAGE" "docker-archive:/scan/image.tar" \
 		--source-name "$$IMAGE" --output cyclonedx-json >"$$output_tmp"; \
