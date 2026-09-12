@@ -96,7 +96,7 @@ test.describe("public audit negative regressions", () => {
     }
     expect(failure).toContain("unexpected HTTP POST /contatti?unexpected=1 422")
     expect(failure).toContain(
-      "console error: Failed to load resource: the server responded with a status of 422 ()",
+      "expected HTTP POST /contatti 422 1 time(s), observed 0",
     )
   })
 })
