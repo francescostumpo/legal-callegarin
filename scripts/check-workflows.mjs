@@ -154,6 +154,46 @@ function hasFlowCollectionKey(code, expectedKey) {
   return false
 }
 
+function activeFlowCollectionDelimiter(code) {
+  let quote = ""
+  let escaped = false
+
+  for (let index = 0; index < code.length; index++) {
+    const character = code[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (quote === '"' && character === "\\") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (quote === "'" && character === "'" && code[index + 1] === "'") {
+        index++
+      } else if (character === quote) {
+        quote = ""
+      }
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      continue
+    }
+    if (code.startsWith("${{", index)) {
+      const expressionEnd = code.indexOf("}}", index + 3)
+      if (expressionEnd < 0) return null
+      index = expressionEnd + 1
+      continue
+    }
+    if (character === "[" || character === "{") {
+      return character
+    }
+  }
+
+  return null
+}
+
 function eventValueHasPullRequestTarget(value) {
   const target = "pull_request_target"
   const trimmed = value.trim()
@@ -265,7 +305,7 @@ function workflowPermissions(path, records) {
 function jobsFrom(records) {
   const jobs = []
   const jobsIndex = records.findIndex(
-    (record) => record.indent === 0 && record.trimmed === "jobs:",
+    (record) => record.indent === 0 && mappingValue(record.code, "jobs") === "",
   )
   if (jobsIndex < 0) return jobs
 
@@ -276,9 +316,11 @@ function jobsFrom(records) {
     if (record.indent === 0) break
     if (jobIndent === null) jobIndent = record.indent
     if (record.indent !== jobIndent) continue
-    const match = record.trimmed.match(/^([A-Za-z0-9_-]+)\s*:\s*$/)
+    const match = record.trimmed.match(
+      /^("[A-Za-z0-9_-]+"|'[A-Za-z0-9_-]+'|[A-Za-z0-9_-]+)\s*:\s*$/,
+    )
     if (!match) continue
-    jobs.push({ id: match[1], start: index, end: records.length })
+    jobs.push({ id: unquote(match[1]), start: index, end: records.length })
   }
 
   for (let index = 0; index < jobs.length; index++) {
@@ -467,6 +509,15 @@ function scanWorkflow(path, contents) {
     }
 
     if (!record.trimmed) continue
+    const flowDelimiter = activeFlowCollectionDelimiter(record.code)
+    if (flowDelimiter !== null) {
+      addDiagnostic(
+        path,
+        record.line,
+        "unsupported-flow-syntax",
+        `flow-style YAML collections (${flowDelimiter}) cannot be checked safely; use block-style mappings and sequences`,
+      )
+    }
     if (forbiddenEventLines.has(record.line)) {
       addDiagnostic(
         path,

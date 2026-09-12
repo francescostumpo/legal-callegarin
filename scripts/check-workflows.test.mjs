@@ -120,14 +120,17 @@ test("secure pinned workflows, local actions, comments, CRLF, and multiple files
     [
       "# pull_request_target:",
       "# uses: actions/checkout@latest",
-      "on: [push]",
-      "permissions: {}",
+      "on:",
+      "  push:",
+      "permissions:",
+      "  contents: read",
       "jobs:",
       "  test:",
       "    steps:",
       `      - uses: actions/setup-node@${pinnedAction} # v6.0.0`,
       `      - "uses": actions/checkout@${pinnedAction} # v4.2.2`,
       "      - 'run': node --version",
+      "      - run: printf '%s' '[literal] {literal}'",
       "",
     ].join("\n"),
   )
@@ -143,9 +146,10 @@ test("secure pinned workflows, local actions, comments, CRLF, and multiple files
 
 test("every forbidden workflow construct fails with file, line, and rule", async (t) => {
   const root = await temporaryDirectory(t)
+  const pushTrigger = "on:\n  push:"
   const base = [
     "name: fixture",
-    "on: [push]",
+    pushTrigger,
     "permissions:",
     "  contents: read",
     "jobs:",
@@ -159,44 +163,44 @@ test("every forbidden workflow construct fails with file, line, and rule", async
       name: "pull-request-target",
       rule: "pull-request-target",
       marker: "pull_request_target:",
-      source: base.replace("on: [push]", "on:\n  pull_request_target:"),
+      source: base.replace(pushTrigger, "on:\n  pull_request_target:"),
     },
     {
       name: "pull-request-target-flow",
       rule: "pull-request-target",
       marker: "on: [pull_request_target]",
-      source: base.replace("on: [push]", "on: [pull_request_target]"),
+      source: base.replace(pushTrigger, "on: [pull_request_target]"),
     },
     {
       name: "pull-request-target-quoted-flow",
       rule: "pull-request-target",
       marker: 'on: ["pull_request_target"]',
-      source: base.replace("on: [push]", 'on: ["pull_request_target"]'),
+      source: base.replace(pushTrigger, 'on: ["pull_request_target"]'),
     },
     {
       name: "pull-request-target-quoted-key",
       rule: "pull-request-target",
       marker: '"pull_request_target":',
-      source: base.replace("on: [push]", 'on:\n  "pull_request_target":'),
+      source: base.replace(pushTrigger, 'on:\n  "pull_request_target":'),
     },
     {
       name: "pull-request-target-scalar",
       rule: "pull-request-target",
       marker: "on: pull_request_target",
-      source: base.replace("on: [push]", "on: pull_request_target"),
+      source: base.replace(pushTrigger, "on: pull_request_target"),
     },
     {
       name: "pull-request-target-quoted-scalar",
       rule: "pull-request-target",
       marker: 'on: "pull_request_target"',
-      source: base.replace("on: [push]", 'on: "pull_request_target"'),
+      source: base.replace(pushTrigger, 'on: "pull_request_target"'),
     },
     {
       name: "pull-request-target-block-sequence",
       rule: "pull-request-target",
       marker: "- pull_request_target",
       source: base.replace(
-        "on: [push]",
+        pushTrigger,
         "on:\n  - push\n  - pull_request_target",
       ),
     },
@@ -205,8 +209,35 @@ test("every forbidden workflow construct fails with file, line, and rule", async
       rule: "pull-request-target",
       marker: "pull_request_target: {}",
       source: base.replace(
-        "on: [push]",
+        pushTrigger,
         "on: { push: {}, pull_request_target: {} }",
+      ),
+    },
+    {
+      name: "pull-request-target-multiline-flow-sequence",
+      rule: "unsupported-flow-syntax",
+      marker: "on: [",
+      source: base.replace(
+        pushTrigger,
+        "on: [\n  push,\n  pull_request_target\n]",
+      ),
+    },
+    {
+      name: "pull-request-target-multiline-flow-mapping",
+      rule: "unsupported-flow-syntax",
+      marker: "on: {",
+      source: base.replace(
+        pushTrigger,
+        "on: {\n  push: {},\n  pull_request_target: {}\n}",
+      ),
+    },
+    {
+      name: "anchored-multiline-flow-event-fails-closed",
+      rule: "unsupported-flow-syntax",
+      marker: "on: &events [",
+      source: base.replace(
+        pushTrigger,
+        "on: &events [\n  push,\n  pull_request_target\n]",
       ),
     },
     {
@@ -243,6 +274,24 @@ test("every forbidden workflow construct fails with file, line, and rule", async
       source: base.replace(
         "    steps:\n      - run: node --version",
         "    steps: [{ uses: actions/checkout@v4 }]",
+      ),
+    },
+    {
+      name: "flow-style-run-fails-closed",
+      rule: "unsupported-flow-syntax",
+      marker: "{ run:",
+      source: base.replace(
+        "      - run: node --version",
+        `      - { run: "printf '%s' '\${{ github.event.issue.title }}'" }`,
+      ),
+    },
+    {
+      name: "inline-flow-sequence-run-fails-closed",
+      rule: "unsupported-flow-syntax",
+      marker: "[{ run:",
+      source: base.replace(
+        "    steps:\n      - run: node --version",
+        `    steps: [{ run: "printf '%s' '\${{ github.event.issue.title }}'" }]`,
       ),
     },
     {
@@ -333,6 +382,15 @@ test("every forbidden workflow construct fails with file, line, and rule", async
       source: secureDeployment().replace(
         `      - uses: azure/login@${pinnedAction} # v2.3.0`,
         `      - uses: azure/login@${pinnedAction} # v2.3.0\n        with:\n          'creds': \${{ secrets.AZURE_CREDENTIALS }}`,
+      ),
+    },
+    {
+      name: "azure-creds-flow-style-fails-closed",
+      rule: "unsupported-flow-syntax",
+      marker: "with: { creds:",
+      source: secureDeployment().replace(
+        `      - uses: azure/login@${pinnedAction} # v2.3.0`,
+        `      - uses: azure/login@${pinnedAction} # v2.3.0\n        with: { creds: \${{ secrets.AZURE_CREDENTIALS }} }`,
       ),
     },
     {
@@ -448,6 +506,25 @@ test("every forbidden workflow construct fails with file, line, and rule", async
         "group: production-deploy",
         "group: ${{ github.ref }}",
       ),
+    },
+    {
+      name: "quoted-jobs-key-preserves-production-checks",
+      rule: "production-environment",
+      marker: "deploy-production:",
+      source: secureDeployment()
+        .replace("jobs:", '"jobs":')
+        .replace("    environment: production\n", ""),
+    },
+    {
+      name: "quoted-production-job-id-preserves-production-checks",
+      rule: "production-concurrency",
+      marker: "'deploy-production':",
+      source: secureDeployment()
+        .replace("  deploy-production:", "  'deploy-production':")
+        .replace(
+          "concurrency:\n  group: production-deploy\n  cancel-in-progress: false\n",
+          "",
+        ),
     },
   ]
 
