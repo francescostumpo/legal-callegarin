@@ -305,7 +305,11 @@ process.exit(result.status)
   }
 
   async function artifacts() {
-    const paths = [log, state, ...["az", "curl", "sleep", "node"].map((name) => join(bin, name))]
+    const paths = [
+      log,
+      state,
+      ...["az", "curl", "sleep", "node"].map((name) => join(bin, name)),
+    ]
     const contents = await Promise.all(
       paths.map((path) => readFile(path, "utf8").catch(() => "")),
     )
@@ -330,7 +334,10 @@ test("dry-run prints exact immutable intent and performs no external calls", asy
     result.stdout,
     `repository=francescostumpo/legal-callegarin\ngithub_owner_id=55147498\ngithub_repository_id=1365534753\napplication_display_name=legal-callegarin-github-production\nfederated_credential_name=github-production\nissuer=https://token.actions.githubusercontent.com\nsubject=${subject}\naudience=api://AzureADTokenExchange\nrole_definition_id=${role}\nAZURE_TENANT_ID=${tenant}\nAZURE_SUBSCRIPTION_ID=${subscription}\nAZURE_RESOURCE_GROUP=legal-callegarin-prod\nresource_group_scope=/subscriptions/${subscription}/resourceGroups/legal-callegarin-prod\nchanges_applied=false\n`,
   )
-  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /GITHUB_API_TOKEN|Authorization|Bearer/i)
+  assert.doesNotMatch(
+    `${result.stdout}${result.stderr}`,
+    /GITHUB_API_TOKEN|Authorization|Bearer/i,
+  )
   assert.deepEqual(await h.calls(), [])
 })
 
@@ -355,7 +362,11 @@ test("live token validation fails before every child tool without disclosure", a
     assert.equal(result.stderr, "error: invalid GitHub API token\n", name)
     assert.deepEqual(await h.calls(), [], name)
     if ("token" in options && options.token) {
-      assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(options.token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), name)
+      assert.doesNotMatch(
+        `${result.stdout}${result.stderr}`,
+        new RegExp(options.token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+        name,
+      )
     }
   }
 })
@@ -527,8 +538,16 @@ test("create path performs verified ordered mutations and secure FIC handoff", a
 })
 
 for (const [name, scenario, expectedCurlCalls] of [
-  ["first GitHub request 401", { githubFailureAt: 1, githubFailureStatus: 401 }, 1],
-  ["second GitHub request 403", { githubFailureAt: 2, githubFailureStatus: 403 }, 2],
+  [
+    "first GitHub request 401",
+    { githubFailureAt: 1, githubFailureStatus: 401 },
+    1,
+  ],
+  [
+    "second GitHub request 403",
+    { githubFailureAt: 2, githubFailureStatus: 403 },
+    2,
+  ],
   ["first GitHub transport failure", { githubFailureAt: 1 }, 1],
 ]) {
   test(`${name} stops before Azure and Node`, async (t) => {
@@ -536,7 +555,10 @@ for (const [name, scenario, expectedCurlCalls] of [
     const result = h.run(baseArgs)
     assert.notEqual(result.status, 0)
     const calls = await h.calls()
-    assert.equal(calls.filter((call) => call[0] === "curl").length, expectedCurlCalls)
+    assert.equal(
+      calls.filter((call) => call[0] === "curl").length,
+      expectedCurlCalls,
+    )
     assert.equal(calls.filter((call) => call[0] === "az").length, 0)
     assert.equal(calls.filter((call) => call[0] === "node").length, 0)
     assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(h.token))
@@ -572,7 +594,10 @@ for (const [name, options] of [
     assert.equal(result.status, 0, result.stderr)
     const calls = await h.calls()
     for (const tool of ["curl", "node", "az"]) {
-      assert.ok(calls.some((call) => call[0] === tool), tool)
+      assert.ok(
+        calls.some((call) => call[0] === tool),
+        tool,
+      )
     }
     assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(h.token))
     assert.doesNotMatch(await h.artifacts(), new RegExp(h.token))

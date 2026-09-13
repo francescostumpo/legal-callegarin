@@ -42,7 +42,9 @@ const expectedVariables = [
 ]
 
 function uniqueMatches(value, pattern) {
-  return [...new Set([...value.matchAll(pattern)].map((match) => match[1]))].sort()
+  return [
+    ...new Set([...value.matchAll(pattern)].map((match) => match[1])),
+  ].sort()
 }
 
 function shellBlocks(value) {
@@ -98,7 +100,10 @@ test("production environment guidance matches workflow variables and immutable O
     operations,
     /GITHUB_API_TOKEN[^.]*non è un GitHub environment secret[\s\S]{0,160}GITHUB_TOKEN[\s\S]{0,160}PAT classic runtime[\s\S]{0,160}Azure client secret/i,
   )
-  assert.match(operations, /set \+x[\s\S]*read -r -s -p[\s\S]*export GITHUB_API_TOKEN/)
+  assert.match(
+    operations,
+    /set \+x[\s\S]*read -r -s -p[\s\S]*export GITHUB_API_TOKEN/,
+  )
   assert.match(operations, /trap 'unset GITHUB_API_TOKEN' EXIT HUP INT TERM/)
   assert.match(operations, /\)\s*\nunset GITHUB_API_TOKEN/)
   assert.match(oidcBootstrap, /set \+x[\s\S]*set \+a/)
@@ -142,10 +147,7 @@ test("every full Bicep deployment requires named traffic normalization", () => {
     operations,
     /rileggere[^.]*traffico[^.]*unica[^.]*revisione[^.]*100/is,
   )
-  assert.match(
-    operations,
-    /prima[^.]*abilitare[^.]*deploy[^.]*retention/is,
-  )
+  assert.match(operations, /prima[^.]*abilitare[^.]*deploy[^.]*retention/is)
 })
 
 test("runtime pull, Actions package access, and retention are separated", () => {
@@ -184,9 +186,18 @@ test("password recovery is Azure-only, revisioned, and matches session cleanup",
     assert.match(passwordRecovery, new RegExp(`\\b${name}\\b`))
   }
   assert.match(passwordRecovery, /ADMIN_USERNAME[^.]*non\s+segret[oa]/is)
-  assert.match(passwordRecovery, /ADMIN_PASSWORD_HASH[^.]*Argon2id[^.]*PHC[^.]*segret/is)
-  assert.match(passwordRecovery, /SESSION_KEY_BASE64[^.]*32[^.]*byte[^.]*segret/is)
-  assert.match(passwordRecovery, /go run \.\/cmd\/adminhash`?[^\n]*senza argomenti/i)
+  assert.match(
+    passwordRecovery,
+    /ADMIN_PASSWORD_HASH[^.]*Argon2id[^.]*PHC[^.]*segret/is,
+  )
+  assert.match(
+    passwordRecovery,
+    /SESSION_KEY_BASE64[^.]*32[^.]*byte[^.]*segret/is,
+  )
+  assert.match(
+    passwordRecovery,
+    /go run \.\/cmd\/adminhash`?[^\n]*senza argomenti/i,
+  )
   assert.match(passwordRecovery, /`admin-password-hash`/)
   assert.match(passwordRecovery, /Portal[e]? Azure[^.]*input[^.]*protett/is)
   assert.match(passwordRecovery, /modifica[^.]*secret[^.]*non[^.]*sufficient/is)
@@ -217,7 +228,10 @@ test("password recovery is Azure-only, revisioned, and matches session cleanup",
   assert.match(passwordRecovery, /sessione precedente[^.]*rifiutat/is)
   assert.match(passwordRecovery, /nuov[oa] login[^.]*logout/is)
   assert.match(passwordRecovery, /compromissione[^.]*disattiv/is)
-  assert.match(passwordRecovery, /session-key[^.]*invalida[^.]*tutte le sessioni/is)
+  assert.match(
+    passwordRecovery,
+    /session-key[^.]*invalida[^.]*tutte le sessioni/is,
+  )
 
   const createBody = sessionService.match(
     /func \(service \*SessionService\) Create[\s\S]*?\n}/,
@@ -228,10 +242,7 @@ test("password recovery is Azure-only, revisioned, and matches session cleanup",
       createBody.indexOf("io.ReadFull"),
     "expired-session cleanup must precede randomness",
   )
-  assert.match(
-    passwordRecovery,
-    /login\s+riuscit[oa][^.]*elimina[^.]*scadut/is,
-  )
+  assert.match(passwordRecovery, /login\s+riuscit[oa][^.]*elimina[^.]*scadut/is)
   assert.doesNotMatch(passwordRecovery, /job[^.]*pulizia sessioni/is)
   assert.doesNotMatch(passwordRecovery, /CI[^.]*secret[^.]*workflow/is)
 })
@@ -281,7 +292,7 @@ test("deploy, rollback, compatibility boundary, and external gates stay explicit
   for (const command of [
     "az containerapp update",
     "az containerapp ingress traffic set",
-    "sh \"$ROLLOUT_SCRIPT\" assert-no-legacy",
+    'sh "$ROLLOUT_SCRIPT" assert-no-legacy',
   ]) {
     assert.match(articleRollout, new RegExp(command.replaceAll("$", "\\$")))
   }

@@ -13,8 +13,7 @@ const workflowPath = join(
 )
 const checkoutAction =
   "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-const azureLoginAction =
-  "azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43"
+const azureLoginAction = "azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43"
 const expected = `name: Retain private GHCR images
 
 on:
@@ -88,9 +87,7 @@ async function optionalText(path) {
 function mappingKeys(source, indent) {
   const prefix = " ".repeat(indent)
   return source.split("\n").flatMap((line) => {
-    const match = line.match(
-      new RegExp(`^${prefix}([A-Za-z0-9_-]+):(?:\\s|$)`),
-    )
+    const match = line.match(new RegExp(`^${prefix}([A-Za-z0-9_-]+):(?:\\s|$)`))
     return match ? [match[1]] : []
   })
 }
@@ -204,44 +201,33 @@ function validate(source) {
 
 const workflow = await optionalText(workflowPath)
 
-test(
-  "retention workflow has the exact bounded protected structure",
-  () => validate(workflow),
-)
+test("retention workflow has the exact bounded protected structure", () =>
+  validate(workflow))
 
-test(
-  "comments, duplicate or extra mappings, mutable actions, and command changes cannot satisfy the contract",
-  () => {
-    const mutations = [
-      expected.replace(
-        "  workflow_dispatch:",
-        "  push:\n  workflow_dispatch:",
-      ),
-      expected.replace(
-        "  contents: read\n\njobs:",
-        "  contents: read\n  actions: write\n\njobs:",
-      ),
-      expected.replace(
-        "      packages: write",
-        "      packages: write\n      packages: write",
-      ),
-      expected.replace(checkoutAction, "actions/checkout@v7"),
-      expected.replace(
-        "          set -euo pipefail",
-        "          # set -euo pipefail",
-      ),
-      expected.replace("            --apply", "            --dry-run"),
-      expected.replace(
-        "            --apply",
-        "            --apply\n          gh api /user/packages/container/legal-callegarin",
-      ),
-      expected.replace(
-        "    steps:",
-        "    continue-on-error: true\n    steps:",
-      ),
-    ]
-    for (const mutation of mutations) {
-      assert.throws(() => validate(mutation))
-    }
-  },
-)
+test("comments, duplicate or extra mappings, mutable actions, and command changes cannot satisfy the contract", () => {
+  const mutations = [
+    expected.replace("  workflow_dispatch:", "  push:\n  workflow_dispatch:"),
+    expected.replace(
+      "  contents: read\n\njobs:",
+      "  contents: read\n  actions: write\n\njobs:",
+    ),
+    expected.replace(
+      "      packages: write",
+      "      packages: write\n      packages: write",
+    ),
+    expected.replace(checkoutAction, "actions/checkout@v7"),
+    expected.replace(
+      "          set -euo pipefail",
+      "          # set -euo pipefail",
+    ),
+    expected.replace("            --apply", "            --dry-run"),
+    expected.replace(
+      "            --apply",
+      "            --apply\n          gh api /user/packages/container/legal-callegarin",
+    ),
+    expected.replace("    steps:", "    continue-on-error: true\n    steps:"),
+  ]
+  for (const mutation of mutations) {
+    assert.throws(() => validate(mutation))
+  }
+})

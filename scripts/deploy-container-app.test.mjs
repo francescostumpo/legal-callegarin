@@ -1,24 +1,48 @@
-import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
-import { createRequire } from 'node:module';
-import test from 'node:test';
+import assert from "node:assert/strict"
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  chmodSync,
+} from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
+import { spawn, spawnSync } from "node:child_process"
+import { createRequire } from "node:module"
+import test from "node:test"
 
-const script = resolve('scripts/deploy-container-app.sh');
-const subscription = '00000000-0000-0000-0000-000000000000';
-const rg = 'rg-callegarin';
-const app = 'callegarin';
-const prior = 'callegarin--prior';
-const candidate = 'callegarin--deploy-test';
-const oldDigest = `ghcr.io/francescostumpo/legal-callegarin@sha256:${'a'.repeat(64)}`;
-const digest = `ghcr.io/francescostumpo/legal-callegarin@sha256:${'b'.repeat(64)}`;
-const publicBase = 'https://www.studio-callegarin.it';
-const baseArgs = ['--subscription-id', subscription, '--resource-group', rg, '--container-app-name', app, '--image-digest', digest, '--revision-suffix', 'deploy-test', '--public-base-url', publicBase];
-const appQuery = '{id:id,name:name,location:location,provisioningState:properties.provisioningState,latestRevisionName:properties.latestRevisionName,latestReadyRevisionName:properties.latestReadyRevisionName,activeRevisionsMode:properties.configuration.activeRevisionsMode,external:properties.configuration.ingress.external,allowInsecure:properties.configuration.ingress.allowInsecure,fqdn:properties.configuration.ingress.fqdn,traffic:properties.configuration.ingress.traffic,template:properties.template}';
-const revisionQuery = '{id:id,name:name,active:properties.active,healthState:properties.healthState,provisioningState:properties.provisioningState,runningState:properties.runningState,fqdn:properties.fqdn,trafficWeight:properties.trafficWeight,template:properties.template}';
-const listQuery = '{items:value[].{id:id,name:name,active:properties.active,healthState:properties.healthState,provisioningState:properties.provisioningState,runningState:properties.runningState,fqdn:properties.fqdn,trafficWeight:properties.trafficWeight,template:properties.template},nextLink:nextLink}';
+const script = resolve("scripts/deploy-container-app.sh")
+const subscription = "00000000-0000-0000-0000-000000000000"
+const rg = "rg-callegarin"
+const app = "callegarin"
+const prior = "callegarin--prior"
+const candidate = "callegarin--deploy-test"
+const oldDigest = `ghcr.io/francescostumpo/legal-callegarin@sha256:${"a".repeat(64)}`
+const digest = `ghcr.io/francescostumpo/legal-callegarin@sha256:${"b".repeat(64)}`
+const publicBase = "https://www.studio-callegarin.it"
+const baseArgs = [
+  "--subscription-id",
+  subscription,
+  "--resource-group",
+  rg,
+  "--container-app-name",
+  app,
+  "--image-digest",
+  digest,
+  "--revision-suffix",
+  "deploy-test",
+  "--public-base-url",
+  publicBase,
+]
+const appQuery =
+  "{id:id,name:name,location:location,provisioningState:properties.provisioningState,latestRevisionName:properties.latestRevisionName,latestReadyRevisionName:properties.latestReadyRevisionName,activeRevisionsMode:properties.configuration.activeRevisionsMode,external:properties.configuration.ingress.external,allowInsecure:properties.configuration.ingress.allowInsecure,fqdn:properties.configuration.ingress.fqdn,traffic:properties.configuration.ingress.traffic,template:properties.template}"
+const revisionQuery =
+  "{id:id,name:name,active:properties.active,healthState:properties.healthState,provisioningState:properties.provisioningState,runningState:properties.runningState,fqdn:properties.fqdn,trafficWeight:properties.trafficWeight,template:properties.template}"
+const listQuery =
+  "{items:value[].{id:id,name:name,active:properties.active,healthState:properties.healthState,provisioningState:properties.provisioningState,runningState:properties.runningState,fqdn:properties.fqdn,trafficWeight:properties.trafficWeight,template:properties.template},nextLink:nextLink}"
 
 const fakeAz = String.raw`#!/usr/bin/env node
 const fs = require('node:fs');
@@ -160,7 +184,7 @@ else if (args[0] === 'rest') {
     state.promoted = false; state.rolledBack = scenario !== 'rollback-state'; save();
   }
 } else process.exit(99);
-`;
+`
 
 const fakeCurl = String.raw`#!/usr/bin/env node
 const fs = require('node:fs'); const args = process.argv.slice(2);
@@ -184,194 +208,446 @@ if (scenario === 'canonical-root' && !candidate && !health && !rollback) body='<
 if (scenario === 'canonical-health' && !candidate && health && !rollback) { status='503'; body='no\n'; }
 if (scenario === 'rollback-smoke' && rollback) { status='503'; body='no\n'; }
 headers += '\r\n'; fs.writeFileSync(headersFile,headers); fs.writeFileSync(bodyFile,body); process.stdout.write(status);
-`;
+`
 
 const fakeSleep = String.raw`#!/usr/bin/env node
 require('node:fs').appendFileSync(process.env.TEST_LOG, JSON.stringify(['sleep', ...process.argv.slice(2)]) + '\n');
-`;
+`
 
-function runCase(scenario = 'success', args = baseArgs) {
-  const root = mkdtempSync(join(tmpdir(), 'deploy-test-'));
-  const bin = join(root, 'bin'); const responses = join(root, 'responses');
-  mkdirSync(bin); mkdirSync(responses);
-  const log = join(root, 'calls.log'); const state = join(root, 'state.json');
-  writeFileSync(log, ''); writeFileSync(state, JSON.stringify({copied:false,promoted:false,rolledBack:false,rollbackAttempted:false}));
-  for (const [name, source] of [['az',fakeAz],['curl',fakeCurl],['sleep',fakeSleep]]) {
-    const path = join(bin,name); writeFileSync(path,source); chmodSync(path,0o755);
+function runCase(scenario = "success", args = baseArgs) {
+  const root = mkdtempSync(join(tmpdir(), "deploy-test-"))
+  const bin = join(root, "bin")
+  const responses = join(root, "responses")
+  mkdirSync(bin)
+  mkdirSync(responses)
+  const log = join(root, "calls.log")
+  const state = join(root, "state.json")
+  writeFileSync(log, "")
+  writeFileSync(
+    state,
+    JSON.stringify({
+      copied: false,
+      promoted: false,
+      rolledBack: false,
+      rollbackAttempted: false,
+    }),
+  )
+  for (const [name, source] of [
+    ["az", fakeAz],
+    ["curl", fakeCurl],
+    ["sleep", fakeSleep],
+  ]) {
+    const path = join(bin, name)
+    writeFileSync(path, source)
+    chmodSync(path, 0o755)
   }
-  const result = spawnSync('bash',[script,...args],{encoding:'utf8',env:{...process.env,PATH:`${bin}:${process.env.PATH}`,TMPDIR:responses,TEST_SCENARIO:scenario,TEST_LOG:log,TEST_STATE:state}});
-  const calls = readFileSync(log,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
-  const finalState = JSON.parse(readFileSync(state,'utf8'));
-  const tempEntries = readdirSync(responses);
-  rmSync(root,{recursive:true,force:true});
-  return {...result,calls,finalState,tempEntries};
+  const result = spawnSync("bash", [script, ...args], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      TMPDIR: responses,
+      TEST_SCENARIO: scenario,
+      TEST_LOG: log,
+      TEST_STATE: state,
+    },
+  })
+  const calls = readFileSync(log, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+  const finalState = JSON.parse(readFileSync(state, "utf8"))
+  const tempEntries = readdirSync(responses)
+  rmSync(root, { recursive: true, force: true })
+  return { ...result, calls, finalState, tempEntries }
 }
 
-async function runCaseAsync(scenario = 'success', args = baseArgs) {
-  const root = mkdtempSync(join(tmpdir(), 'deploy-test-'));
-  const bin = join(root, 'bin'); const responses = join(root, 'responses');
-  mkdirSync(bin); mkdirSync(responses);
-  const log = join(root, 'calls.log'); const state = join(root, 'state.json');
-  writeFileSync(log, ''); writeFileSync(state, JSON.stringify({copied:false,promoted:false,rolledBack:false,rollbackAttempted:false}));
-  for (const [name, source] of [['az',fakeAz],['curl',fakeCurl],['sleep',fakeSleep]]) {
-    const path = join(bin,name); writeFileSync(path,source); chmodSync(path,0o755);
+async function runCaseAsync(scenario = "success", args = baseArgs) {
+  const root = mkdtempSync(join(tmpdir(), "deploy-test-"))
+  const bin = join(root, "bin")
+  const responses = join(root, "responses")
+  mkdirSync(bin)
+  mkdirSync(responses)
+  const log = join(root, "calls.log")
+  const state = join(root, "state.json")
+  writeFileSync(log, "")
+  writeFileSync(
+    state,
+    JSON.stringify({
+      copied: false,
+      promoted: false,
+      rolledBack: false,
+      rollbackAttempted: false,
+    }),
+  )
+  for (const [name, source] of [
+    ["az", fakeAz],
+    ["curl", fakeCurl],
+    ["sleep", fakeSleep],
+  ]) {
+    const path = join(bin, name)
+    writeFileSync(path, source)
+    chmodSync(path, 0o755)
   }
-  const env = {...process.env,PATH:`${bin}:${process.env.PATH}`,TMPDIR:responses,TEST_SCENARIO:scenario,TEST_LOG:log,TEST_STATE:state};
-  let stdout = ''; let stderr = '';
-  const status = await new Promise((resolveStatus,reject) => {
-    const child = spawn('bash',[script,...args],{env});
-    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
-    child.stdout.on('data',chunk=>{stdout += chunk;}); child.stderr.on('data',chunk=>{stderr += chunk;});
-    child.once('error',reject); child.once('close',resolveStatus);
-  });
-  const calls = readFileSync(log,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
-  const finalState = JSON.parse(readFileSync(state,'utf8'));
-  const tempEntries = readdirSync(responses);
-  rmSync(root,{recursive:true,force:true});
-  return {status,signal:null,stdout,stderr,calls,finalState,tempEntries,error:undefined};
+  const env = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    TMPDIR: responses,
+    TEST_SCENARIO: scenario,
+    TEST_LOG: log,
+    TEST_STATE: state,
+  }
+  let stdout = ""
+  let stderr = ""
+  const status = await new Promise((resolveStatus, reject) => {
+    const child = spawn("bash", [script, ...args], { env })
+    child.stdout.setEncoding("utf8")
+    child.stderr.setEncoding("utf8")
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk
+    })
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk
+    })
+    child.once("error", reject)
+    child.once("close", resolveStatus)
+  })
+  const calls = readFileSync(log, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+  const finalState = JSON.parse(readFileSync(state, "utf8"))
+  const tempEntries = readdirSync(responses)
+  rmSync(root, { recursive: true, force: true })
+  return {
+    status,
+    signal: null,
+    stdout,
+    stderr,
+    calls,
+    finalState,
+    tempEntries,
+    error: undefined,
+  }
 }
 
-const mutations = result => result.calls.filter(call => call[0] === 'az' && call.includes('containerapp'));
-const curls = result => result.calls.filter(call => call[0] === 'curl');
+const mutations = (result) =>
+  result.calls.filter(
+    (call) => call[0] === "az" && call.includes("containerapp"),
+  )
+const curls = (result) => result.calls.filter((call) => call[0] === "curl")
 
-test('help and invalid input make no az, curl, or sleep calls', () => {
-  for (const args of [['--help'], baseArgs.slice(0,-2), [...baseArgs,'positional'], [...baseArgs,'--image-digest',digest], baseArgs.map(v=>v===digest?'ghcr.io/francescostumpo/legal-callegarin:latest':v), baseArgs.map(v=>v===publicBase?`${publicBase}/path`:v)]) {
-    const result = runCase('success',args);
-    if (args[0] === '--help') assert.equal(result.status,0); else assert.notEqual(result.status,0);
-    assert.deepEqual(result.calls,[]);
-    assert.deepEqual(result.tempEntries,[]);
+test("help and invalid input make no az, curl, or sleep calls", () => {
+  for (const args of [
+    ["--help"],
+    baseArgs.slice(0, -2),
+    [...baseArgs, "positional"],
+    [...baseArgs, "--image-digest", digest],
+    baseArgs.map((v) =>
+      v === digest ? "ghcr.io/francescostumpo/legal-callegarin:latest" : v,
+    ),
+    baseArgs.map((v) => (v === publicBase ? `${publicBase}/path` : v)),
+  ]) {
+    const result = runCase("success", args)
+    if (args[0] === "--help") assert.equal(result.status, 0)
+    else assert.notEqual(result.status, 0)
+    assert.deepEqual(result.calls, [])
+    assert.deepEqual(result.tempEntries, [])
   }
-});
+})
 
-test('successful rollout paginates, smokes, promotes exact digest, and keeps prior active at zero', () => {
-  const result = runCase('pagination');
-  assert.equal(result.status,0,result.stderr);
-  assert.match(result.stdout,/deployment_status=succeeded/);
-  assert.deepEqual(result.tempEntries,[]);
-  assert.equal(result.finalState.promoted,true);
-  const mutationCalls = mutations(result);
-  assert.equal(mutationCalls.length,2);
-  assert.deepEqual(mutationCalls[0],['az','containerapp','revision','copy','--subscription',subscription,'--resource-group',rg,'--name',app,'--from-revision',prior,'--container-name',app,'--image',digest,'--revision-suffix','deploy-test','--set-env-vars','ARTICLE_STORAGE_SCHEMA_MODE=migrate','--output','none']);
-  assert.deepEqual(mutationCalls[1],['az','containerapp','ingress','traffic','set','--subscription',subscription,'--resource-group',rg,'--name',app,'--revision-weight',`${candidate}=100`,`${prior}=0`,'--output','none']);
-  assert.equal(curls(result).length,6);
-  assert.ok(curls(result).every(call=>call[1]==='--disable' && call[2]==='--no-location'));
-  const copyIndex = result.calls.indexOf(mutationCalls[0]);
-  const promoteIndex = result.calls.indexOf(mutationCalls[1]);
-  const candidateCurlIndexes = curls(result).slice(0,3).map(call=>result.calls.indexOf(call));
-  const canonicalCurlIndexes = curls(result).slice(3).map(call=>result.calls.indexOf(call));
-  assert.ok(candidateCurlIndexes.every(index=>index > copyIndex && index < promoteIndex));
-  assert.ok(canonicalCurlIndexes.every(index=>index > promoteIndex));
-  assert.ok(result.calls.some(call=>call[0]==='az' && String(call[call.indexOf('--url')+1]).includes('$skiptoken=two')));
-  const restQueries = new Set(result.calls.filter(call=>call[0]==='az' && call[1]==='rest').map(call=>call[call.indexOf('--query')+1]));
-  assert.deepEqual(restQueries,new Set([appQuery,revisionQuery,listQuery]));
-  const forbiddenTokens = new Set(['login','get-access-token','secret','registry','bicep','update','delete','deactivate']);
-  for (const call of result.calls.filter(call=>call[0]==='az')) {
-    assert.ok(!call.some(value=>forbiddenTokens.has(String(value).toLowerCase())),JSON.stringify(call));
+test("successful rollout paginates, smokes, promotes exact digest, and keeps prior active at zero", () => {
+  const result = runCase("pagination")
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /deployment_status=succeeded/)
+  assert.deepEqual(result.tempEntries, [])
+  assert.equal(result.finalState.promoted, true)
+  const mutationCalls = mutations(result)
+  assert.equal(mutationCalls.length, 2)
+  assert.deepEqual(mutationCalls[0], [
+    "az",
+    "containerapp",
+    "revision",
+    "copy",
+    "--subscription",
+    subscription,
+    "--resource-group",
+    rg,
+    "--name",
+    app,
+    "--from-revision",
+    prior,
+    "--container-name",
+    app,
+    "--image",
+    digest,
+    "--revision-suffix",
+    "deploy-test",
+    "--set-env-vars",
+    "ARTICLE_STORAGE_SCHEMA_MODE=migrate",
+    "--output",
+    "none",
+  ])
+  assert.deepEqual(mutationCalls[1], [
+    "az",
+    "containerapp",
+    "ingress",
+    "traffic",
+    "set",
+    "--subscription",
+    subscription,
+    "--resource-group",
+    rg,
+    "--name",
+    app,
+    "--revision-weight",
+    `${candidate}=100`,
+    `${prior}=0`,
+    "--output",
+    "none",
+  ])
+  assert.equal(curls(result).length, 6)
+  assert.ok(
+    curls(result).every(
+      (call) => call[1] === "--disable" && call[2] === "--no-location",
+    ),
+  )
+  const copyIndex = result.calls.indexOf(mutationCalls[0])
+  const promoteIndex = result.calls.indexOf(mutationCalls[1])
+  const candidateCurlIndexes = curls(result)
+    .slice(0, 3)
+    .map((call) => result.calls.indexOf(call))
+  const canonicalCurlIndexes = curls(result)
+    .slice(3)
+    .map((call) => result.calls.indexOf(call))
+  assert.ok(
+    candidateCurlIndexes.every(
+      (index) => index > copyIndex && index < promoteIndex,
+    ),
+  )
+  assert.ok(canonicalCurlIndexes.every((index) => index > promoteIndex))
+  assert.ok(
+    result.calls.some(
+      (call) =>
+        call[0] === "az" &&
+        String(call[call.indexOf("--url") + 1]).includes("$skiptoken=two"),
+    ),
+  )
+  const restQueries = new Set(
+    result.calls
+      .filter((call) => call[0] === "az" && call[1] === "rest")
+      .map((call) => call[call.indexOf("--query") + 1]),
+  )
+  assert.deepEqual(restQueries, new Set([appQuery, revisionQuery, listQuery]))
+  const forbiddenTokens = new Set([
+    "login",
+    "get-access-token",
+    "secret",
+    "registry",
+    "bicep",
+    "update",
+    "delete",
+    "deactivate",
+  ])
+  for (const call of result.calls.filter((call) => call[0] === "az")) {
+    assert.ok(
+      !call.some((value) => forbiddenTokens.has(String(value).toLowerCase())),
+      JSON.stringify(call),
+    )
   }
-});
+})
 
-test('malformed response JSON never leaks response fragments before or after mutation', async () => {
-  const sentinel = 'LEAKME';
-  const production = readFileSync(script,'utf8');
-  const helper = production.match(/json_tool\(\) \{\n  node - "\$@" <<'NODE'\n([\s\S]*?)\nNODE\n\}/)?.[1];
-  assert.ok(helper,'production JSON helper must remain extractable for leak regression tests');
-  const executableHelper = helper.replace(/const fail = message => \{ console\.error\([^;]+; process\.exit\(1\); \};/,'const fail = message => { throw new Error(message); };');
-  assert.notEqual(executableHelper,helper,'test harness must replace only the helper exit adapter');
-  const helperFunction = new Function('require','process','URL','structuredClone','Buffer',executableHelper);
-  const invokeHelper = args => {
+test("malformed response JSON never leaks response fragments before or after mutation", async () => {
+  const sentinel = "LEAKME"
+  const production = readFileSync(script, "utf8")
+  const helper = production.match(
+    /json_tool\(\) \{\n  node - "\$@" <<'NODE'\n([\s\S]*?)\nNODE\n\}/,
+  )?.[1]
+  assert.ok(
+    helper,
+    "production JSON helper must remain extractable for leak regression tests",
+  )
+  const executableHelper = helper.replace(
+    /const fail = message => \{ console\.error\([^;]+; process\.exit\(1\); \};/,
+    "const fail = message => { throw new Error(message); };",
+  )
+  assert.notEqual(
+    executableHelper,
+    helper,
+    "test harness must replace only the helper exit adapter",
+  )
+  const helperFunction = new Function(
+    "require",
+    "process",
+    "URL",
+    "structuredClone",
+    "Buffer",
+    executableHelper,
+  )
+  const invokeHelper = (args) => {
     try {
-      helperFunction(createRequire(import.meta.url),{argv:['node','-',...args],stdout:{write(){}}},URL,structuredClone,Buffer);
+      helperFunction(
+        createRequire(import.meta.url),
+        { argv: ["node", "-", ...args], stdout: { write() {} } },
+        URL,
+        structuredClone,
+        Buffer,
+      )
     } catch (error) {
-      return error;
+      return error
     }
-    assert.fail('JSON helper unexpectedly accepted malformed input');
-  };
-  const parserRoot = mkdtempSync(join(tmpdir(),'deploy-parser-test-'));
-  const malformedFile = join(parserRoot,'malformed.json');
-  writeFileSync(malformedFile,'{"value":LEAKME}\n');
-  const parserError = invokeHelper(['account',malformedFile,subscription]);
-  assert.equal(parserError.message,'malformed JSON response');
-  assert.ok(!parserError.message.includes(sentinel));
+    assert.fail("JSON helper unexpectedly accepted malformed input")
+  }
+  const parserRoot = mkdtempSync(join(tmpdir(), "deploy-parser-test-"))
+  const malformedFile = join(parserRoot, "malformed.json")
+  writeFileSync(malformedFile, '{"value":LEAKME}\n')
+  const parserError = invokeHelper(["account", malformedFile, subscription])
+  assert.equal(parserError.message, "malformed JSON response")
+  assert.ok(!parserError.message.includes(sentinel))
 
-  const pageFile = join(parserRoot,'page.json');
-  writeFileSync(pageFile,JSON.stringify({items:[],nextLink:sentinel}));
-  const nextLinkError = invokeHelper(['page-next',pageFile,`/subscriptions/${subscription}/resourceGroups/${rg}/providers/Microsoft.App/containerApps/${app}/revisions`]);
-  assert.equal(nextLinkError.message,'revision nextLink is malformed');
-  assert.ok(!nextLinkError.message.includes(sentinel));
-  rmSync(parserRoot,{recursive:true,force:true});
+  const pageFile = join(parserRoot, "page.json")
+  writeFileSync(pageFile, JSON.stringify({ items: [], nextLink: sentinel }))
+  const nextLinkError = invokeHelper([
+    "page-next",
+    pageFile,
+    `/subscriptions/${subscription}/resourceGroups/${rg}/providers/Microsoft.App/containerApps/${app}/revisions`,
+  ])
+  assert.equal(nextLinkError.message, "revision nextLink is malformed")
+  assert.ok(!nextLinkError.message.includes(sentinel))
+  rmSync(parserRoot, { recursive: true, force: true })
 
-  const pre = await runCaseAsync('malformed-pre-json');
-  assert.equal(pre.error,undefined,JSON.stringify(pre.error));
-  assert.notEqual(pre.status,0);
-  assert.equal(mutations(pre).length,0);
-  assert.equal(curls(pre).length,0);
-  assert.ok(!`${pre.stdout}${pre.stderr}`.includes(sentinel));
+  const pre = await runCaseAsync("malformed-pre-json")
+  assert.equal(pre.error, undefined, JSON.stringify(pre.error))
+  assert.notEqual(pre.status, 0)
+  assert.equal(mutations(pre).length, 0)
+  assert.equal(curls(pre).length, 0)
+  assert.ok(!`${pre.stdout}${pre.stderr}`.includes(sentinel))
 
-  const post = await runCaseAsync('malformed-post-json');
-  assert.equal(post.error,undefined,JSON.stringify(post.error));
-  assert.notEqual(post.status,0);
-  assert.equal(post.finalState.rolledBack,true);
-  assert.ok(mutations(post).some(call=>call.includes(`${prior}=100`)));
-  assert.ok(!mutations(post).some(call=>call.includes(`${candidate}=100`)));
-  assert.ok(!`${post.stdout}${post.stderr}`.includes(sentinel));
-  assert.deepEqual(post.tempEntries,[]);
+  const post = await runCaseAsync("malformed-post-json")
+  assert.equal(post.error, undefined, JSON.stringify(post.error))
+  assert.notEqual(post.status, 0)
+  assert.equal(post.finalState.rolledBack, true)
+  assert.ok(mutations(post).some((call) => call.includes(`${prior}=100`)))
+  assert.ok(!mutations(post).some((call) => call.includes(`${candidate}=100`)))
+  assert.ok(!`${post.stdout}${post.stderr}`.includes(sentinel))
+  assert.deepEqual(post.tempEntries, [])
 
-  const nextLink = await runCaseAsync('pagination-malformed-url');
-  assert.equal(nextLink.error,undefined,JSON.stringify(nextLink.error));
-  assert.notEqual(nextLink.status,0);
-  assert.equal(mutations(nextLink).length,0);
-  assert.equal(curls(nextLink).length,0);
-  assert.ok(!`${nextLink.stdout}${nextLink.stderr}`.includes(sentinel));
-  assert.deepEqual(nextLink.tempEntries,[]);
-});
+  const nextLink = await runCaseAsync("pagination-malformed-url")
+  assert.equal(nextLink.error, undefined, JSON.stringify(nextLink.error))
+  assert.notEqual(nextLink.status, 0)
+  assert.equal(mutations(nextLink).length, 0)
+  assert.equal(curls(nextLink).length, 0)
+  assert.ok(!`${nextLink.stdout}${nextLink.stderr}`.includes(sentinel))
+  assert.deepEqual(nextLink.tempEntries, [])
+})
 
-test('unsafe preflight states fail before mutation and before curl', () => {
-  const scenarios = ['wrong-account','wrong-rg','app-id','app-mode','app-provisioning','app-ingress','app-containers','latest-traffic','labeled-traffic','multiple-traffic','prior-unhealthy','prior-compat','prior-tagged','prior-duplicate-mode','prior-missing-fqdn','suffix-collision','template-drift','pagination-cycle','pagination-duplicate','pagination-offhost','pagination-overflow'];
+test("unsafe preflight states fail before mutation and before curl", () => {
+  const scenarios = [
+    "wrong-account",
+    "wrong-rg",
+    "app-id",
+    "app-mode",
+    "app-provisioning",
+    "app-ingress",
+    "app-containers",
+    "latest-traffic",
+    "labeled-traffic",
+    "multiple-traffic",
+    "prior-unhealthy",
+    "prior-compat",
+    "prior-tagged",
+    "prior-duplicate-mode",
+    "prior-missing-fqdn",
+    "suffix-collision",
+    "template-drift",
+    "pagination-cycle",
+    "pagination-duplicate",
+    "pagination-offhost",
+    "pagination-overflow",
+  ]
   for (const scenario of scenarios) {
-    const result = runCase(scenario);
-    assert.notEqual(result.status,0,scenario);
-    assert.equal(mutations(result).length,0,scenario);
-    assert.equal(curls(result).length,0,scenario);
-    assert.deepEqual(result.tempEntries,[],scenario);
+    const result = runCase(scenario)
+    assert.notEqual(result.status, 0, scenario)
+    assert.equal(mutations(result).length, 0, scenario)
+    assert.equal(curls(result).length, 0, scenario)
+    assert.deepEqual(result.tempEntries, [], scenario)
   }
-});
+})
 
-test('copy/candidate failures restore prior traffic and never promote', () => {
-  for (const scenario of ['copy-error','candidate-unhealthy','candidate-image','candidate-env','candidate-template','candidate-cookie','candidate-health','candidate-redirect']) {
-    const result = runCase(scenario);
-    assert.notEqual(result.status,0,scenario);
-    assert.equal(result.finalState.rolledBack,true,scenario);
-    assert.ok(mutations(result).some(call=>call.includes(`${prior}=100`)),scenario);
-    assert.ok(!mutations(result).some(call=>call.includes(`${candidate}=100`)),scenario);
-    assert.deepEqual(result.tempEntries,[],scenario);
+test("copy/candidate failures restore prior traffic and never promote", () => {
+  for (const scenario of [
+    "copy-error",
+    "candidate-unhealthy",
+    "candidate-image",
+    "candidate-env",
+    "candidate-template",
+    "candidate-cookie",
+    "candidate-health",
+    "candidate-redirect",
+  ]) {
+    const result = runCase(scenario)
+    assert.notEqual(result.status, 0, scenario)
+    assert.equal(result.finalState.rolledBack, true, scenario)
+    assert.ok(
+      mutations(result).some((call) => call.includes(`${prior}=100`)),
+      scenario,
+    )
+    assert.ok(
+      !mutations(result).some((call) => call.includes(`${candidate}=100`)),
+      scenario,
+    )
+    assert.deepEqual(result.tempEntries, [], scenario)
   }
-});
+})
 
-test('candidate visibility timeout is bounded and rolls back', () => {
-  const result = runCase('candidate-timeout');
-  assert.notEqual(result.status,0);
-  assert.equal(result.finalState.rolledBack,true);
-  assert.equal(result.calls.filter(call=>call[0]==='sleep').length,23);
-  assert.deepEqual(result.tempEntries,[]);
-});
+test("candidate visibility timeout is bounded and rolls back", () => {
+  const result = runCase("candidate-timeout")
+  assert.notEqual(result.status, 0)
+  assert.equal(result.finalState.rolledBack, true)
+  assert.equal(result.calls.filter((call) => call[0] === "sleep").length, 23)
+  assert.deepEqual(result.tempEntries, [])
+})
 
-test('promotion and post-promotion failures always roll back', () => {
-  for (const scenario of ['promotion-error','posttraffic-extra','canonical-cookie','canonical-root','canonical-health']) {
-    const result = runCase(scenario);
-    assert.notEqual(result.status,0,scenario);
-    assert.equal(result.finalState.rolledBack,true,scenario);
-    const mutationCalls = mutations(result);
-    assert.ok(mutationCalls.some(call=>call.includes(`${candidate}=100`)),scenario);
-    assert.ok(mutationCalls.some(call=>call.includes(`${prior}=100`)),scenario);
-    assert.deepEqual(result.tempEntries,[],scenario);
+test("promotion and post-promotion failures always roll back", () => {
+  for (const scenario of [
+    "promotion-error",
+    "posttraffic-extra",
+    "canonical-cookie",
+    "canonical-root",
+    "canonical-health",
+  ]) {
+    const result = runCase(scenario)
+    assert.notEqual(result.status, 0, scenario)
+    assert.equal(result.finalState.rolledBack, true, scenario)
+    const mutationCalls = mutations(result)
+    assert.ok(
+      mutationCalls.some((call) => call.includes(`${candidate}=100`)),
+      scenario,
+    )
+    assert.ok(
+      mutationCalls.some((call) => call.includes(`${prior}=100`)),
+      scenario,
+    )
+    assert.deepEqual(result.tempEntries, [], scenario)
   }
-});
+})
 
-test('rollback failures report ambiguous deployment state', () => {
-  for (const scenario of ['rollback-command','rollback-state','rollback-health','rollback-smoke']) {
-    const result = runCase(scenario);
-    assert.notEqual(result.status,0,scenario);
-    assert.match(result.stderr,/deployment state ambiguous; manual intervention required/,scenario);
-    assert.deepEqual(result.tempEntries,[],scenario);
+test("rollback failures report ambiguous deployment state", () => {
+  for (const scenario of [
+    "rollback-command",
+    "rollback-state",
+    "rollback-health",
+    "rollback-smoke",
+  ]) {
+    const result = runCase(scenario)
+    assert.notEqual(result.status, 0, scenario)
+    assert.match(
+      result.stderr,
+      /deployment state ambiguous; manual intervention required/,
+      scenario,
+    )
+    assert.deepEqual(result.tempEntries, [], scenario)
   }
-});
+})

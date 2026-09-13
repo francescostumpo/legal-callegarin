@@ -15,8 +15,7 @@ const loginAction =
   "docker/login-action@dbcb813823bdd20940b903addbd779551569679f"
 const buildPushAction =
   "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a"
-const azureLoginAction =
-  "azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43"
+const azureLoginAction = "azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43"
 
 async function optionalText(path) {
   try {
@@ -260,17 +259,17 @@ test("publish validates identity before ephemeral GHCR login and pushes one amd6
   )
   assert.match(publish, /^      IMAGE_VERSION: sha-\$\{\{ github\.sha \}\}$/m)
   assert.match(publish, /\^\[0-9a-f\]\{40\}\$/)
-  assert.match(
-    publish,
-    /expected_tag="\$IMAGE_REPOSITORY:sha-\$GITHUB_SHA"/,
-  )
+  assert.match(publish, /expected_tag="\$IMAGE_REPOSITORY:sha-\$GITHUB_SHA"/)
   assert.match(
     publish,
     /\^ghcr\\\.io\/francescostumpo\/legal-callegarin:sha-\[0-9a-f\]\{40\}\$/,
   )
   assert.ok(
-    positionOf(publish, /- name: Validate image identity/, "identity validation") <
-      positionOf(publish, /docker\/login-action@/, "GHCR login"),
+    positionOf(
+      publish,
+      /- name: Validate image identity/,
+      "identity validation",
+    ) < positionOf(publish, /docker\/login-action@/, "GHCR login"),
   )
   assert.ok(
     positionOf(publish, /docker\/login-action@/, "GHCR login") <
@@ -300,7 +299,10 @@ test("publish validates identity before ephemeral GHCR login and pushes one amd6
 test("publish independently verifies the pushed digest and exports only the immutable reference", () => {
   const publish = jobBlock("publish", "deploy-production")
   assertPublishOutputMapping(workflow)
-  assert.match(publish, /^          BUILD_DIGEST: \$\{\{ steps\.build\.outputs\.digest \}\}$/m)
+  assert.match(
+    publish,
+    /^          BUILD_DIGEST: \$\{\{ steps\.build\.outputs\.digest \}\}$/m,
+  )
   assert.match(publish, /\^sha256:\[0-9a-f\]\{64\}\$/)
   assert.match(
     publish,
@@ -312,7 +314,10 @@ test("publish independently verifies the pushed digest and exports only the immu
   )
   assert.match(publish, /resolved_digest="\$\{resolved_digest_json#\\"\}"/)
   assert.match(publish, /resolved_digest="\$\{resolved_digest%\\"\}"/)
-  assert.match(publish, /if \[\[ "\$resolved_digest" != "\$BUILD_DIGEST" \]\]; then/)
+  assert.match(
+    publish,
+    /if \[\[ "\$resolved_digest" != "\$BUILD_DIGEST" \]\]; then/,
+  )
   assert.match(
     publish,
     /printf 'image_ref=%s@%s\\n' "\$IMAGE_REPOSITORY" "\$BUILD_DIGEST" >> "\$GITHUB_OUTPUT"/,
@@ -334,7 +339,10 @@ test("publish independently verifies the pushed digest and exports only the immu
     ),
     positionOf(publish, /image_ref=%s@%s/, "immutable job output"),
   ]
-  assert.deepEqual(digestSequence, [...digestSequence].sort((left, right) => left - right))
+  assert.deepEqual(
+    digestSequence,
+    [...digestSequence].sort((left, right) => left - right),
+  )
 })
 
 test("publish outputs reject an additional non-step value", () => {
@@ -377,7 +385,10 @@ test("deploy uses environment-backed OIDC and the verified cross-job digest", ()
     deploy,
     /azure\/login@[0-9a-f]{40} # v3\.0\.0\n        with:\n          client-id: \$\{\{ env\.AZURE_CLIENT_ID \}\}\n          tenant-id: \$\{\{ env\.AZURE_TENANT_ID \}\}\n          subscription-id: \$\{\{ env\.AZURE_SUBSCRIPTION_ID \}\}/,
   )
-  assert.doesNotMatch(deploy, /\bcreds\s*:|AZURE_CLIENT_SECRET|client-secret|\bsecrets\./i)
+  assert.doesNotMatch(
+    deploy,
+    /\bcreds\s*:|AZURE_CLIENT_SECRET|client-secret|\bsecrets\./i,
+  )
   assert.match(
     deploy,
     /\^ghcr\\\.io\/francescostumpo\/legal-callegarin@sha256:\[0-9a-f\]\{64\}\$/,
@@ -409,11 +420,17 @@ test("deploy delegates exactly one ordered six-argument mutation to the approved
 test("workflow contains no mutable publication, direct cloud mutation, retention, or credentials", () => {
   assert.doesNotMatch(workflow, /(?:@|:)latest\b/i)
   assert.doesNotMatch(workflow, /github\.event\./)
-  assert.doesNotMatch(workflow, /\b(?:docker push|az containerapp|az rest|curl)\b/i)
+  assert.doesNotMatch(
+    workflow,
+    /\b(?:docker push|az containerapp|az rest|curl)\b/i,
+  )
   assert.doesNotMatch(
     workflow,
     /(?:delete|deactivate|traffic|retention|bicep|custom[- ]?domain|client[-_ ]?secret|password:\s*\$\{\{\s*secrets\.)/i,
   )
-  assert.doesNotMatch(workflow, /\b(?:pull_request|pull_request_target|schedule|workflow_call)\b/)
+  assert.doesNotMatch(
+    workflow,
+    /\b(?:pull_request|pull_request_target|schedule|workflow_call)\b/,
+  )
   assert.doesNotMatch(workflow, /set -x|ACTIONS_STEP_DEBUG|RUNNER_DEBUG/)
 })
