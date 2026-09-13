@@ -179,7 +179,10 @@ dall'operatore tecnico per delega implicita.
 Il sign-off dell'operatore viene registrato soltanto dopo aver verificato che i
 gate 1–10 siano `APPROVED`, completi di evidenza, e che l'artefatto controllato
 sia quello effettivamente destinato al rilascio. Questo gate è distinto
-dall'approvazione legale e professionale dell'avvocato.
+dall'approvazione legale e professionale dell'avvocato. Devono inoltre essere
+complete le approvazioni del [runbook di recupero dello
+storage](storage-recovery.md) e l'evidenza reale della prova su account usa e
+getta; la produzione resta `BLOCKED` finché una delle due manca.
 
 - **Stato del gate:** `BLOCKED`
 - **Revisore/approvatore:**

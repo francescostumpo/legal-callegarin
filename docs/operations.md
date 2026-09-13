@@ -751,5 +751,11 @@ deve inoltre registrare:
 - rollback drill su una revisione trattenuta compatibile;
 - propagazione DNS/TLS e rinnovo certificati;
 - alert delivery Azure/GitHub e comportamento reale di cost/usage;
-- storage recovery rehearsal, incluse copie e ripristino;
+- approvazioni compilate nel [runbook di recupero dello
+  storage](storage-recovery.md) ed evidenza reale della prova su account usa e
+  getta, incluse copie, ripristino e cleanup; la produzione resta `BLOCKED`
+  finché entrambe mancano;
 - contenuti approvati dall'avvocato prima della pubblicazione.
+
+Questo è anche il gate operativo di storage recovery; il collegamento non
+costituisce evidenza di esecuzione.
