@@ -11,10 +11,14 @@ export ACTIONLINT_IMAGE CONTAINER_ENGINE IMAGE SBOM_OUTPUT SEVERITY SYFT_IMAGE T
 
 actionlint:
 	"$(CONTAINER_ENGINE)" run --rm --network none --read-only \
+		--user "$$(id -u):$$(id -g)" \
 		--cap-drop ALL --security-opt no-new-privileges \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
 		--mount "type=bind,src=$(CURDIR),dst=/repo,readonly" \
-		--workdir /repo "$(ACTIONLINT_IMAGE)" -no-color
+		--workdir /repo "$(ACTIONLINT_IMAGE)" -no-color \
+		.github/workflows/ci.yml \
+		.github/workflows/deploy.yml \
+		.github/workflows/retention.yml
 
 build:
 	npm run build

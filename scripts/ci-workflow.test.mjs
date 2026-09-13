@@ -307,6 +307,8 @@ test("make actionlint uses only the exact pinned, hardened local interface", asy
     "--network",
     "none",
     "--read-only",
+    "--user",
+    `${process.getuid()}:${process.getgid()}`,
     "--cap-drop",
     "ALL",
     "--security-opt",
@@ -319,5 +321,8 @@ test("make actionlint uses only the exact pinned, hardened local interface", asy
     "/repo",
     actionlintImage,
     "-no-color",
+    ".github/workflows/ci.yml",
+    ".github/workflows/deploy.yml",
+    ".github/workflows/retention.yml",
   ])
 })
