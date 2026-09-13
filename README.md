@@ -96,3 +96,8 @@ file for bootstrap, and use the
 [custom-domain parameter example](infra/custom-domain.example.bicepparam) only
 for the DNS-verified domain phase. Routine CI rollouts are not full
 infrastructure deployments.
+
+Production remains blocked until the lawyer and operator complete the
+[checklist di lancio in produzione](docs/launch-readiness.md), including
+content, privacy, domain, asset, and separate final approval gates with recorded
+evidence.

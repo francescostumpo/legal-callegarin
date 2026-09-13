@@ -736,7 +736,11 @@ amministratore](password-recovery.md).
 ## Gate esterni e responsabilità
 
 Nessuna attività esterna di questa checklist è stata eseguita da Codex o dai
-task di implementazione. Prima della produzione un operatore deve registrare:
+task di implementazione. La [checklist di lancio in
+produzione](launch-readiness.md) è il gate auditable unico per contenuti,
+privacy, dominio, asset e approvazioni finali: resta `BLOCKED` finché ogni campo
+richiesto non contiene un'evidenza reale. Prima della produzione un operatore
+deve inoltre registrare:
 
 - disponibilità del GitHub plan e delle protection rule richieste;
 - collegamento del package, accesso package `admin` e rischio public preview;
