@@ -195,7 +195,15 @@ test("the local container smoke is bounded, hardened, and cleans only its own co
   assert.doesNotMatch(script, /\"code\":\"unauthenticated\"/)
   assert.match(script, /Content-Security-Policy/i)
   assert.match(script, /Strict-Transport-Security/i)
-  assert.match(script, /Referrer-Policy/i)
+  assert.match(
+    script,
+    /^if ! grep -Eqi '\^Referrer-Policy:\[\[:space:\]\]\*same-origin\[\[:space:\]\]\*\$' "\$SMOKE_DIR\/public\.headers"; then$/m,
+  )
+  assert.match(
+    script,
+    /^  echo "public response Referrer-Policy is not exactly same-origin" >&2$/m,
+  )
+  assert.doesNotMatch(script, /Referrer-Policy:[^\n]*no-referrer/i)
   assert.match(script, /Permissions-Policy/i)
   assert.match(script, /X-Frame-Options/i)
   assert.match(script, /Set-Cookie/i)

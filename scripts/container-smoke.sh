@@ -80,7 +80,10 @@ grep -qx 'ok' "$SMOKE_DIR/readiness"
 http -fsS -D "$SMOKE_DIR/public.headers" -o "$SMOKE_DIR/public.html" "$SMOKE_ORIGIN/"
 grep -qi '^Content-Security-Policy:' "$SMOKE_DIR/public.headers"
 grep -qi '^X-Content-Type-Options: nosniff' "$SMOKE_DIR/public.headers"
-grep -qi '^Referrer-Policy: no-referrer' "$SMOKE_DIR/public.headers"
+if ! grep -Eqi '^Referrer-Policy:[[:space:]]*same-origin[[:space:]]*$' "$SMOKE_DIR/public.headers"; then
+  echo "public response Referrer-Policy is not exactly same-origin" >&2
+  exit 1
+fi
 grep -qi '^Permissions-Policy: camera=(), geolocation=(), microphone=()' "$SMOKE_DIR/public.headers"
 grep -qi '^X-Frame-Options: DENY' "$SMOKE_DIR/public.headers"
 if grep -qi '^Strict-Transport-Security:' "$SMOKE_DIR/public.headers"; then
