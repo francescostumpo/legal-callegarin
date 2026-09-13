@@ -94,14 +94,23 @@ test("toolchain actions are exact, immutable, cache-aware, and do not persist cr
   assert.doesNotMatch(workflow, /persist-credentials:\s*true/)
 })
 
-test("exact Bicep installation precedes all repository verification commands", () => {
-  assert.doesNotMatch(
-    workflow,
-    /^    env:\n      (?:AZURE_CONFIG_DIR|DOTNET_BUNDLE_EXTRACT_BASE_DIR):/m,
-  )
+test("the pinned Bicep environment is inherited by every verification step", () => {
   assert.match(
     workflow,
-    /- name: Install exact Bicep CLI\n        env:\n          AZURE_CONFIG_DIR: \$\{\{ runner\.temp \}\}\/azure-cli\n          DOTNET_BUNDLE_EXTRACT_BASE_DIR: \$\{\{ runner\.temp \}\}\/dotnet\n        shell: bash\n        run: \|\n          set -euo pipefail/,
+    /jobs:\n  verify:\n    name: Verify pull request\n    runs-on: ubuntu-24\.04\n    timeout-minutes: 30\n    env:\n      AZURE_BICEP_CHECK_VERSION: "false"\n    steps:/,
+  )
+  assert.doesNotMatch(workflow, /\$\{\{ runner\.temp \}\}/)
+  assert.match(
+    workflow,
+    /- name: Install exact Bicep CLI\n        shell: bash\n        run: \|\n          set -euo pipefail\n          export AZURE_CONFIG_DIR="\$RUNNER_TEMP\/azure-cli"\n          export DOTNET_BUNDLE_EXTRACT_BASE_DIR="\$RUNNER_TEMP\/dotnet"\n          printf 'AZURE_CONFIG_DIR=%s\\n' "\$AZURE_CONFIG_DIR" >> "\$GITHUB_ENV"\n          printf 'DOTNET_BUNDLE_EXTRACT_BASE_DIR=%s\\n' "\$DOTNET_BUNDLE_EXTRACT_BASE_DIR" >> "\$GITHUB_ENV"\n          mkdir -p "\$AZURE_CONFIG_DIR" "\$DOTNET_BUNDLE_EXTRACT_BASE_DIR"/,
+  )
+  assert.equal(workflow.match(/^      AZURE_BICEP_CHECK_VERSION:/gm)?.length, 1)
+})
+
+test("exact Bicep installation precedes all repository verification commands", () => {
+  assert.match(
+    workflow,
+    /- name: Install exact Bicep CLI\n        shell: bash\n        run: \|\n          set -euo pipefail/,
   )
   const install = positionOf(
     /az bicep install --version v0\.45\.15/,

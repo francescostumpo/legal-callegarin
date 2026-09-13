@@ -11,6 +11,8 @@ jobs:
     name: Verify pull request
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      AZURE_BICEP_CHECK_VERSION: "false"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,12 +33,13 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install exact Bicep CLI
-        env:
-          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-cli
-          DOTNET_BUNDLE_EXTRACT_BASE_DIR: ${{ runner.temp }}/dotnet
         shell: bash
         run: |
           set -euo pipefail
+          export AZURE_CONFIG_DIR="$RUNNER_TEMP/azure-cli"
+          export DOTNET_BUNDLE_EXTRACT_BASE_DIR="$RUNNER_TEMP/dotnet"
+          printf 'AZURE_CONFIG_DIR=%s\n' "$AZURE_CONFIG_DIR" >> "$GITHUB_ENV"
+          printf 'DOTNET_BUNDLE_EXTRACT_BASE_DIR=%s\n' "$DOTNET_BUNDLE_EXTRACT_BASE_DIR" >> "$GITHUB_ENV"
           mkdir -p "$AZURE_CONFIG_DIR" "$DOTNET_BUNDLE_EXTRACT_BASE_DIR"
           az config set bicep.use_binary_from_path=false
           az bicep install --version v0.45.15

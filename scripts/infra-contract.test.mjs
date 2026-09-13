@@ -5,8 +5,12 @@ import test from "node:test"
 
 const repositoryRoot = new URL("../", import.meta.url)
 const compiledTemplates = new Map()
-const parameterEnvironment = {
+const bicepEnvironment = {
   ...process.env,
+  AZURE_BICEP_CHECK_VERSION: "false",
+}
+const parameterEnvironment = {
+  ...bicepEnvironment,
   GHCR_TOKEN: "sentinel-ghcr-token",
   ADMIN_PASSWORD_HASH: "sentinel-argon2id-hash",
   SESSION_KEY_BASE64: "sentinel-session-key",
@@ -22,7 +26,7 @@ function compileBicep(path) {
     {
       cwd: repositoryRoot,
       encoding: "utf8",
-      env: process.env,
+      env: bicepEnvironment,
     },
   )
 
