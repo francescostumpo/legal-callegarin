@@ -8,12 +8,14 @@ HTTP listener starts and then uses the current-only repository. `repair` is a
 recovery mode that ignores an existing marker, performs a full idempotent
 convergence scan, and then uses the current-only repository.
 
-The commands below are an operator runbook. Tasks 11–13 must wire the exact
-resource names, deployment workflow gates, and post-deploy checks into Bicep
-and CI before production use. Run all blocks in one POSIX shell session. Every
-block repeats `set -eu`; when starting a new shell, rerun the variables block
-so its placeholders and rollout-script path are defined. Run the commands from
-the repository root at the exact Git commit recorded in the change ticket.
+The commands below are an operator runbook. Follow the
+[development and first-release guide](development-and-first-release.md) for the
+mandatory order around Bicep bootstrap, named traffic, this initial migration,
+domain setup, and ordinary workflow enablement. Run all blocks in one POSIX
+shell session. Every block repeats `set -eu`; when starting a new shell, rerun
+the variables block so its placeholders and rollout-script path are defined.
+Run the commands from the repository root at the exact Git commit recorded in
+the change ticket.
 
 ## Variables and logical compatibility boundary
 

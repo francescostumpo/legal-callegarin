@@ -14,19 +14,22 @@ React administration application.
 
 ## Setup and validation
 
-Install the frontend dependencies from the lockfile and run every repository
-check:
+Install the frontend dependencies from the lockfile and run the baseline
+repository checks:
 
 ```sh
 npm ci
 make check
 ```
 
-`make check` runs the fail-on-difference Go formatting check, `go vet`,
-Staticcheck, all Go tests, the foundation configuration and clean-build checks,
-a clean npm install, the fail-on-difference frontend formatting check,
-TypeScript checks, frontend tests, and the production frontend build in that
-order.
+`make check` runs workflow policy, the fail-on-difference Go formatting check,
+`go vet`, Staticcheck, default-tag Go tests, Node contract tests, a clean Go
+build, a clean npm install, the fail-on-difference frontend formatting check,
+TypeScript checks, frontend tests, and the production frontend build. It does
+not include actionlint, race tests, browser or Azurite integration, container
+smoke, SBOM generation, or vulnerability scanning. The complete commands,
+toolchain parity, cleanup rules, and first-production order are in the
+[development and first-release guide](docs/development-and-first-release.md).
 
 Build the React bundle first and then the single Go executable:
 
@@ -90,6 +93,8 @@ path provisions those resources explicitly for Azurite/local tests. Setting
 
 Keep infrastructure bootstrap, the one-time custom-domain operation, and
 routine CI application rollouts separate. Start with the
+[development and first-release guide](docs/development-and-first-release.md)
+for the complete ordered gate sequence, then use the
 [Azure operations runbook](docs/operations.md), copy the reviewed
 [main parameter example](infra/main.example.bicepparam) to an ignored local
 file for bootstrap, and use the
