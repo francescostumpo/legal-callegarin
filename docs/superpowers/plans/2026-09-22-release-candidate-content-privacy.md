@@ -131,7 +131,7 @@ Run:
 
 ```bash
 go test ./internal/web/public -count=1
-npm test -- --run web/admin/src/App.test.tsx
+npm test -- --run src/App.test.tsx
 npx playwright test e2e/public.spec.ts --project=chromium --grep "privacy page"
 ```
 
@@ -215,7 +215,7 @@ Run:
 gofmt -w internal/web/public/pages.go internal/web/public/contact.go internal/web/public/renderer_test.go internal/web/public/contact_test.go
 npx prettier --write internal/webassets/templates/pages/contact.html internal/webassets/templates/partials/footer.html web/admin/src/App.tsx web/admin/src/App.test.tsx e2e/public.spec.ts
 go test ./internal/web/public ./internal/app -count=1
-npm test -- --run web/admin/src/App.test.tsx
+npm test -- --run src/App.test.tsx
 npm run typecheck
 npx playwright test e2e/public.spec.ts --project=chromium --grep "privacy page"
 rg -n 'DATO DA CONFERMARE|DA VALIDARE CON IL PROFESSIONISTA' internal/web/public internal/webassets/templates
@@ -260,7 +260,7 @@ assert.doesNotMatch(runtimePublicCopy, /DATO DA CONFERMARE/)
 assert.doesNotMatch(runtimePublicCopy, /DA VALIDARE CON IL PROFESSIONISTA/)
 ```
 
-Require Release 2 terms for `Ordine`, `numero e data di iscrizione`, `partita IVA`, `codice fiscale`, `domicilio digitale`, `approvazione dell’avvocato`, `responsabili`, `trasferimenti`, `dominio`, `DNS`, `TLS`, `RPO`, `RTO`, `restore`, `accessibilità`, and `sign-off`.
+Require Release 2 terms for `Ordine`, `numero e data di iscrizione`, `partita IVA`, `codice fiscale`, `domicilio digitale`, `approvazione dell’avvocato`, `responsabili`, `trasferimenti`, `dominio`, `DNS`, `TLS`, `articoli`, `RPO`, `RTO`, `restore`, `accessibilità`, and `sign-off`.
 
 - [ ] **Step 2: Prove the documentation test fails**
 
@@ -297,6 +297,8 @@ approvatore, data ed evidenza verificabile.
 - Dominio, policy apex/`www`, DNS, TLS, canonical e indicizzazione:
   `DA ACQUISIRE`.
 - Parametri e segreti Azure/GHCR/OIDC e prova dell’artefatto reale:
+  `DA ACQUISIRE`.
+- Articoli iniziali approvati, qualora il lancio non utilizzi il catalogo vuoto:
   `DA ACQUISIRE`.
 
 ## Continuità, accessibilità e rilascio
