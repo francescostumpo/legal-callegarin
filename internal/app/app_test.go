@@ -257,7 +257,7 @@ func TestGlobalMiddlewareAndDesignedNotFoundWorkWithoutAdminCredentials(t *testi
 		}
 		if path != "/" {
 			body := response.Body.String()
-			if response.Code != http.StatusNotFound || !strings.Contains(body, "Studio Legale Alessandro Callegarin") || !strings.Contains(body, "/contatti") || !strings.Contains(body, "Telefono: DATO DA CONFERMARE") || !strings.Contains(body, response.Header().Get("X-Request-ID")) {
+			if response.Code != http.StatusNotFound || !strings.Contains(body, "Studio Legale Alessandro Callegarin") || !strings.Contains(body, "/contatti") || !strings.Contains(body, `href="tel:+390331792529"`) || !strings.Contains(body, response.Header().Get("X-Request-ID")) {
 				t.Fatalf("designed 404 = status %d body %q", response.Code, body)
 			}
 		}

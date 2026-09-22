@@ -20,7 +20,7 @@ test("@smoke public site and authenticated console are available", async ({
   await expect(
     page.getByRole("heading", {
       level: 1,
-      name: "Ascolto, visione e rigore per ciò che conta davvero.",
+      name: "Assistenza legale chiara e rigorosa, vicina alle persone e alle loro esigenze.",
     }),
   ).toBeVisible()
   await expect(

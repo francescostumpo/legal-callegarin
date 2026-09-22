@@ -12,11 +12,8 @@
   <div class="content-section">
     <h2>Contatta lo studio</h2>
     <p>Se necessario, puoi usare i recapiti diretti:</p>
-    <ul>
-      <li>Telefono: DATO DA CONFERMARE</li>
-      <li>Email: DATO DA CONFERMARE</li>
-      <li><a href="/contatti">Pagina contatti</a></li>
-    </ul>
+    {{template "contact-details" .}}
+    <p><a href="/contatti">Pagina contatti</a></p>
   </div>
   {{if .RequestID}}
   <p class="field-help">Riferimento assistenza: <code>{{.RequestID}}</code></p>

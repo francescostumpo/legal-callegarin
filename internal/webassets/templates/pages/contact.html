@@ -12,8 +12,8 @@
 </header>
 
 <div class="development-notice shell" role="note">
-  DA VALIDARE CON IL PROFESSIONISTA — recapiti, informativa e formulazioni
-  legali sono contenuti di sviluppo.
+  DA VALIDARE CON IL PROFESSIONISTA — informativa e formulazioni legali sono
+  contenuti di sviluppo.
 </div>
 
 <section
@@ -23,21 +23,15 @@
   <div class="contact-details content-section">
     <p class="eyebrow">Recapiti diretti</p>
     <h2>Contatta lo studio</h2>
-    <ul>
-      <li>Telefono: DATO DA CONFERMARE</li>
-      <li>Email: DATO DA CONFERMARE</li>
-      <li>PEC: DATO DA CONFERMARE</li>
-      <li>Indirizzo e orari: DATO DA CONFERMARE</li>
-    </ul>
-    {{if .StorageOutcomeUnknown}}
+    {{template "contact-details" .}} {{if .StorageOutcomeUnknown}}
     <p>
-      Se la richiesta è urgente, usa i recapiti diretti, al momento indicati
-      come DATO DA CONFERMARE.
+      Se la richiesta è urgente, usa i recapiti diretti indicati in questa
+      pagina.
     </p>
     {{else}}
     <p>
-      Se l’invio non riesce, puoi riprovare oppure usare uno dei recapiti
-      diretti dopo la loro conferma.
+      Se l’invio non riesce, riprova oppure usa i recapiti diretti indicati in
+      questa pagina.
     </p>
     {{end}}
   </div>
@@ -58,8 +52,7 @@
       <h3>Non è possibile confermare la ricezione</h3>
       <p>
         Per evitare duplicati, non inviare di nuovo la richiesta. Se la
-        richiesta è urgente, usa i recapiti diretti, al momento indicati come
-        DATO DA CONFERMARE.
+        richiesta è urgente, usa i recapiti diretti indicati in questa pagina.
       </p>
     </div>
     {{else}} {{if .Success}}
@@ -86,9 +79,8 @@
     >
       <h3>Il messaggio non è stato registrato</h3>
       <p>
-        Riprova tra poco. In alternativa usa i recapiti diretti, al momento
-        indicati come DATO DA CONFERMARE. Nessuna conferma di invio è stata
-        generata.
+        Riprova tra poco. In alternativa usa i recapiti diretti indicati in
+        questa pagina. Nessuna conferma di invio è stata generata.
       </p>
     </div>
     {{end}} {{if .ErrorSummary}}

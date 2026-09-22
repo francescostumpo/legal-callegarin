@@ -9,7 +9,16 @@
     </div>
     <div>
       <p class="eyebrow">Informazioni</p>
-      <p>Sede, indirizzo e recapiti: DATO DA CONFERMARE</p>
+      {{with studioContact .Contact}}
+      <p>{{.Address}}</p>
+      <p>
+        Telefono:
+        <a {{studioContactHref .PhoneHref}}>{{.PhoneDisplay}}</a><br />
+        Email: <a {{studioContactHref .EmailHref}}>{{.Email}}</a><br />
+        PEC: <a {{studioContactHref .PECHref}}>{{.PEC}}</a><br />
+        Orari: {{.Hours}}
+      </p>
+      {{end}}
     </div>
     <nav aria-label="Informazioni legali">
       <a href="/privacy-cookie-policy">Privacy e cookie policy</a>

@@ -34,7 +34,7 @@ type PageData struct {
 	Sections          []ContentSection
 	Areas             []PracticeArea
 	HighlightedAreas  []PracticeArea
-	DevelopmentNotice string
+	Contact           StudioContact
 	Robots            string
 	OpenGraphType     string
 	OpenGraphURL      string
@@ -42,6 +42,28 @@ type PageData struct {
 	StructuredData    template.JS
 	CSPNonce          string
 	Articles          []ArticleCard
+}
+
+type StudioContact struct {
+	PhoneDisplay string
+	PhoneHref    string
+	Email        string
+	EmailHref    string
+	PEC          string
+	PECHref      string
+	Address      string
+	Hours        string
+}
+
+var confirmedStudioContact = StudioContact{
+	PhoneDisplay: "0331 792529",
+	PhoneHref:    "tel:+390331792529",
+	Email:        "callegarinale@gmail.com",
+	EmailHref:    "mailto:callegarinale@gmail.com",
+	PEC:          "alessandro.callegarin@busto.pecavvocati.it",
+	PECHref:      "mailto:alessandro.callegarin@busto.pecavvocati.it",
+	Address:      "Via Borghi 8, Gallarate (VA)",
+	Hours:        "Dal lunedì al venerdì, 09:00–12:30 e 15:00–19:00",
 }
 
 type NavigationItem struct {
@@ -87,24 +109,22 @@ func pageCatalog(images map[string]EditorialImage) map[string]PageData {
 	pages := map[string]PageData{
 		"/": {
 			Title: "Studio Legale Alessandro Callegarin", Description: "Assistenza legale per persone, famiglie e patrimoni a Gallarate e in provincia di Varese.", Path: "/", Kind: pageKindHome,
-			Eyebrow: "Studio legale", Heading: "Ascolto, visione e rigore per ciò che conta davvero.", Lead: "Assistenza legale chiara e riservata per persone, famiglie e patrimoni.",
+			Eyebrow: "Studio legale", Heading: "Assistenza legale chiara e rigorosa, vicina alle persone e alle loro esigenze.", Lead: "Lo Studio Legale Alessandro Callegarin offre consulenza e assistenza a Gallarate e nel territorio della provincia di Varese, con un approccio fondato sull’ascolto, sulla chiarezza e sulla valutazione concreta di ogni situazione.",
 			HeroImage: images["hero-architecture"], ApproachImage: images["approach-library"], ArticleImage: images["article-notebook"], ContactImage: images["contact-entrance"], Areas: areas, HighlightedAreas: areas[:4],
-			DevelopmentNotice: "DATO DA CONFERMARE — presentazione professionale e dichiarazione autoriale da validare con il professionista.",
 		},
 		"/profilo": {
 			Title: "Profilo", Description: "Profilo professionale dello Studio Legale Alessandro Callegarin.", Path: "/profilo", Kind: pageKindProfile,
-			Eyebrow: "Profilo", Heading: "Competenze e percorso professionale", Lead: "Le informazioni professionali definitive saranno pubblicate soltanto dopo approvazione.", HeroImage: images["hero-architecture"],
-			Sections:          []ContentSection{{Heading: "Informazioni professionali", Paragraphs: []string{"DATO DA CONFERMARE — biografia, iscrizione all'ordine, foro di riferimento e qualifiche professionali."}}, {Heading: "Attività", Paragraphs: []string{"DATO DA CONFERMARE — esperienza, incarichi e metodo professionale da validare con il professionista."}}},
-			DevelopmentNotice: "I dati presenti in questa pagina sono marcatori di sviluppo e non descrivono credenziali professionali.",
+			Eyebrow: "Profilo", Heading: "Alessandro Callegarin", Lead: "Alessandro Callegarin si è laureato in Giurisprudenza presso l’Università degli Studi di Milano nel 2018. Svolge l’attività di avvocato a Gallarate dal 2022.", HeroImage: images["hero-architecture"],
+			Sections: []ContentSection{{Heading: "Approccio", Paragraphs: []string{"Ogni questione richiede attenzione, metodo e una valutazione costruita sulle reali esigenze della persona.", "L’obiettivo è offrire indicazioni comprensibili, illustrare con trasparenza le possibili strade e individuare la tutela più appropriata per il caso concreto."}}, {Heading: "Ambiti di attività", Paragraphs: []string{"Lo Studio assiste privati, famiglie e realtà del territorio in materia di diritto civile, penale e tributario. L’attività comprende, in particolare, separazioni e divorzi, tutela delle persone e dei minori, successioni e donazioni, contratti e locazioni, recupero crediti, risarcimento dei danni, diritti reali, procedimenti penali e contenzioso tributario."}}},
 		},
 		"/approccio": {
 			Title: "Approccio", Description: "Principi di lavoro, riservatezza e relazione con il cliente.", Path: "/approccio", Kind: pageKindApproach,
-			Eyebrow: "Approccio", Heading: "Comprendere prima di indicare una direzione", Lead: "Ogni questione richiede ascolto, parole comprensibili e una valutazione proporzionata.", HeroImage: images["approach-library"],
-			Sections: []ContentSection{{Heading: "Ascolto e chiarezza", Paragraphs: []string{"Il primo passaggio è ricostruire con ordine fatti, priorità e aspettative, rendendo leggibili alternative e conseguenze."}}, {Heading: "Riservatezza", Paragraphs: []string{"Le informazioni sono trattate con discrezione e secondo le regole applicabili. Le modalità definitive sono DA VALIDARE CON IL PROFESSIONISTA."}}, {Heading: "Relazione", Paragraphs: []string{"Aggiornamenti e passaggi operativi vengono espressi in modo diretto, senza promettere risultati e senza semplificare ciò che richiede cautela."}}},
+			Eyebrow: "Approccio", Heading: "Comprendere prima di indicare una direzione", Lead: "Ogni questione richiede attenzione, metodo e una valutazione costruita sulle reali esigenze della persona.", HeroImage: images["approach-library"],
+			Sections: []ContentSection{{Heading: "Chiarezza e trasparenza", Paragraphs: []string{"L’obiettivo è offrire indicazioni comprensibili, illustrare con trasparenza le possibili strade e individuare la tutela più appropriata per il caso concreto."}}, {Heading: "Riservatezza", Paragraphs: []string{"Le informazioni sono trattate con discrezione e secondo le regole applicabili. Le modalità definitive sono DA VALIDARE CON IL PROFESSIONISTA."}}, {Heading: "Relazione", Paragraphs: []string{"Aggiornamenti e passaggi operativi vengono espressi in modo diretto, senza promettere risultati e senza semplificare ciò che richiede cautela."}}},
 		},
 		"/aree-di-attivita": {
 			Title: "Aree di attività", Description: "Le aree di assistenza legale per persone, famiglie, patrimoni e piccole attività.", Path: "/aree-di-attivita", Kind: pageKindAreas,
-			Eyebrow: "Competenze", Heading: "Aree di attività", Lead: "Una panoramica dei principali ambiti di assistenza, con percorsi dedicati alle diverse esigenze.", HeroImage: images["contracts-pen"], Areas: areas,
+			Eyebrow: "Competenze", Heading: "Aree di attività", Lead: "Lo Studio assiste privati, famiglie e realtà del territorio in materia di diritto civile, penale e tributario. L’attività comprende, in particolare, separazioni e divorzi, tutela delle persone e dei minori, successioni e donazioni, contratti e locazioni, recupero crediti, risarcimento dei danni, diritti reali, procedimenti penali e contenzioso tributario.", HeroImage: images["contracts-pen"], Areas: areas,
 		},
 		"/sentenze-e-riflessioni": {
 			Title: "Sentenze e riflessioni", Description: "Approfondimenti su decisioni e temi di diritto.", Path: "/sentenze-e-riflessioni", Kind: pageKindArticles,
@@ -113,8 +133,8 @@ func pageCatalog(images map[string]EditorialImage) map[string]PageData {
 		},
 		"/contatti": {
 			Title: "Contatti", Description: "Contatti dello Studio Legale Alessandro Callegarin.", Path: "/contatti", Kind: pageKindContact,
-			Eyebrow: "Contatti", Heading: "Un primo confronto, con riservatezza", Lead: "I recapiti definitivi saranno resi disponibili soltanto dopo conferma professionale.", HeroImage: images["contact-entrance"],
-			Sections: []ContentSection{{Heading: "Recapiti", Items: []string{"Territorio: Gallarate e provincia di Varese", "Telefono: DATO DA CONFERMARE", "Email: DATO DA CONFERMARE", "PEC: DATO DA CONFERMARE", "Indirizzo: DATO DA CONFERMARE", "Orari: DATO DA CONFERMARE"}}, {Heading: "Richiesta di contatto", Paragraphs: []string{"Il modulo di contatto sarà attivato in una fase successiva. L'invio di una richiesta non costituisce conferimento di incarico."}}},
+			Eyebrow: "Contatti", Heading: "Un primo confronto, con riservatezza", Lead: "Recapiti diretti e modulo per una prima richiesta di contatto.", HeroImage: images["contact-entrance"],
+			Sections: []ContentSection{{Heading: "Richiesta di contatto", Paragraphs: []string{"L’invio di una richiesta non costituisce conferimento di incarico."}}},
 		},
 		"/privacy-cookie-policy": {
 			Title: "Privacy e cookie policy", Description: "Informazioni sul trattamento dei dati e sull'uso dei cookie.", Path: "/privacy-cookie-policy", Kind: pageKindPrivacyPolicy,
@@ -152,6 +172,7 @@ func pageCatalog(images map[string]EditorialImage) map[string]PageData {
 	for path, page := range pages {
 		page.SiteName = "Studio Legale Alessandro Callegarin"
 		page.Navigation = navigationFor(path)
+		page.Contact = confirmedStudioContact
 		pages[path] = page
 	}
 	return pages

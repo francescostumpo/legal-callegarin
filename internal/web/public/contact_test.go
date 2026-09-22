@@ -267,8 +267,9 @@ func TestContactFormStorageFailureAndPanicDoNotLeakOrClaimSuccess(t *testing.T) 
 			if response.Code != http.StatusServiceUnavailable || response.Header().Get("Location") != "" || strings.Contains(response.Body.String(), "Richiesta ricevuta") {
 				t.Fatalf("storage failure response = status %d Location %q body %q", response.Code, response.Header().Get("Location"), response.Body.String())
 			}
-			for _, fragment := range []string{"Riprova", "DATO DA CONFERMARE"} {
-				if !strings.Contains(response.Body.String(), fragment) {
+			normalizedBody := strings.Join(strings.Fields(response.Body.String()), " ")
+			for _, fragment := range []string{"Riprova", "usa i recapiti diretti indicati in questa pagina", `href="tel:+390331792529"`} {
+				if !strings.Contains(normalizedBody, fragment) {
 					t.Errorf("storage failure body lacks %q", fragment)
 				}
 			}
@@ -351,12 +352,13 @@ func TestContactFormUnknownCommitWarnsAgainstDuplicateSubmissionWithoutLeakingDa
 	form.Set("message", secrets[3])
 	response := submitContactForm(handler, form, "studio.example.test", "https://studio.example.test", "203.0.113.111:4000")
 	body := response.Body.String()
+	normalizedBody := strings.Join(strings.Fields(body), " ")
 
 	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Location") != "" || response.Header().Get("Set-Cookie") != "" {
 		t.Fatalf("unknown commit response = status %d Location %q Set-Cookie %q", response.Code, response.Header().Get("Location"), response.Header().Get("Set-Cookie"))
 	}
-	for _, fragment := range []string{"Non è possibile confermare la ricezione", "non inviare di nuovo", "recapiti diretti", "DATO DA CONFERMARE"} {
-		if !strings.Contains(body, fragment) {
+	for _, fragment := range []string{"Non è possibile confermare la ricezione", "non inviare di nuovo", "usa i recapiti diretti indicati in questa pagina", `href="tel:+390331792529"`} {
+		if !strings.Contains(normalizedBody, fragment) {
 			t.Errorf("unknown commit body lacks %q", fragment)
 		}
 	}
@@ -408,6 +410,9 @@ func TestContactFormSignedSuccessInvalidExpiredAndPrivacyRetentionCopy(t *testin
 	normalizedBody := strings.Join(strings.Fields(body), " ")
 	for _, copy := range []string{
 		"non costituisce conferimento di incarico",
+		`href="tel:+390331792529"`,
+		`href="mailto:callegarinale@gmail.com"`,
+		`href="mailto:alessandro.callegarin@busto.pecavvocati.it"`,
 		"non inviare documenti",
 		"dati sensibili non necessari",
 		"Titolare del trattamento",

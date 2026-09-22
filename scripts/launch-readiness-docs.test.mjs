@@ -155,7 +155,7 @@ test("lawyer, contact, editorial, and runtime-marker gates are complete", () => 
 
   assert.match(runtimePublicCopy, /DATO DA CONFERMARE/)
   assert.match(runtimePublicCopy, /DA VALIDARE CON IL PROFESSIONISTA/)
-  assert.match(
+  assert.doesNotMatch(
     publicPages,
     /Il modulo di contatto sarà attivato in una fase successiva/,
   )

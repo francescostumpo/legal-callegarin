@@ -17,7 +17,7 @@ func (renderer *Renderer) WriteError(response http.ResponseWriter, request *http
 		SiteName: "Studio Legale Alessandro Callegarin", Title: title,
 		Description: lead, CanonicalURL: renderer.baseURL, Path: "", Kind: "error",
 		Eyebrow: "Informazione di servizio", Heading: heading, Lead: lead,
-		Navigation: navigationFor(""), Robots: "noindex, nofollow",
+		Navigation: navigationFor(""), Contact: confirmedStudioContact, Robots: "noindex, nofollow",
 	}
 	renderer.applyPageSEO(&page, "website", renderer.images["contact-entrance"], nil)
 	data := errorPageData{PageData: page, RequestID: response.Header().Get("X-Request-ID")}

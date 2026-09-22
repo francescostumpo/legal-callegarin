@@ -63,6 +63,91 @@ func TestStaticRoutesRenderSemanticHTMLWithoutCookies(t *testing.T) {
 	}
 }
 
+func TestApprovedPublicCopyAndContactsRenderWithoutForbiddenClaims(t *testing.T) {
+	t.Parallel()
+
+	handler := newPublicHandler(t)
+	tests := []struct {
+		path     string
+		status   int
+		required []string
+	}{
+		{
+			path:   "/",
+			status: http.StatusOK,
+			required: []string{
+				"Assistenza legale chiara e rigorosa, vicina alle persone e alle loro esigenze.",
+				"Lo Studio Legale Alessandro Callegarin offre consulenza e assistenza a Gallarate e nel territorio della provincia di Varese, con un approccio fondato sull’ascolto, sulla chiarezza e sulla valutazione concreta di ogni situazione.",
+				"Comprendere il problema, chiarire le possibilità, costruire una tutela concreta.",
+			},
+		},
+		{
+			path:   "/profilo",
+			status: http.StatusOK,
+			required: []string{
+				"Alessandro Callegarin si è laureato in Giurisprudenza presso l’Università degli Studi di Milano nel 2018.",
+				"Svolge l’attività di avvocato a Gallarate dal 2022.",
+			},
+		},
+		{
+			path:   "/approccio",
+			status: http.StatusOK,
+			required: []string{
+				"Ogni questione richiede attenzione, metodo e una valutazione costruita sulle reali esigenze della persona.",
+				"L’obiettivo è offrire indicazioni comprensibili, illustrare con trasparenza le possibili strade e individuare la tutela più appropriata per il caso concreto.",
+			},
+		},
+		{
+			path:   "/aree-di-attivita",
+			status: http.StatusOK,
+			required: []string{
+				"Lo Studio assiste privati, famiglie e realtà del territorio in materia di diritto civile, penale e tributario. L’attività comprende, in particolare, separazioni e divorzi, tutela delle persone e dei minori, successioni e donazioni, contratti e locazioni, recupero crediti, risarcimento dei danni, diritti reali, procedimenti penali e contenzioso tributario.",
+			},
+		},
+		{
+			path:     "/contatti",
+			status:   http.StatusOK,
+			required: []string{"L’invio di una richiesta non costituisce conferimento di incarico."},
+		},
+		{
+			path:     "/pagina-inesistente",
+			status:   http.StatusNotFound,
+			required: []string{"La pagina non è disponibile"},
+		},
+	}
+	forbidden := []string{"103/110", "volontariato", "avvocato associato"}
+	contactRequired := []string{
+		`href="tel:+390331792529"`,
+		"0331 792529",
+		`href="mailto:callegarinale@gmail.com"`,
+		`href="mailto:alessandro.callegarin@busto.pecavvocati.it"`,
+		"Via Borghi 8, Gallarate (VA)",
+		"Dal lunedì al venerdì, 09:00–12:30 e 15:00–19:00",
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if response.Code != tt.status {
+				t.Fatalf("GET %s status = %d, want %d", tt.path, response.Code, tt.status)
+			}
+			body := response.Body.String()
+			normalizedBody := strings.Join(strings.Fields(body), " ")
+			for _, required := range append(tt.required, contactRequired...) {
+				if !strings.Contains(normalizedBody, required) {
+					t.Errorf("GET %s body lacks %q", tt.path, required)
+				}
+			}
+			for _, claim := range forbidden {
+				if strings.Contains(strings.ToLower(body), strings.ToLower(claim)) {
+					t.Errorf("GET %s body contains forbidden claim %q", tt.path, claim)
+				}
+			}
+		})
+	}
+}
+
 func TestDesignedPublicErrorsCoverRecoverableStatusesWithoutInternalDetails(t *testing.T) {
 	renderer, err := publicweb.NewRenderer(webassets.Files, canonicalBaseURL)
 	if err != nil {
@@ -76,7 +161,7 @@ func TestDesignedPublicErrorsCoverRecoverableStatusesWithoutInternalDetails(t *t
 		if response.Code != status || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("X-Robots-Tag") != "noindex, nofollow" {
 			t.Fatalf("status %d error response = status %d headers %#v", status, response.Code, response.Header())
 		}
-		for _, required := range []string{"Studio Legale Alessandro Callegarin", "/contatti", "Telefono: DATO DA CONFERMARE", "safe-reference"} {
+		for _, required := range []string{"Studio Legale Alessandro Callegarin", "/contatti", `href="tel:+390331792529"`, "safe-reference"} {
 			if !strings.Contains(body, required) {
 				t.Errorf("status %d body lacks %q", status, required)
 			}
@@ -110,7 +195,7 @@ func TestHomeFollowsApprovedSectionOrderAndLocality(t *testing.T) {
 	if strings.Count(body, "Gallarate e provincia di Varese") != 1 {
 		t.Fatalf("approved locality occurrence count = %d, want 1", strings.Count(body, "Gallarate e provincia di Varese"))
 	}
-	for _, unapproved := range []string{"Lombardia", "Milano", "via ", "Viale ", "Piazza "} {
+	for _, unapproved := range []string{"Lombardia", "via ", "Viale ", "Piazza "} {
 		if strings.Contains(body, unapproved) {
 			t.Fatalf("home contains unapproved locality detail %q", unapproved)
 		}

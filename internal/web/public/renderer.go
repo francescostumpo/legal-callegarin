@@ -261,14 +261,39 @@ func normalizePublicBaseURL(raw string) (string, error) {
 }
 
 func parsePageTemplate(files fs.FS, assets *assetCatalog, pageTemplate string) (*template.Template, error) {
-	return template.New("public").Funcs(template.FuncMap{"assetURL": assets.publicURL}).Option("missingkey=error").ParseFS(
+	return template.New("public").Funcs(template.FuncMap{
+		"assetURL":          assets.publicURL,
+		"studioContact":     studioContact,
+		"studioContactHref": studioContactHref,
+	}).Option("missingkey=error").ParseFS(
 		files,
 		"templates/layouts/base.html",
 		"templates/partials/header.html",
 		"templates/partials/footer.html",
 		"templates/partials/picture.html",
+		"templates/partials/contact-details.html",
 		pageTemplate,
 	)
+}
+
+func studioContact(contact StudioContact) StudioContact {
+	if contact == (StudioContact{}) {
+		return confirmedStudioContact
+	}
+	return contact
+}
+
+func studioContactHref(raw string) template.HTMLAttr {
+	for _, confirmed := range []string{
+		confirmedStudioContact.PhoneHref,
+		confirmedStudioContact.EmailHref,
+		confirmedStudioContact.PECHref,
+	} {
+		if raw == confirmed {
+			return template.HTMLAttr(`href="` + raw + `"`)
+		}
+	}
+	return `href="#"`
 }
 
 func loadEditorialImages(files fs.FS, assets *assetCatalog) (map[string]EditorialImage, error) {

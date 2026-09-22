@@ -11,8 +11,15 @@
   </div>
 </header>
 
-{{if .DevelopmentNotice}}
-<div class="development-notice shell" role="note">{{.DevelopmentNotice}}</div>
+{{if eq .Kind "contact"}}
+<section
+  class="section shell content-section"
+  aria-labelledby="contact-heading"
+>
+  <p class="eyebrow">Recapiti diretti</p>
+  <h2 id="contact-heading">Contatta lo studio</h2>
+  {{template "contact-details" .}}
+</section>
 {{end}} {{if .Areas}}
 <section class="section" aria-labelledby="areas-heading">
   <div class="shell">
