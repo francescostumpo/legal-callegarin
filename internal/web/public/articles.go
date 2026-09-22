@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"html/template"
@@ -204,13 +205,49 @@ func (renderer *Renderer) writeArticleReadError(response http.ResponseWriter, re
 }
 
 func writeRevalidatingHTML(response http.ResponseWriter, request *http.Request, body []byte) {
-	if setRevalidationHeaders(response, request, body) {
+	authorizeStructuredData(response.Header(), body)
+	if setHTMLRevalidationHeaders(response, request, body) {
 		response.WriteHeader(http.StatusNotModified)
 		return
 	}
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(withResponseNonce(body, request))
+}
+
+func authorizeStructuredData(header http.Header, body []byte) {
+	const opening = `<script type="application/ld+json" nonce="`
+	start := bytes.Index(body, []byte(opening))
+	if start < 0 {
+		return
+	}
+	contentStart := bytes.IndexByte(body[start:], '>')
+	if contentStart < 0 {
+		return
+	}
+	contentStart += start + 1
+	contentEnd := bytes.Index(body[contentStart:], []byte("</script>"))
+	if contentEnd < 0 {
+		return
+	}
+	contentEnd += contentStart
+	digest := sha256.Sum256(body[contentStart:contentEnd])
+	source := "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
+	csp := header.Get("Content-Security-Policy")
+	if csp == "" || strings.Contains(csp, source) {
+		return
+	}
+	directiveStart := strings.Index(csp, "script-src ")
+	if directiveStart < 0 {
+		return
+	}
+	directiveEnd := strings.IndexByte(csp[directiveStart:], ';')
+	if directiveEnd < 0 {
+		directiveEnd = len(csp)
+	} else {
+		directiveEnd += directiveStart
+	}
+	header.Set("Content-Security-Policy", csp[:directiveEnd]+" "+source+csp[directiveEnd:])
 }
 
 func withResponseNonce(body []byte, request *http.Request) []byte {
@@ -222,21 +259,77 @@ func withResponseNonce(body []byte, request *http.Request) []byte {
 }
 
 func setRevalidationHeaders(response http.ResponseWriter, request *http.Request, body []byte) bool {
+	return setRevalidationHeadersWithStrength(response, request, body, false)
+}
+
+func setHTMLRevalidationHeaders(response http.ResponseWriter, request *http.Request, body []byte) bool {
+	return setRevalidationHeadersWithStrength(response, request, body, true)
+}
+
+func setRevalidationHeadersWithStrength(response http.ResponseWriter, request *http.Request, body []byte, weak bool) bool {
 	digest := sha256.Sum256(body)
 	etag := `"` + fmt.Sprintf("%x", digest[:]) + `"`
+	if weak {
+		etag = "W/" + etag
+	}
 	response.Header().Set("ETag", etag)
 	response.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
 	return etagMatches(request.Header.Get("If-None-Match"), etag)
 }
 
 func etagMatches(header, etag string) bool {
-	for _, candidate := range strings.Split(header, ",") {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "*" || candidate == etag || strings.TrimPrefix(candidate, "W/") == etag {
+	want, ok := weakOpaqueTag(etag)
+	if !ok {
+		return false
+	}
+	rest := header
+	for {
+		rest = strings.TrimLeft(rest, " \t")
+		if rest == "" {
+			return false
+		}
+		if rest[0] == '*' {
+			return strings.TrimSpace(rest[1:]) == ""
+		}
+		quote := 0
+		if strings.HasPrefix(rest, "W/") {
+			quote = 2
+		}
+		if len(rest) <= quote || rest[quote] != '"' {
+			return false
+		}
+		closing := strings.IndexByte(rest[quote+1:], '"')
+		if closing < 0 {
+			return false
+		}
+		closing += quote + 1
+		candidate := rest[:closing+1]
+		if opaque, valid := weakOpaqueTag(candidate); valid && opaque == want {
 			return true
 		}
+		rest = strings.TrimLeft(rest[closing+1:], " \t")
+		if rest == "" {
+			return false
+		}
+		if rest[0] != ',' {
+			return false
+		}
+		rest = rest[1:]
 	}
-	return false
+}
+
+func weakOpaqueTag(etag string) (string, bool) {
+	etag = strings.TrimSpace(etag)
+	etag = strings.TrimPrefix(etag, "W/")
+	if len(etag) < 2 || etag[0] != '"' || etag[len(etag)-1] != '"' {
+		return "", false
+	}
+	for _, character := range []byte(etag[1 : len(etag)-1]) {
+		if character < 0x21 || character == 0x22 || character == 0x7f {
+			return "", false
+		}
+	}
+	return etag, true
 }
 
 type canonicalArticleRedirect struct{ slug string }

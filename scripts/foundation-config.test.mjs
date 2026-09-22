@@ -36,7 +36,7 @@ test("a clean checkout retains the binary output directory", async () => {
   assert.match(makefile, /^\t\.\/scripts\/check-clean-build\.sh$/m)
 })
 
-test("the frontend formatter is pinned and ordered after npm ci", async () => {
+test("make check installs and builds the frontend before Go validation", async () => {
   const [packageJSON, makefile] = await Promise.all([
     readRepositoryFile("package.json"),
     readRepositoryFile("Makefile"),
@@ -49,13 +49,32 @@ test("the frontend formatter is pinned and ordered after npm ci", async () => {
     'prettier --check "*.{json,md}" "scripts/**/*.mjs" "web/admin/**/*.{ts,tsx,html,css,json,md}" "internal/webassets/**/*.{html,css}"',
   )
 
-  const installIndex = makefile.indexOf("\tnpm ci")
-  const formatIndex = makefile.indexOf("\tnpm run format:check")
-  const typecheckIndex = makefile.indexOf("\tnpm run typecheck")
+  const checkRecipe = makefile.slice(
+    makefile.indexOf("check: workflow-policy"),
+    makefile.indexOf("container-smoke:"),
+  )
+  const installIndex = checkRecipe.indexOf("\tnpm ci")
+  const formatIndex = checkRecipe.indexOf("\tnpm run format:check")
+  const typecheckIndex = checkRecipe.indexOf("\tnpm run typecheck")
+  const frontendTestIndex = checkRecipe.indexOf("\tnpm test -- --run")
+  const buildIndex = checkRecipe.indexOf("\tnpm run build")
 
   assert.notEqual(installIndex, -1)
   assert.ok(formatIndex > installIndex)
   assert.ok(typecheckIndex > formatIndex)
+  assert.ok(frontendTestIndex > typecheckIndex)
+  assert.ok(buildIndex > frontendTestIndex)
+  for (const goConsumer of [
+    "\tgo vet ./...",
+    "\tgo tool staticcheck ./...",
+    "\tgo test ./...",
+    "\t./scripts/check-clean-build.sh",
+  ]) {
+    assert.ok(
+      checkRecipe.indexOf(goConsumer) > buildIndex,
+      `${goConsumer.trim()} must run after the frontend build`,
+    )
+  }
 })
 
 test("the container build uses three immutable, exact toolchain stages", async () => {

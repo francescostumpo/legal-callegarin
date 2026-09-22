@@ -242,12 +242,9 @@ test("make check is described exactly, including the checks it deliberately excl
   ])
   requireTerms(guide, [
     /workflow policy/i,
-    /gofmt[^.]*fail-on-difference/is,
-    /`go vet`[^.]*Staticcheck/is,
-    /test Go[^.]*tag predefinit/is,
-    /contratti Node/i,
-    /build Go[^.]*pulit/is,
     /`npm ci`[^.]*Prettier[^.]*TypeScript[^.]*Vitest[^.]*build frontend/is,
+    /generazione degli asset[^.]*contratti Node[^.]*gofmt[^.]*fail-on-difference/is,
+    /`go vet`[^.]*Staticcheck[^.]*test Go[^.]*tag predefinit[^.]*build Go[^.]*pulit/is,
     /non include[^.]*actionlint[^.]*race[^.]*Playwright[^.]*Azurite[^.]*container smoke[^.]*SBOM[^.]*vulnerabilit/is,
   ])
   assert.doesNotMatch(readme, /run every repository check/i)
@@ -268,6 +265,18 @@ test("make check is described exactly, including the checks it deliberately excl
     /npm test -- --run/,
     /npm run build/,
   ])
+  const frontendBuild = checkRecipe.indexOf("\tnpm run build")
+  for (const goConsumer of [
+    "\tgo vet ./...",
+    "\tgo tool staticcheck ./...",
+    "\tgo test ./...",
+    "\t./scripts/check-clean-build.sh",
+  ]) {
+    assert.ok(
+      checkRecipe.indexOf(goConsumer) > frontendBuild,
+      `${goConsumer.trim()} must follow the frontend build`,
+    )
+  }
   assertCheckRecipeExclusions(checkRecipe)
 })
 

@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -293,6 +295,82 @@ func TestStructuredDataNonceIsPerResponseAndMatchesCSP(t *testing.T) {
 		}
 		previous = nonce
 	}
+}
+
+func TestCachedPublicHTMLUsesWeakETagAndStableStructuredDataHash(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	clock := &appArticleClock{now: time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)}
+	service := articles.NewService(
+		memory.NewArticleMetadataRepository(),
+		memory.NewArticleBodyStore(clock.Now),
+		clock,
+		&appArticleIDs{},
+	)
+	draft, err := service.CreateDraft(ctx, appArticleDraft("etag-csp", "Titolo ETag CSP", "corpo ETag CSP"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Publish(ctx, draft.ID, draft.ETag); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := New(Options{
+		Config:   config.Config{Environment: "test", PublicBaseURL: "https://studio.example.test"},
+		Assets:   webassets.Files,
+		Articles: service,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"/", "/sentenze-e-riflessioni", "/sentenze-e-riflessioni/etag-csp"} {
+		t.Run(path, func(t *testing.T) {
+			first := httptest.NewRecorder()
+			handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "https://studio.example.test"+path, nil))
+			second := httptest.NewRecorder()
+			handler.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "https://studio.example.test"+path, nil))
+			if first.Code != http.StatusOK || second.Code != http.StatusOK {
+				t.Fatalf("200 responses = %d, %d", first.Code, second.Code)
+			}
+			etag := first.Header().Get("ETag")
+			if !strings.HasPrefix(etag, `W/"`) || second.Header().Get("ETag") != etag {
+				t.Fatalf("ETags = %q, %q; want equal weak validators", etag, second.Header().Get("ETag"))
+			}
+			if first.Body.String() == second.Body.String() {
+				t.Fatal("per-request nonce did not change the HTML representation")
+			}
+			for _, response := range []*httptest.ResponseRecorder{first, second} {
+				nonce, hashSource := structuredDataSecuritySources(t, response.Body.String())
+				csp := response.Header().Get("Content-Security-Policy")
+				if !strings.Contains(csp, "'nonce-"+nonce+"'") || !strings.Contains(csp, hashSource) || strings.Contains(csp, "'unsafe-inline'") {
+					t.Fatalf("CSP %q does not authorize nonce %q and hash %q safely", csp, nonce, hashSource)
+				}
+			}
+
+			_, hashSource := structuredDataSecuritySources(t, first.Body.String())
+			conditionalRequest := httptest.NewRequest(http.MethodGet, "https://studio.example.test"+path, nil)
+			conditionalRequest.Header.Set("If-None-Match", strings.TrimPrefix(etag, "W/"))
+			conditional := httptest.NewRecorder()
+			handler.ServeHTTP(conditional, conditionalRequest)
+			if conditional.Code != http.StatusNotModified || conditional.Body.Len() != 0 || conditional.Header().Get("ETag") != etag {
+				t.Fatalf("conditional = status %d body %q ETag %q", conditional.Code, conditional.Body.String(), conditional.Header().Get("ETag"))
+			}
+			if csp := conditional.Header().Get("Content-Security-Policy"); !strings.Contains(csp, hashSource) || strings.Contains(csp, "'unsafe-inline'") {
+				t.Fatalf("304 CSP %q does not preserve JSON-LD hash %q", csp, hashSource)
+			}
+		})
+	}
+}
+
+func structuredDataSecuritySources(t *testing.T, body string) (string, string) {
+	t.Helper()
+	match := regexp.MustCompile(`(?s)<script type="application/ld\+json" nonce="([^"]+)">(.*?)</script>`).FindStringSubmatch(body)
+	if len(match) != 3 {
+		t.Fatalf("structured data script missing from body: %q", body)
+	}
+	digest := sha256.Sum256([]byte(match[2]))
+	return match[1], "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
 }
 
 func TestNewComposesDevelopmentContactFormWithInjectedClockAndSigningKey(t *testing.T) {

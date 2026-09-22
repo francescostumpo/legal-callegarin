@@ -30,10 +30,11 @@ piattaforma.
 
 ## Cosa copre `make check`
 
-`make check` esegue, nell'ordine, la workflow policy, il controllo gofmt
-fail-on-difference, `go vet`, Staticcheck, i test Go con i tag predefiniti, i
-contratti Node, il build Go pulito, `npm ci`, il controllo Prettier, TypeScript,
-i test Vitest e il build frontend di produzione.
+`make check` esegue, nell'ordine, la workflow policy, `npm ci`, il controllo
+Prettier, TypeScript, i test Vitest e il build frontend di produzione. Solo dopo
+la generazione degli asset esegue i contratti Node, il controllo gofmt
+fail-on-difference, `go vet`, Staticcheck, i test Go con i tag predefiniti e il
+build Go pulito.
 
 Non include actionlint, i test Go con race detector, Playwright, l'integrazione
 Azurite, il container smoke, la generazione SBOM o lo scan delle vulnerabilità.

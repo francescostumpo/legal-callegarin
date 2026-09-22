@@ -79,6 +79,9 @@ func (set *bucketSet) allow(key string, now time.Time) bool {
 			delete(set.buckets, candidate)
 		}
 	}
+	if set.failClosedFull && len(set.buckets) >= set.maxEntries {
+		return false
+	}
 	bucket := set.buckets[key]
 	if bucket == nil {
 		if set.capacity <= 0 || set.refillInterval <= 0 || set.maxEntries <= 0 {

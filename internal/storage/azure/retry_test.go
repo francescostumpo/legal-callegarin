@@ -10,6 +10,15 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 )
 
+func TestExecutorDefaultTimeoutIsFiveSeconds(t *testing.T) {
+	if defaultTimeout != 5*time.Second {
+		t.Fatalf("default timeout = %v, want 5s", defaultTimeout)
+	}
+	if timeout := defaultExecutor().timeout; timeout != 5*time.Second {
+		t.Fatalf("default executor timeout = %v, want 5s", timeout)
+	}
+}
+
 func TestExecutorRetriesOnlyTransientErrors(t *testing.T) {
 	var attempts int
 	var delays []time.Duration

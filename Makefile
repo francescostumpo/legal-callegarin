@@ -26,6 +26,12 @@ build:
 	go build -o ./bin/legal-callegarin ./cmd/web
 
 check: workflow-policy
+	npm ci
+	npm run format:check
+	npm run typecheck
+	npm test -- --run
+	npm run build
+	node --test scripts/*.test.mjs
 	@unformatted="$$(gofmt -l cmd internal)"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "Go files need formatting:"; \
@@ -35,13 +41,7 @@ check: workflow-policy
 	go vet ./...
 	go tool staticcheck ./...
 	go test ./...
-	node --test scripts/*.test.mjs
 	./scripts/check-clean-build.sh
-	npm ci
-	npm run format:check
-	npm run typecheck
-	npm test -- --run
-	npm run build
 
 container-smoke:
 	./scripts/container-smoke.sh

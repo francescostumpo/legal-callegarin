@@ -22,13 +22,14 @@ npm ci
 make check
 ```
 
-`make check` runs workflow policy, the fail-on-difference Go formatting check,
-`go vet`, Staticcheck, default-tag Go tests, Node contract tests, a clean Go
-build, a clean npm install, the fail-on-difference frontend formatting check,
-TypeScript checks, frontend tests, and the production frontend build. It does
-not include actionlint, race tests, browser or Azurite integration, container
-smoke, SBOM generation, or vulnerability scanning. The complete commands,
-toolchain parity, cleanup rules, and first-production order are in the
+`make check` runs workflow policy, a clean npm install, the fail-on-difference
+frontend formatting check, TypeScript checks, frontend tests, and the
+production frontend build before Node contract tests and every Go validation
+or build step. It then runs the fail-on-difference Go formatting check,
+`go vet`, Staticcheck, default-tag Go tests, and a clean Go build.
+It does not include actionlint, race tests, browser or Azurite integration,
+container smoke, SBOM generation, or vulnerability scanning. The complete commands, toolchain
+parity, cleanup rules, and first-production order are in the
 [development and first-release guide](docs/development-and-first-release.md).
 
 Build the React bundle first and then the single Go executable:

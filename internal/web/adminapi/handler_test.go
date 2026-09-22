@@ -391,7 +391,10 @@ func TestLoginLimiterPinsConfiguredUsernameAgainstChurnAndRefills(t *testing.T) 
 		t.Fatalf("blocked/admission-denied churn reached verifier %d times", verifier.calls)
 	}
 
-	now = now.Add(3 * time.Minute)
+	// The fail-closed username map resumes only after an idle entry expires and
+	// frees an admission slot; token refill alone must not reopen the oracle.
+	now = now.Add(time.Hour)
+	token = loginToken(t, handler)
 	if response := submitLoginFrom(handler, token, "admin", "wrong", "203.0.114.1:1000"); response.Code != http.StatusUnauthorized {
 		t.Fatalf("target after refill status = %d, want 401", response.Code)
 	}
@@ -416,6 +419,67 @@ func TestUsernameLimiterFailsClosedAtCapacityWithoutEvictingPinnedBucket(t *test
 	}
 	if !limiter.allowUsername("configured", now.Add(time.Hour)) {
 		t.Fatal("pinned bucket did not recover after refill")
+	}
+}
+
+func TestUsernameLimiterSaturationDeniesExistingAndNewKeysUniformly(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	limiter := newLoginLimiter(2, time.Hour, time.Hour, 2, "configured")
+	if !limiter.allowUsername("configured", now) || !limiter.allowUsername("first-fake", now) {
+		t.Fatal("failed to fill username map")
+	}
+	if limiter.allowUsername("configured", now) {
+		t.Fatal("configured username remained observable through its existing bucket")
+	}
+	if limiter.allowUsername("second-fake", now) {
+		t.Fatal("new username was admitted after saturation")
+	}
+	if limiter.usernameSize() != 2 {
+		t.Fatalf("username map size = %d, want 2", limiter.usernameSize())
+	}
+}
+
+func TestUsernameLimiterSaturationAtMinimumCapacityFailsClosed(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	limiter := newLoginLimiter(2, time.Hour, time.Hour, 1, "configured")
+	if limiter.allowUsername("configured", now) || limiter.allowUsername("unknown", now) {
+		t.Fatal("minimum-capacity username map did not fail closed")
+	}
+	if limiter.usernameSize() != 1 {
+		t.Fatalf("username map size = %d, want 1", limiter.usernameSize())
+	}
+}
+
+func TestLoginPOSTUniformAtUsernameMapSaturation(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	verifier := &verifierStub{err: auth.ErrInvalidCredentials}
+	assets := fstest.MapFS{
+		"admin/dist/index.html":           {Data: []byte("<!doctype html><title>Admin</title>")},
+		"admin/dist/assets/index-test.js": {Data: []byte("console.log('stub')")},
+	}
+	handler, err := New(Options{
+		Credentials: verifier, ConfiguredUsername: "admin", Sessions: &sessionsStub{}, Assets: assets,
+		SessionKey: []byte("0123456789abcdef0123456789abcdef"), PublicBaseURL: "https://studio.example.test",
+		Now: func() time.Time { return now }, LoginCapacity: 100, MaxBuckets: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := loginToken(t, handler)
+	if response := submitLoginFrom(handler, token, "first-fake", "wrong", "192.0.2.1:1000"); response.Code != http.StatusUnauthorized {
+		t.Fatalf("map-filling login status = %d, want 401", response.Code)
+	}
+	configured := submitLoginFrom(handler, token, "admin", "wrong", "198.51.100.1:1000")
+	unknown := submitLoginFrom(handler, token, "second-fake", "wrong", "203.0.113.1:1000")
+	const message = "Accesso temporaneamente non disponibile"
+	if configured.Code != http.StatusTooManyRequests || unknown.Code != configured.Code {
+		t.Fatalf("saturated login statuses differ: configured=%d unknown=%d", configured.Code, unknown.Code)
+	}
+	if !strings.Contains(configured.Body.String(), message) || !strings.Contains(unknown.Body.String(), message) {
+		t.Fatalf("saturated login message differs: configured=%q unknown=%q", configured.Body.String(), unknown.Body.String())
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("credential verifier calls = %d, want only the map-filling request", verifier.calls)
 	}
 }
 

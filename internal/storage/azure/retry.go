@@ -9,7 +9,7 @@ import (
 
 const (
 	defaultAttempts  = 3
-	defaultTimeout   = 3 * time.Second
+	defaultTimeout   = 5 * time.Second
 	defaultBaseDelay = 50 * time.Millisecond
 	defaultMaxDelay  = 500 * time.Millisecond
 )
