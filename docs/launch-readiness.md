@@ -9,6 +9,10 @@ rilascio e non implica mai approvazione. Cambiare uno stato richiede una verific
 reale e una registrazione completa; questo documento non attesta che le verifiche
 esterne siano già avvenute.
 
+I dati e le approvazioni ancora da acquisire sono raccolti nel
+[registro Release 2](release-2.md); la loro registrazione separata non approva
+alcun gate.
+
 Per ogni gate sono obbligatori questi quattro campi:
 
 - **Stato del gate:** `BLOCKED` oppure `APPROVED`
@@ -85,11 +89,11 @@ purge garantito o capacità di recupero diverse da quelle effettive.
 
 ## 5. Versione del consenso privacy
 
-La versione implementata oggi per il consenso del modulo è
-`privacy-v1-2026-09-11`. Se il testo privacy approvato differisce materialmente
-da questa versione, prima del rilascio occorre cambiare la versione del consenso
-e ottenere una nuova approvazione legale. Registrare qui la versione distribuita
-e collegarla al testo approvato e all'artefatto immutabile verificato.
+La versione implementata per l'informativa presa in visione dal modulo è
+`privacy-v2-2026-09-22`. Se il testo privacy differisce materialmente da questa
+versione, prima del rilascio occorre cambiare nuovamente la versione e ottenere
+una nuova approvazione legale. Registrare qui la versione distribuita e
+collegarla al testo approvato e all'artefatto immutabile verificato.
 
 - **Stato del gate:** `BLOCKED`
 - **Revisore/approvatore:**
@@ -149,13 +153,13 @@ Prima della build candidata cercare nelle sorgenti runtime almeno:
 - `DATO DA CONFERMARE`;
 - `DA VALIDARE CON IL PROFESSIONISTA`;
 - la dichiarazione obsoleta `Il modulo di contatto sarà attivato in una fase
-  successiva`.
+successiva`.
 
-La ricerca deve produrre zero marker visibili in produzione. Registrare comando,
-commit e risultato; non è sufficiente ignorare un match o nasconderlo con CSS.
-I marker presenti nelle sole verifiche automatiche possono restare soltanto se
-non sono inclusi nella copia pubblica e l'evidenza distingue chiaramente i due
-casi.
+La ricerca sulle sorgenti runtime della release candidate deve produrre zero
+marker. Registrare comando, commit e risultato; non è sufficiente ignorare un
+match o nasconderlo con CSS. Questa verifica rende coerente la copia candidata,
+ma l'assenza dei marker nell'esatto artefatto di rilascio richiede ancora
+evidenza verificabile prima di approvare il gate.
 
 - **Stato del gate:** `BLOCKED`
 - **Revisore/approvatore:**

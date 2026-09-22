@@ -15,6 +15,7 @@ async function source(path, { optional = false } = {}) {
 
 const [
   launchReadiness,
+  releaseTwo,
   readme,
   operations,
   contactHandler,
@@ -25,6 +26,7 @@ const [
   footerTemplate,
 ] = await Promise.all([
   source("docs/launch-readiness.md", { optional: true }),
+  source("docs/release-2.md", { optional: true }),
   source("README.md"),
   source("docs/operations.md"),
   source("internal/web/public/contact.go"),
@@ -102,6 +104,10 @@ function requireTerms(document, terms) {
 test("launch remains blocked until every auditable gate has evidence", () => {
   assert.match(launchReadiness, /^# .+\n\n> \*\*Stato: BLOCKED\*\*/m)
   assertEveryGateHasBlockedEvidenceRecord(launchReadiness)
+  assert.doesNotMatch(
+    launchReadiness,
+    /^- \*\*Stato del gate:\*\* `APPROVED`$/gm,
+  )
   requireTerms(launchReadiness, [
     /Stato del gate/i,
     /Revisore\/approvatore/i,
@@ -110,6 +116,7 @@ test("launch remains blocked until every auditable gate has evidence", () => {
     /campo[^.]*vuoto[^.]*blocc/is,
     /approvazione finale[^.]*avvocat/is,
     /sign-off[^.]*operatore/is,
+    /\[registro Release 2\]\(release-2\.md\)/i,
   ])
   assert.match(
     launchReadiness,
@@ -153,8 +160,8 @@ test("lawyer, contact, editorial, and runtime-marker gates are complete", () => 
     /pubblicazione\s+iniziale[^.]*approvazione[^.]*autor/is,
   ])
 
-  assert.match(runtimePublicCopy, /DATO DA CONFERMARE/)
-  assert.match(runtimePublicCopy, /DA VALIDARE CON IL PROFESSIONISTA/)
+  assert.doesNotMatch(runtimePublicCopy, /DATO DA CONFERMARE/)
+  assert.doesNotMatch(runtimePublicCopy, /DA VALIDARE CON IL PROFESSIONISTA/)
   assert.doesNotMatch(
     publicPages,
     /Il modulo di contatto sarà attivato in una fase successiva/,
@@ -163,15 +170,45 @@ test("lawyer, contact, editorial, and runtime-marker gates are complete", () => 
     /DATO DA CONFERMARE/,
     /DA VALIDARE CON IL PROFESSIONISTA/,
     /modulo[^.]*fase\s+successiva/is,
-    /zero[^.]*marker[^.]*visibili[^.]*produzione/is,
+    /sorgenti runtime[^.]*zero[^.]*marker/is,
+    /artefatto[^.]*rilascio[^.]*evidenza/is,
   ])
+})
+
+test("Release 2 tracks every unknown without inventing approval evidence", () => {
+  assert.match(releaseTwo, /^# Registro Release 2$/m)
+  requireTerms(releaseTwo, [
+    /Ordine/,
+    /numero e data di iscrizione/i,
+    /partita IVA/i,
+    /codice fiscale/i,
+    /domicilio digitale/i,
+    /approvazione dell’avvocato/i,
+    /responsabili/i,
+    /trasferimenti/i,
+    /dominio/i,
+    /DNS/,
+    /TLS/,
+    /articoli/i,
+    /RPO/,
+    /RTO/,
+    /restore/i,
+    /accessibilità/i,
+    /sign-off/i,
+  ])
+  assert.equal(
+    [...releaseTwo.matchAll(/`DA ACQUISIRE`/g)].length,
+    11,
+    "Release 2 must leave its introduction and ten inputs explicitly unfilled",
+  )
+  assert.doesNotMatch(releaseTwo, /`APPROVED`/)
 })
 
 test("privacy gate matches consent, retention, recovery, and purge behavior", () => {
   const consentVersion = contactHandler.match(
     /contactConsentVersion\s*=\s*"([^"]+)"/,
   )?.[1]
-  assert.equal(consentVersion, "privacy-v1-2026-09-11")
+  assert.equal(consentVersion, "privacy-v2-2026-09-22")
   assert.match(launchReadiness, new RegExp(`\\b${consentVersion}\\b`))
 
   requireTerms(launchReadiness, [
