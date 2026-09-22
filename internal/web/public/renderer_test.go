@@ -148,6 +148,42 @@ func TestApprovedPublicCopyAndContactsRenderWithoutForbiddenClaims(t *testing.T)
 	}
 }
 
+func TestStudioAddressRemainsPlainTextWithoutMapLinks(t *testing.T) {
+	t.Parallel()
+
+	handler := newPublicHandler(t)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want 200", response.Code)
+	}
+	body := response.Body.String()
+	address := "Via Borghi 8, Gallarate (VA)"
+	addressCount := 0
+	for searchFrom := 0; searchFrom < len(body); {
+		relativeIndex := strings.Index(body[searchFrom:], address)
+		if relativeIndex < 0 {
+			break
+		}
+		addressIndex := searchFrom + relativeIndex
+		prefix := body[:addressIndex]
+		openLinks := regexp.MustCompile(`(?i)<a(?:\s|>)`).FindAllStringIndex(prefix, -1)
+		closedLinks := regexp.MustCompile(`(?i)</a\s*>`).FindAllStringIndex(prefix, -1)
+		if len(openLinks) != len(closedLinks) {
+			t.Fatalf("studio address occurrence %d is rendered inside a link", addressCount+1)
+		}
+		addressCount++
+		searchFrom = addressIndex + len(address)
+	}
+	if addressCount == 0 {
+		t.Fatalf("GET / body lacks address %q", address)
+	}
+	mapURL := regexp.MustCompile(`(?i)(?:href|src)="[^"]*(?:maps?|mappa|openstreetmap)[^"]*"`)
+	if match := mapURL.FindString(body); match != "" {
+		t.Fatalf("GET / body contains map URL %q", match)
+	}
+}
+
 func TestDesignedPublicErrorsCoverRecoverableStatusesWithoutInternalDetails(t *testing.T) {
 	renderer, err := publicweb.NewRenderer(webassets.Files, canonicalBaseURL)
 	if err != nil {

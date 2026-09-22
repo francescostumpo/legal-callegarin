@@ -7,6 +7,7 @@ const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 )
+const browserProjects = ["chromium", "firefox", "webkit"]
 
 export function createE2EEnvironment(baseEnvironment, generate = randomBytes) {
   const environment = { ...baseEnvironment }
@@ -33,6 +34,20 @@ export function playwrightInvocation(root, forwardedArguments, environment) {
   }
 }
 
+function projectInvocations(forwardedArguments) {
+  const hasExplicitProject = forwardedArguments.some(
+    (argument) =>
+      argument === "--project" ||
+      argument.startsWith("--project=") ||
+      argument === "-p",
+  )
+  if (hasExplicitProject) return [forwardedArguments]
+  return browserProjects.map((project) => [
+    ...forwardedArguments,
+    `--project=${project}`,
+  ])
+}
+
 export async function runE2E(
   forwardedArguments,
   {
@@ -42,32 +57,35 @@ export async function runE2E(
     spawnChild = spawn,
   } = {},
 ) {
-  const environment = createE2EEnvironment(baseEnvironment, generate)
-  const invocation = playwrightInvocation(
-    repositoryRoot,
-    forwardedArguments,
-    environment,
-  )
-  const child = spawnChild(
-    invocation.command,
-    invocation.args,
-    invocation.options,
-  )
-  const signals = ["SIGINT", "SIGTERM"]
-  const signalHandlers = new Map(
-    signals.map((signal) => [signal, () => child.kill(signal)]),
-  )
-  for (const signal of signals)
-    signalTarget.once(signal, signalHandlers.get(signal))
-
-  const result = await new Promise((resolve, reject) => {
-    child.once("error", reject)
-    child.once("exit", (code, signal) => resolve({ code, signal }))
-  }).finally(() => {
+  for (const projectArguments of projectInvocations(forwardedArguments)) {
+    const environment = createE2EEnvironment(baseEnvironment, generate)
+    const invocation = playwrightInvocation(
+      repositoryRoot,
+      projectArguments,
+      environment,
+    )
+    const child = spawnChild(
+      invocation.command,
+      invocation.args,
+      invocation.options,
+    )
+    const signals = ["SIGINT", "SIGTERM"]
+    const signalHandlers = new Map(
+      signals.map((signal) => [signal, () => child.kill(signal)]),
+    )
     for (const signal of signals)
-      signalTarget.off(signal, signalHandlers.get(signal))
-  })
-  return result.signal === null ? (result.code ?? 1) : 1
+      signalTarget.once(signal, signalHandlers.get(signal))
+
+    const result = await new Promise((resolve, reject) => {
+      child.once("error", reject)
+      child.once("exit", (code, signal) => resolve({ code, signal }))
+    }).finally(() => {
+      for (const signal of signals)
+        signalTarget.off(signal, signalHandlers.get(signal))
+    })
+    if (result.signal !== null || result.code !== 0) return 1
+  }
+  return 0
 }
 
 const invokedDirectly =

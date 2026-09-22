@@ -48,6 +48,39 @@ test("launcher invokes the repository-local Playwright executable without a shel
   assert.equal(invocation.options.stdio, "inherit")
 })
 
+test("launcher isolates implicit browser projects in sequential fresh processes", async () => {
+  const spawned = []
+  const signalTarget = new EventEmitter()
+  let generatedByte = 0
+
+  const result = await runE2E([], {
+    baseEnvironment: { PATH: "/usr/bin" },
+    generate: (length) => Buffer.alloc(length, ++generatedByte),
+    signalTarget,
+    spawnChild: (command, args, options) => {
+      const child = new EventEmitter()
+      child.kill = () => {}
+      spawned.push({ command, args, environment: options.env })
+      queueMicrotask(() => child.emit("exit", 0, null))
+      return child
+    },
+  })
+
+  assert.equal(result, 0)
+  assert.deepEqual(
+    spawned.map(({ args }) => args),
+    [
+      ["test", "--project=chromium"],
+      ["test", "--project=firefox"],
+      ["test", "--project=webkit"],
+    ],
+  )
+  assert.equal(
+    new Set(spawned.map(({ environment }) => environment.E2E_RUN_SECRET)).size,
+    3,
+  )
+})
+
 test("launcher forwards termination signals and removes its handlers", async () => {
   const child = new EventEmitter()
   const signalTarget = new EventEmitter()
