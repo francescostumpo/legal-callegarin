@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	contactConsentVersion     = "privacy-v1-2026-09-11"
+	contactConsentVersion     = "privacy-v2-2026-09-22"
 	contactMaxBodyBytes       = 16 << 10
 	contactRateCapacity       = 5
 	contactRateRefillInterval = 3 * time.Minute

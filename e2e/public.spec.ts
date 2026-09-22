@@ -280,9 +280,17 @@ test.describe("public Chromium journeys", () => {
     await expect(
       page.getByRole("heading", { level: 1, name: "Privacy e cookie policy" }),
     ).toBeVisible()
+    for (const heading of [
+      "Titolare del trattamento",
+      "Conservazione",
+      "Diritti dell’interessato",
+      "Cookie e strumenti di tracciamento",
+    ]) {
+      await expect(page.getByRole("heading", { name: heading })).toBeVisible()
+    }
     await expect(
       page.getByText(
-        /Le pagine pubbliche non impostano cookie, non usano strumenti di analisi e non richiedono risorse da servizi terzi/,
+        /Le pagine pubbliche non impostano cookie, non usano strumenti di analisi o profilazione e non caricano risorse da servizi di terze parti/,
       ),
     ).toBeVisible()
     await expect(page.getByRole("dialog")).toHaveCount(0)

@@ -95,6 +95,8 @@ func TestApprovedPublicCopyAndContactsRenderWithoutForbiddenClaims(t *testing.T)
 			required: []string{
 				"Ogni questione richiede attenzione, metodo e una valutazione costruita sulle reali esigenze della persona.",
 				"L’obiettivo è offrire indicazioni comprensibili, illustrare con trasparenza le possibili strade e individuare la tutela più appropriata per il caso concreto.",
+				"Le informazioni condivise con lo Studio sono trattate con riservatezza e con attenzione alla loro pertinenza rispetto alla richiesta.",
+				"Ogni comunicazione viene gestita nel rispetto degli obblighi professionali e della normativa applicabile.",
 			},
 		},
 		{
@@ -109,14 +111,42 @@ func TestApprovedPublicCopyAndContactsRenderWithoutForbiddenClaims(t *testing.T)
 			status:   http.StatusOK,
 			required: []string{"L’invio di una richiesta non costituisce conferimento di incarico."},
 		},
+		{path: "/aree-di-attivita/famiglia-e-persone", status: http.StatusOK},
+		{path: "/aree-di-attivita/successioni-e-donazioni", status: http.StatusOK},
+		{path: "/aree-di-attivita/obbligazioni-e-contratti", status: http.StatusOK},
+		{path: "/aree-di-attivita/recupero-crediti", status: http.StatusOK},
+		{path: "/aree-di-attivita/risarcimento-danni", status: http.StatusOK},
+		{path: "/aree-di-attivita/diritti-reali", status: http.StatusOK},
+		{path: "/aree-di-attivita/diritto-penale", status: http.StatusOK},
+		{path: "/aree-di-attivita/diritto-tributario", status: http.StatusOK},
+		{path: "/sentenze-e-riflessioni", status: http.StatusOK},
+		{
+			path:   "/privacy-cookie-policy",
+			status: http.StatusOK,
+			required: []string{
+				"Titolare del trattamento", "Avv. Alessandro Callegarin",
+				"Dati trattati e finalità", "articolo 6, paragrafo 1, lettera b)",
+				"articolo 6, paragrafo 1, lettera f)", "Conferimento dei dati",
+				"Destinatari e trasferimenti", "Italy North", "Conservazione",
+				"24 mesi", "30 giorni", "Diritti dell’interessato",
+				"Garante per la protezione dei dati personali",
+				"Nessun processo decisionale automatizzato",
+				"Cookie e strumenti di tracciamento", "otto ore",
+			},
+		},
 		{
 			path:     "/pagina-inesistente",
 			status:   http.StatusNotFound,
 			required: []string{"La pagina non è disponibile"},
 		},
 	}
-	forbidden := []string{"103/110", "volontariato", "avvocato associato"}
+	forbidden := []string{
+		"DATO DA " + "CONFERMARE", "DA VALIDARE CON IL " + "PROFESSIONISTA",
+		"103/110", "volontariato", "avvocato associato",
+		"partita IVA", "codice fiscale", "numero di iscrizione",
+	}
 	contactRequired := []string{
+		"Avv. Alessandro Callegarin — Gallarate (VA)",
 		`href="tel:+390331792529"`,
 		"0331 792529",
 		`href="mailto:callegarinale@gmail.com"`,

@@ -833,6 +833,8 @@ describe("admin shell", () => {
       await screen.findByRole("heading", { name: "Mario Rossi" }),
     ).toBeInTheDocument()
     expect(screen.getByText("Letto")).toBeInTheDocument()
+    expect(screen.getByText("Presa visione informativa")).toBeInTheDocument()
+    expect(screen.queryByText("Consenso privacy")).not.toBeInTheDocument()
     const readCall = fetchMock.mock.calls.find(([path]) =>
       String(path).endsWith("/read"),
     )

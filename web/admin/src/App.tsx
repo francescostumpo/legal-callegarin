@@ -761,7 +761,7 @@ function ContactDetail({ client }: { client: AdminClient }) {
             </div>
           ) : null}
           <div>
-            <dt>Consenso privacy</dt>
+            <dt>Presa visione informativa</dt>
             <dd>
               {contact.consentVersion}, {formatDate(contact.privacyAcceptedAt)}
             </dd>

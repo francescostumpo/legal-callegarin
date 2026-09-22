@@ -50,7 +50,10 @@ func TestContactFormValidSubmissionPersistsAndUsesCookieFreePRG(t *testing.T) {
 	if stored.Name != "Mario Rossi" || stored.Email != "mario@example.test" || stored.Phone != "+39 000 000000" || stored.Message != "Una richiesta sufficientemente dettagliata." {
 		t.Fatalf("stored visible fields = %#v", stored)
 	}
-	if stored.ConsentVersion != contactConsentVersion || !stored.PrivacyAcceptedAt.Equal(clock.now) || stored.State != contacts.StateNew || !stored.CreatedAt.Equal(clock.now) || !stored.UpdatedAt.Equal(clock.now) || !stored.ReviewDueAt.Equal(clock.now.AddDate(2, 0, 0)) {
+	if stored.ConsentVersion != "privacy-v2-2026-09-22" {
+		t.Fatalf("notice version = %q", stored.ConsentVersion)
+	}
+	if !stored.PrivacyAcceptedAt.Equal(clock.now) || stored.State != contacts.StateNew || !stored.CreatedAt.Equal(clock.now) || !stored.UpdatedAt.Equal(clock.now) || !stored.ReviewDueAt.Equal(clock.now.AddDate(2, 0, 0)) {
 		t.Fatalf("stored server fields = %#v", stored)
 	}
 
@@ -409,28 +412,28 @@ func TestContactFormSignedSuccessInvalidExpiredAndPrivacyRetentionCopy(t *testin
 	body := response.Body.String()
 	normalizedBody := strings.Join(strings.Fields(body), " ")
 	for _, copy := range []string{
-		"non costituisce conferimento di incarico",
-		`href="tel:+390331792529"`,
-		`href="mailto:callegarinale@gmail.com"`,
-		`href="mailto:alessandro.callegarin@busto.pecavvocati.it"`,
-		"non inviare documenti",
-		"dati sensibili non necessari",
-		"Titolare del trattamento",
-		"finalità",
-		"base giuridica",
-		"destinatari e responsabili",
-		"Azure nell’Unione europea (regione Italy North)",
-		"accesso limitato",
+		"Avv. Alessandro Callegarin",
+		"callegarinale@gmail.com",
+		"alessandro.callegarin@busto.pecavvocati.it",
+		"misure precontrattuali",
+		"articolo 6, paragrafo 1, lettera b)",
+		"telefono è facoltativo",
+		"fornitori tecnici",
+		"Italy North",
 		"24 mesi",
 		"non comporta cancellazione automatica",
 		"30 giorni",
-		"diritti",
-		"DATO DA CONFERMARE",
-		"DA VALIDARE CON IL PROFESSIONISTA",
-		`href="/privacy-cookie-policy"`,
+		"cancellazione definitiva durante una successiva operazione",
+		"accesso, rettifica, cancellazione, limitazione, opposizione e portabilità",
+		"Garante per la protezione dei dati personali",
 	} {
 		if !strings.Contains(normalizedBody, copy) {
 			t.Errorf("contact/privacy copy lacks %q", copy)
+		}
+	}
+	for _, marker := range []string{"DATO DA " + "CONFERMARE", "DA VALIDARE CON IL " + "PROFESSIONISTA"} {
+		if strings.Contains(body, marker) {
+			t.Errorf("contact/privacy copy contains development marker %q", marker)
 		}
 	}
 	if strings.Contains(strings.ToLower(body), "cookie banner") || strings.Contains(strings.ToLower(body), "accetta i cookie") {

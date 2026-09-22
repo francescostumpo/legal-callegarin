@@ -120,7 +120,7 @@ func pageCatalog(images map[string]EditorialImage) map[string]PageData {
 		"/approccio": {
 			Title: "Approccio", Description: "Principi di lavoro, riservatezza e relazione con il cliente.", Path: "/approccio", Kind: pageKindApproach,
 			Eyebrow: "Approccio", Heading: "Comprendere prima di indicare una direzione", Lead: "Ogni questione richiede attenzione, metodo e una valutazione costruita sulle reali esigenze della persona.", HeroImage: images["approach-library"],
-			Sections: []ContentSection{{Heading: "Chiarezza e trasparenza", Paragraphs: []string{"L’obiettivo è offrire indicazioni comprensibili, illustrare con trasparenza le possibili strade e individuare la tutela più appropriata per il caso concreto."}}, {Heading: "Riservatezza", Paragraphs: []string{"Le informazioni sono trattate con discrezione e secondo le regole applicabili. Le modalità definitive sono DA VALIDARE CON IL PROFESSIONISTA."}}, {Heading: "Relazione", Paragraphs: []string{"Aggiornamenti e passaggi operativi vengono espressi in modo diretto, senza promettere risultati e senza semplificare ciò che richiede cautela."}}},
+			Sections: []ContentSection{{Heading: "Chiarezza e trasparenza", Paragraphs: []string{"L’obiettivo è offrire indicazioni comprensibili, illustrare con trasparenza le possibili strade e individuare la tutela più appropriata per il caso concreto."}}, {Heading: "Riservatezza", Paragraphs: []string{"Le informazioni condivise con lo Studio sono trattate con riservatezza e con attenzione alla loro pertinenza rispetto alla richiesta.", "Ogni comunicazione viene gestita nel rispetto degli obblighi professionali e della normativa applicabile."}}, {Heading: "Relazione", Paragraphs: []string{"Aggiornamenti e passaggi operativi vengono espressi in modo diretto, senza promettere risultati e senza semplificare ciò che richiede cautela."}}},
 		},
 		"/aree-di-attivita": {
 			Title: "Aree di attività", Description: "Le aree di assistenza legale per persone, famiglie, patrimoni e piccole attività.", Path: "/aree-di-attivita", Kind: pageKindAreas,
@@ -129,7 +129,6 @@ func pageCatalog(images map[string]EditorialImage) map[string]PageData {
 		"/sentenze-e-riflessioni": {
 			Title: "Sentenze e riflessioni", Description: "Approfondimenti su decisioni e temi di diritto.", Path: "/sentenze-e-riflessioni", Kind: pageKindArticles,
 			Eyebrow: "Approfondimenti", Heading: "Sentenze e riflessioni", Lead: "Uno spazio editoriale dedicato a decisioni rilevanti e temi di diritto che incidono sulla vita delle persone.", HeroImage: images["article-notebook"],
-			Sections: []ContentSection{{Heading: "Pubblicazioni", Paragraphs: []string{"DATO DA CONFERMARE — i contenuti pubblicati saranno mostrati qui dopo la revisione editoriale."}}},
 		},
 		"/contatti": {
 			Title: "Contatti", Description: "Contatti dello Studio Legale Alessandro Callegarin.", Path: "/contatti", Kind: pageKindContact,
@@ -138,11 +137,37 @@ func pageCatalog(images map[string]EditorialImage) map[string]PageData {
 		},
 		"/privacy-cookie-policy": {
 			Title: "Privacy e cookie policy", Description: "Informazioni sul trattamento dei dati e sull'uso dei cookie.", Path: "/privacy-cookie-policy", Kind: pageKindPrivacyPolicy,
-			Eyebrow: "Informazioni", Heading: "Privacy e cookie policy", Lead: "DA VALIDARE CON IL PROFESSIONISTA — informativa legale di sviluppo, non destinata alla pubblicazione.", HeroImage: images["approach-library"],
+			Eyebrow: "Informazioni", Heading: "Privacy e cookie policy", Lead: "Questa informativa descrive come sono trattati i dati personali durante la navigazione e quando viene inviata una richiesta di contatto.", HeroImage: images["approach-library"],
 			Sections: []ContentSection{
-				{Heading: "Sito pubblico", Paragraphs: []string{"Le pagine pubbliche non impostano cookie, non usano strumenti di analisi e non richiedono risorse da servizi terzi. Non è quindi mostrato alcun banner cookie."}},
-				{Heading: "Titolare e contatti", Paragraphs: []string{"DA VALIDARE CON IL PROFESSIONISTA — Titolare del trattamento, recapiti e canale per l'esercizio dei diritti: DATO DA CONFERMARE."}},
-				{Heading: "Richieste di contatto", Paragraphs: []string{"DA VALIDARE CON IL PROFESSIONISTA — finalità: rispondere alle richieste; base giuridica: misure precontrattuali richieste dall'interessato; destinatari e responsabili: fornitori tecnici necessari, inclusa l'infrastruttura Azure nell'Unione europea, regione Italy North; accesso limitato alle persone autorizzate.", "DA VALIDARE CON IL PROFESSIONISTA — revisione operativa entro 24 mesi senza cancellazione automatica; dopo una richiesta di cancellazione manuale, recuperabilità limitata a 30 giorni prima della rimozione definitiva.", "DA VALIDARE CON IL PROFESSIONISTA — diritti e relativo canale di esercizio: DATO DA CONFERMARE."}},
+				{Heading: "Titolare del trattamento", Paragraphs: []string{
+					"Il titolare del trattamento è l’Avv. Alessandro Callegarin, con studio in Via Borghi 8, Gallarate (VA).",
+					"Per richieste relative alla protezione dei dati è possibile scrivere a callegarinale@gmail.com oppure alla PEC alessandro.callegarin@busto.pecavvocati.it.",
+				}},
+				{Heading: "Dati trattati e finalità", Paragraphs: []string{
+					"Il modulo raccoglie nome e cognome, indirizzo email, eventuale numero di telefono, contenuto del messaggio, versione dell’informativa presa in visione e dati temporali e operativi necessari alla gestione della richiesta.",
+					"I dati sono trattati per ricevere e rispondere alla richiesta e per svolgere misure precontrattuali richieste dall’interessato ai sensi dell’articolo 6, paragrafo 1, lettera b), del GDPR. I dati tecnici strettamente necessari alla sicurezza del sito, alla prevenzione degli abusi e alla diagnosi degli errori sono trattati sulla base del legittimo interesse del titolare ai sensi dell’articolo 6, paragrafo 1, lettera f), del GDPR.",
+					"L’invio del modulo non costituisce conferimento di incarico. Non devono essere inviati documenti o dati particolari o giudiziari non necessari in questa fase di primo contatto.",
+				}},
+				{Heading: "Conferimento dei dati", Paragraphs: []string{
+					"L’uso del modulo è facoltativo ed è sempre possibile contattare direttamente lo Studio. Nome, email, messaggio e conferma di lettura dell’informativa sono necessari per gestire la richiesta tramite il modulo; il numero di telefono è facoltativo. In mancanza dei dati necessari non sarà possibile inviare la richiesta attraverso il modulo.",
+				}},
+				{Heading: "Destinatari e trasferimenti", Paragraphs: []string{
+					"I dati sono accessibili al titolare e alle persone espressamente autorizzate per le attività tecniche necessarie. Possono essere trattati da fornitori dell’infrastruttura e della manutenzione, vincolati dalle condizioni contrattuali e dagli obblighi applicabili in materia di protezione dei dati.",
+					"L’archiviazione applicativa è configurata su Microsoft Azure nell’Unione europea, regione Italy North. Eventuali trattamenti che comportino trasferimenti verso Paesi esterni allo Spazio economico europeo devono avvenire nel rispetto delle garanzie previste dal GDPR e degli accordi applicabili con il fornitore.",
+				}},
+				{Heading: "Conservazione", Paragraphs: []string{
+					"Le richieste sono conservate per il tempo necessario a rispondere e gestire il contatto e sono segnalate per una revisione 24 mesi dopo la raccolta. La data di revisione non comporta cancellazione automatica.",
+					"Una richiesta di cancellazione manuale apre una finestra tecnica di recupero di 30 giorni. Dopo tale periodo il record diventa idoneo alla cancellazione definitiva durante una successiva operazione della console di amministrazione. Un periodo ulteriore è ammesso soltanto quando necessario per obblighi di legge o per accertare, esercitare o difendere un diritto.",
+				}},
+				{Heading: "Diritti dell’interessato", Paragraphs: []string{
+					"Nei casi previsti dal GDPR è possibile chiedere accesso, rettifica, cancellazione, limitazione, opposizione e portabilità dei dati scrivendo ai recapiti indicati. È inoltre possibile proporre reclamo al Garante per la protezione dei dati personali.",
+					"Nessun processo decisionale automatizzato o attività di profilazione è svolto sui dati inviati.",
+				}},
+				{Heading: "Cookie e strumenti di tracciamento", Paragraphs: []string{
+					"Le pagine pubbliche non impostano cookie, non usano strumenti di analisi o profilazione e non caricano risorse da servizi di terze parti. Non è quindi mostrato alcun banner cookie.",
+					"La sola area di amministrazione utilizza, dopo l’accesso, un cookie tecnico di sessione strettamente necessario, protetto con Secure, HttpOnly e SameSite=Strict, revocabile con il logout e con durata massima di otto ore.",
+					"L’eventuale introduzione futura di cookie non tecnici o strumenti di tracciamento richiederà una nuova valutazione legale e tecnica prima dell’attivazione.",
+				}},
 			},
 		},
 	}
