@@ -1,0 +1,28 @@
+{{define "site-footer"}}
+<footer class="site-footer">
+  <div class="shell site-footer__grid">
+    <div>
+      <p class="site-footer__name">{{.SiteName}}</p>
+      <p class="site-footer__muted">
+        Avv. Alessandro Callegarin — Gallarate (VA)
+      </p>
+    </div>
+    <div>
+      <p class="eyebrow">Informazioni</p>
+      {{with studioContact .Contact}}
+      <p>{{.Address}}</p>
+      <p>
+        Telefono:
+        <a {{studioContactHref .PhoneHref}}>{{.PhoneDisplay}}</a><br />
+        Email: <a {{studioContactHref .EmailHref}}>{{.Email}}</a><br />
+        PEC: <a {{studioContactHref .PECHref}}>{{.PEC}}</a><br />
+        Orari: {{.Hours}}
+      </p>
+      {{end}}
+    </div>
+    <nav aria-label="Informazioni legali">
+      <a href="/privacy-cookie-policy">Privacy e cookie policy</a>
+    </nav>
+  </div>
+</footer>
+{{end}}

@@ -1,0 +1,473 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "id": "hero-architecture",
+      "alt": "Geometrie architettoniche in pietra scura e listelli di noce illuminate da luce calda.",
+      "usageRole": "hero",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "hero-architecture-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "hero-architecture-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "hero-architecture-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "hero-architecture-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "approach-library",
+      "alt": "Libri senza titoli su una mensola di noce attraversati da luce radente.",
+      "usageRole": "approach",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "approach-library-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "approach-library-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "approach-library-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "approach-library-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "family-objects",
+      "alt": "Due cartelline neutre davanti a due sedute vuote in uno spazio riservato.",
+      "usageRole": "practice-area-family",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "family-objects-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "family-objects-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "family-objects-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "family-objects-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "succession-seal",
+      "alt": "Busta avorio chiusa da un sigillo in rame privo di simboli su pietra scura.",
+      "usageRole": "practice-area-succession",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "succession-seal-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "succession-seal-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "succession-seal-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "succession-seal-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "contracts-pen",
+      "alt": "Penna stilografica scura appoggiata su fogli avorio completamente bianchi.",
+      "usageRole": "practice-area-contracts",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "contracts-pen-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "contracts-pen-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "contracts-pen-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "contracts-pen-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "debt-ledger",
+      "alt": "Registro astratto senza testo accanto a un righello in ottone non graduato.",
+      "usageRole": "practice-area-debt",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "debt-ledger-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "debt-ledger-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "debt-ledger-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "debt-ledger-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "damages-road",
+      "alt": "Strada vuota bagnata dalla pioggia al crepuscolo con riflessi di luce calda.",
+      "usageRole": "practice-area-damages",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "damages-road-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "damages-road-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "damages-road-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "damages-road-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "property-key",
+      "alt": "Chiave in metallo scuro posata su geometrie sovrapposte in pietra.",
+      "usageRole": "practice-area-property",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "property-key-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "property-key-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "property-key-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "property-key-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "criminal-threshold",
+      "alt": "Varco protettivo tra piani in pietra e listelli di noce immerso nell'ombra.",
+      "usageRole": "practice-area-criminal",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "criminal-threshold-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "criminal-threshold-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "criminal-threshold-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "criminal-threshold-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "tax-ledger",
+      "alt": "Fogli geometrici privi di cifre accanto a strumenti astratti di conteggio.",
+      "usageRole": "practice-area-tax",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "tax-ledger-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "tax-ledger-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "tax-ledger-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "tax-ledger-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "article-notebook",
+      "alt": "Quaderno aperto con pagine bianche e una penna su un piano in pietra scura.",
+      "usageRole": "articles",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "article-notebook-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "article-notebook-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "article-notebook-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "article-notebook-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    },
+    {
+      "id": "contact-entrance",
+      "alt": "Ingresso architettonico discreto senza insegna aperto verso una luce accogliente.",
+      "usageRole": "contact",
+      "derivatives": [
+        {
+          "variant": "landscape",
+          "format": "avif",
+          "filename": "contact-entrance-landscape.avif",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "landscape",
+          "format": "webp",
+          "filename": "contact-entrance-landscape.webp",
+          "width": 1600,
+          "height": 900,
+          "aspectRatio": "16:9"
+        },
+        {
+          "variant": "card",
+          "format": "avif",
+          "filename": "contact-entrance-card.avif",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        },
+        {
+          "variant": "card",
+          "format": "webp",
+          "filename": "contact-entrance-card.webp",
+          "width": 900,
+          "height": 1125,
+          "aspectRatio": "4:5"
+        }
+      ]
+    }
+  ]
+}

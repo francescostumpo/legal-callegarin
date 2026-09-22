@@ -1,0 +1,59 @@
+name: Retain private GHCR images
+
+on:
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retain-private-ghcr:
+    name: Prune private GHCR versions
+    if: >-
+      github.repository == 'francescostumpo/legal-callegarin' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+      AZURE_CORE_OUTPUT: none
+    steps:
+      - name: Check out exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Log in to Azure with OIDC
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prune verified private GHCR versions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./scripts/prune-ghcr-versions.mjs \
+            --subscription-id "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --container-app-name "$AZURE_CONTAINER_APP_NAME" \
+            --apply

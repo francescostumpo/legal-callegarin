@@ -1,0 +1,32 @@
+{
+  "name": "legal-callegarin",
+  "private": true,
+  "engines": {
+    "node": "24.x"
+  },
+  "workspaces": [
+    "web/admin"
+  ],
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@fontsource-variable/fraunces": "5.3.0",
+    "@fontsource-variable/source-sans-3": "5.3.0",
+    "@playwright/cli": "0.1.19",
+    "@playwright/test": "1.63.0",
+    "jsdom": "27.4.0",
+    "prettier": "3.9.6",
+    "sharp": "0.35.4"
+  },
+  "scripts": {
+    "assets:verify": "node scripts/verify-assets.mjs",
+    "build": "npm run assets:verify && npm run build:admin",
+    "build:admin": "npm run build --workspace=@legal-callegarin/admin",
+    "e2e": "node scripts/run-e2e.mjs",
+    "e2e:smoke": "node scripts/run-e2e.mjs --grep @smoke",
+    "format": "prettier --write \"*.{json,md}\" \"scripts/**/*.mjs\" \"web/admin/**/*.{ts,tsx,html,css,json,md}\" \"internal/webassets/**/*.{html,css}\"",
+    "format:check": "prettier --check \"*.{json,md}\" \"scripts/**/*.mjs\" \"web/admin/**/*.{ts,tsx,html,css,json,md}\" \"internal/webassets/**/*.{html,css}\"",
+    "test": "npm run test --workspace=@legal-callegarin/admin --",
+    "test:e2e-harness": "node --test scripts/e2e-launcher.test.mjs",
+    "typecheck": "npm run typecheck --workspace=@legal-callegarin/admin"
+  }
+}

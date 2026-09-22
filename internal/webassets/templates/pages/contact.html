@@ -1,0 +1,294 @@
+{{define "content"}}
+<header class="page-hero">
+  <div class="page-hero__media" aria-hidden="true">
+    {{template "editorial-picture" .HeroImage}}
+  </div>
+  <div class="page-hero__overlay"></div>
+  <div class="page-hero__content shell">
+    <p class="eyebrow">{{.Eyebrow}}</p>
+    <h1>{{.Heading}}</h1>
+    <p>{{.Lead}}</p>
+  </div>
+</header>
+
+<section
+  class="section shell contact-layout"
+  aria-labelledby="contact-form-heading"
+>
+  <div class="contact-details content-section">
+    <p class="eyebrow">Recapiti diretti</p>
+    <h2>Contatta lo studio</h2>
+    {{template "contact-details" .}} {{if .StorageOutcomeUnknown}}
+    <p>
+      Se la richiesta è urgente, usa i recapiti diretti indicati in questa
+      pagina.
+    </p>
+    {{else}}
+    <p>
+      Se l’invio non riesce, riprova oppure usa i recapiti diretti indicati in
+      questa pagina.
+    </p>
+    {{end}}
+  </div>
+
+  <div class="contact-form-panel">
+    <p class="eyebrow">Richiesta di contatto</p>
+    {{if .StorageOutcomeUnknown}}
+    <h2 id="contact-form-heading">Esito dell’invio</h2>
+    {{else}}
+    <h2 id="contact-form-heading">Descrivi brevemente la richiesta</h2>
+    {{end}} {{if .StorageOutcomeUnknown}}
+    <div
+      id="error-summary"
+      class="form-error-summary"
+      role="alert"
+      tabindex="-1"
+    >
+      <h3>Non è possibile confermare la ricezione</h3>
+      <p>
+        Per evitare duplicati, non inviare di nuovo la richiesta. Se la
+        richiesta è urgente, usa i recapiti diretti indicati in questa pagina.
+      </p>
+    </div>
+    {{else}} {{if .Success}}
+    <div class="form-success" role="status">
+      <h3>Richiesta ricevuta</h3>
+      <p>Il messaggio è stato registrato correttamente.</p>
+    </div>
+    {{end}} {{if .GlobalError}}
+    <div
+      id="error-summary"
+      class="form-error-summary"
+      role="alert"
+      tabindex="-1"
+    >
+      <h3>Non è stato possibile inviare la richiesta</h3>
+      <p>{{.GlobalError}}</p>
+    </div>
+    {{end}} {{if .StorageFailure}}
+    <div
+      id="error-summary"
+      class="form-error-summary"
+      role="alert"
+      tabindex="-1"
+    >
+      <h3>Il messaggio non è stato registrato</h3>
+      <p>
+        Riprova tra poco. In alternativa usa i recapiti diretti indicati in
+        questa pagina. Nessuna conferma di invio è stata generata.
+      </p>
+    </div>
+    {{end}} {{if .ErrorSummary}}
+    <div
+      id="error-summary"
+      class="form-error-summary"
+      role="alert"
+      tabindex="-1"
+    >
+      <h3>Controlla i dati inseriti</h3>
+      <ul>
+        {{range .ErrorSummary}}
+        <li><a href="#{{.Field}}">{{.Message}}</a></li>
+        {{end}}
+      </ul>
+    </div>
+    {{end}}
+
+    <form
+      class="contact-form"
+      action="/contatti"
+      method="post"
+      novalidate
+      data-contact-form
+    >
+      <div
+        class="form-error-summary"
+        data-contact-feedback
+        tabindex="-1"
+        hidden
+      ></div>
+      <div class="form-field">
+        <label for="name">Nome e cognome</label>
+        <input
+          id="name"
+          name="name"
+          type="text"
+          value="{{.Form.Name}}"
+          autocomplete="name"
+          maxlength="120"
+          required
+          {{if
+          .NameError}}
+          aria-invalid="true"
+          aria-describedby="name-error"
+          {{end}}
+        />
+        {{with .NameError}}
+        <p id="name-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-field">
+        <label for="email">Email</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          value="{{.Form.Email}}"
+          autocomplete="email"
+          maxlength="254"
+          required
+          {{if
+          .EmailError}}
+          aria-invalid="true"
+          aria-describedby="email-error"
+          {{end}}
+        />
+        {{with .EmailError}}
+        <p id="email-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-field">
+        <label for="phone">Telefono <span>(facoltativo)</span></label>
+        <input
+          id="phone"
+          name="phone"
+          type="tel"
+          value="{{.Form.Phone}}"
+          autocomplete="tel"
+          maxlength="40"
+          {{if
+          .PhoneError}}
+          aria-invalid="true"
+          aria-describedby="phone-error"
+          {{end}}
+        />
+        {{with .PhoneError}}
+        <p id="phone-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-field">
+        <label for="message">Messaggio breve</label>
+        <textarea
+          id="message"
+          name="message"
+          rows="7"
+          maxlength="2000"
+          required
+          {{if
+          .MessageError}}
+          aria-invalid="true"
+          aria-describedby="message-help message-error"
+          {{else}}
+          aria-describedby="message-help"
+          {{end}}
+        >
+{{.Form.Message}}</textarea>
+        <p id="message-help" class="field-help">
+          Ti chiediamo di non inviare documenti né dati sensibili non necessari.
+        </p>
+        {{with .MessageError}}
+        <p id="message-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-checkbox">
+        <input
+          id="privacy"
+          name="privacy"
+          type="checkbox"
+          value="accepted"
+          required
+          {{if
+          .Form.Privacy}}
+          checked
+          {{end}}
+          {{if
+          .PrivacyError}}
+          aria-invalid="true"
+          aria-describedby="privacy-error"
+          {{end}}
+        />
+        <label for="privacy">
+          Confermo di aver letto l’<a href="/privacy-cookie-policy"
+            >informativa privacy</a
+          >.
+        </label>
+        {{with .PrivacyError}}
+        <p id="privacy-error" class="field-error">{{.}}</p>
+        {{end}}
+      </div>
+
+      <div class="form-honeypot" aria-hidden="true">
+        <label for="website">Sito web</label>
+        <input
+          id="website"
+          name="website"
+          type="text"
+          value=""
+          tabindex="-1"
+          autocomplete="off"
+        />
+      </div>
+      <input type="hidden" name="started" value="{{.FormToken}}" />
+
+      <p class="contact-caution">
+        L’invio non costituisce conferimento di incarico. Non inviare documenti
+        o dati sensibili non necessari.
+      </p>
+      <button class="button button--primary" type="submit">
+        Invia la richiesta
+      </button>
+    </form>
+    {{end}}
+  </div>
+</section>
+
+<section
+  class="section section--stone"
+  aria-labelledby="contact-privacy-heading"
+>
+  <div class="shell reading-column content-section">
+    <p class="eyebrow">Prima informativa</p>
+    <h2 id="contact-privacy-heading">Come saranno trattati i dati</h2>
+    <p>
+      Il titolare del trattamento è l’Avv. Alessandro Callegarin. Per richieste
+      relative alla protezione dei dati puoi scrivere a
+      <a href="mailto:callegarinale@gmail.com">callegarinale@gmail.com</a> o
+      alla PEC
+      <a href="mailto:alessandro.callegarin@busto.pecavvocati.it"
+        >alessandro.callegarin@busto.pecavvocati.it</a
+      >.
+    </p>
+    <p>
+      I dati sono trattati per ricevere e rispondere alla richiesta e per
+      svolgere misure precontrattuali richieste dall’interessato ai sensi
+      dell’articolo 6, paragrafo 1, lettera b), del GDPR. Nome, email, messaggio
+      e conferma di lettura dell’informativa sono necessari per usare il modulo;
+      il numero di telefono è facoltativo.
+    </p>
+    <p>
+      I dati sono accessibili al titolare e alle persone espressamente
+      autorizzate e possono essere trattati dai fornitori tecnici necessari.
+      L’archiviazione applicativa è configurata su Microsoft Azure nell’Unione
+      europea, regione Italy North.
+    </p>
+    <p>
+      La revisione dopo 24 mesi non comporta cancellazione automatica. Una
+      cancellazione manuale resta recuperabile per 30 giorni; trascorso tale
+      periodo, il record diventa idoneo alla cancellazione definitiva durante
+      una successiva operazione della console di amministrazione.
+    </p>
+    <p>
+      Nei casi previsti dal GDPR puoi chiedere accesso, rettifica,
+      cancellazione, limitazione, opposizione e portabilità dei dati e proporre
+      reclamo al Garante per la protezione dei dati personali. Consulta l’<a
+        href="/privacy-cookie-policy"
+        >informativa privacy completa</a
+      >.
+    </p>
+  </div>
+</section>
+{{end}}

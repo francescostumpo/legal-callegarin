@@ -1,0 +1,34 @@
+{{define "content"}} {{if .Preview}}
+<div class="preview-ribbon" role="status">Anteprima salvata</div>
+{{end}}
+<article class="article-detail">
+  <header class="page-hero">
+    <div class="page-hero__media" aria-hidden="true">
+      {{template "editorial-picture" .HeroImage}}
+    </div>
+    <div class="page-hero__overlay"></div>
+    <div class="page-hero__content shell">
+      <p class="eyebrow">{{.AreaTitle}}</p>
+      <h1>{{.Title}}</h1>
+      <p>{{.Description}}</p>
+    </div>
+  </header>
+  <div class="section shell content-stack">
+    <p class="article-byline">
+      Di {{.Author}} · Pubblicato il
+      <time datetime="{{.PublishedISO}}">{{.PublishedLabel}}</time> · Aggiornato
+      il <time datetime="{{.UpdatedISO}}">{{.UpdatedLabel}}</time>
+    </p>
+    <div class="article-body">{{.SanitizedBody}}</div>
+    <aside class="development-notice" aria-label="Avvertenza">
+      Questo contenuto ha finalità esclusivamente informative e non sostituisce
+      una consulenza legale riferita al caso concreto.
+    </aside>
+    <p>
+      <a class="text-link" href="{{.AreaHref}}"
+        >Approfondisci: {{.AreaTitle}} <span aria-hidden="true">→</span></a
+      >
+    </p>
+  </div>
+</article>
+{{end}}
