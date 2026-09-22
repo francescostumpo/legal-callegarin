@@ -50,7 +50,7 @@ const expectedGateHeadings = [
   "2. Recapiti e canali di contatto",
   "3. Articoli, disclaimer e responsabilità editoriale",
   "4. Informativa privacy e comportamento dei dati di contatto",
-  "5. Versione del consenso privacy",
+  "5. Versione dell’informativa presa in visione",
   "6. Gate privacy-first e cookie banner",
   "7. Dominio, metadati e indicizzazione",
   "8. Immagini, accessibilità e revisione visuale",
@@ -129,7 +129,7 @@ test("the gate-record contract rejects one missing per-gate evidence field", () 
     "## 4. Informativa privacy e comportamento dei dati di contatto",
   )
   const gateFiveStart = launchReadiness.indexOf(
-    "## 5. Versione del consenso privacy",
+    "## 5. Versione dell’informativa presa in visione",
   )
   assert.ok(gateFourStart >= 0 && gateFiveStart > gateFourStart)
 
@@ -204,12 +204,12 @@ test("Release 2 tracks every unknown without inventing approval evidence", () =>
   assert.doesNotMatch(releaseTwo, /`APPROVED`/)
 })
 
-test("privacy gate matches consent, retention, recovery, and purge behavior", () => {
-  const consentVersion = contactHandler.match(
+test("privacy gate matches acknowledgement, retention, recovery, and purge behavior", () => {
+  const noticeVersion = contactHandler.match(
     /contactConsentVersion\s*=\s*"([^"]+)"/,
   )?.[1]
-  assert.equal(consentVersion, "privacy-v2-2026-09-22")
-  assert.match(launchReadiness, new RegExp(`\\b${consentVersion}\\b`))
+  assert.equal(noticeVersion, "privacy-v2-2026-09-22")
+  assert.match(launchReadiness, new RegExp(`\\b${noticeVersion}\\b`))
 
   requireTerms(launchReadiness, [
     /titolare[^.]*contatto privacy/is,

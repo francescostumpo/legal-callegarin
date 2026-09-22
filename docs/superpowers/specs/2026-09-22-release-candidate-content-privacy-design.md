@@ -1,6 +1,6 @@
 # Release-candidate content and privacy design
 
-**Date:** 22 September 2026  
+**Date:** 22 September 2026
 **Status:** approved for implementation by the project owner; final professional,
 privacy, and production release approval remains an external launch gate.
 

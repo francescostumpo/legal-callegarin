@@ -87,7 +87,7 @@ purge garantito o capacità di recupero diverse da quelle effettive.
 - **Data:**
 - **Evidenza/riferimento:**
 
-## 5. Versione del consenso privacy
+## 5. Versione dell’informativa presa in visione
 
 La versione implementata per l'informativa presa in visione dal modulo è
 `privacy-v2-2026-09-22`. Se il testo privacy differisce materialmente da questa
