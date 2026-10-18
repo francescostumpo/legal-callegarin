@@ -10,12 +10,14 @@ import { spawnSync } from "node:child_process"
 const root = resolve(fileURLToPath(new URL("../", import.meta.url)))
 const script = join(root, "scripts", "bootstrap-github-oidc.sh")
 const scriptSource = await readFile(script, "utf8").catch(() => "")
+const testSource = await readFile(fileURLToPath(import.meta.url), "utf8")
 const subscription = "11111111-1111-4111-8111-111111111111"
 const tenant = "22222222-2222-4222-8222-222222222222"
 const appObject = "33333333-3333-4333-8333-333333333333"
 const client = "44444444-4444-4444-8444-444444444444"
 const spObject = "55555555-5555-4555-8555-555555555555"
 const role = "358470bc-b998-42bd-ab17-a7e34c199c0f"
+const validAccount = { id: subscription, tenantId: tenant, state: "Enabled" }
 const subject =
   "repo:francescostumpo@55147498/legal-callegarin@1365534753:environment:production"
 const baseArgs = [
@@ -111,7 +113,7 @@ async function harness(t, scenario = {}) {
     }),
   )
 
-  const fake = `#!/usr/bin/node
+  const fake = `#!${process.execPath}
 import crypto from "node:crypto"
 import fs from "node:fs"
 const tool = process.argv[1].split("/").pop()
@@ -167,7 +169,15 @@ if (tool === "curl") {
   process.exit(0)
 }
 const command = args.join(" ")
-if (command.startsWith("account show ")) out(scenario.contextMismatch ? "${subscription}\\twrong\\tEnabled\\n" : scenario.accountExtra ? "${subscription}\\t${tenant}\\tEnabled\\nunexpected\\n" : "${subscription}\\t${tenant}\\tEnabled\\n")
+if (command.startsWith("account show ")) {
+  if (command !== "account show --query {id:id,tenantId:tenantId,state:state} --output json") {
+    process.stderr.write("unexpected az account command: " + command)
+    process.exit(64)
+  }
+  if (Object.hasOwn(scenario, "accountRaw")) out(scenario.accountRaw)
+  else if (Object.hasOwn(scenario, "account")) out(scenario.account)
+  else out(${JSON.stringify(validAccount)})
+}
 else if (command.startsWith("group show ")) out(scenario.groupMismatch ? "/subscriptions/${subscription}/resourceGroups/wrong\\n" : "/subscriptions/${subscription}/resourceGroups/legal-callegarin-prod\\n")
 else if (command.startsWith("ad app list ")) out(state.app === null ? [] : Array.isArray(state.app) ? state.app : [state.app])
 else if (command.startsWith("ad app create ")) { state.app = ${JSON.stringify(app())}; save(); out({ id: "${appObject}", appId: "${client}" }) }
@@ -207,7 +217,7 @@ else { process.stderr.write("unexpected az command: " + command); process.exit(6
     await chmod(path, 0o700)
   }
 
-  const fakeNode = `#!/usr/bin/node
+  const fakeNode = `#!${process.execPath}
 import crypto from "node:crypto"
 import fs from "node:fs"
 import { spawnSync } from "node:child_process"
@@ -228,7 +238,7 @@ if (
   process.exit(90)
 }
 fs.appendFileSync(process.env.CALL_LOG, JSON.stringify(["node", ...process.argv.slice(2)]) + "\\n")
-const result = spawnSync("/usr/bin/node", process.argv.slice(2), { stdio: "inherit", env: process.env })
+const result = spawnSync(${JSON.stringify(process.execPath)}, process.argv.slice(2), { stdio: "inherit", env: process.env })
 if (result.error || result.signal || result.status === null) process.exit(92)
 process.exit(result.status)
 `
@@ -316,15 +326,35 @@ process.exit(result.status)
     return contents.join("\n")
   }
 
+  function toolSource(name) {
+    return readFile(join(bin, name), "utf8")
+  }
+
   return {
     run,
     calls,
     artifacts,
+    toolSource,
     probeWrappedCredential,
     token: githubToken,
     state: () => readFile(state, "utf8").then(JSON.parse),
   }
 }
+
+test("generated fake tools use the active Node executable without PATH recursion", async (t) => {
+  const h = await harness(t)
+  for (const tool of ["az", "curl", "sleep", "node"]) {
+    const source = await h.toolSource(tool)
+    assert.equal(source.split("\n", 1)[0], `#!${process.execPath}`, tool)
+  }
+  assert.ok(
+    (await h.toolSource("node")).includes(
+      `spawnSync(${JSON.stringify(process.execPath)},`,
+    ),
+  )
+  const hardCodedNode = ["", "usr", "bin", "node"].join("/")
+  assert.equal(testSource.includes(hardCodedNode), false)
+})
 
 test("dry-run prints exact immutable intent and performs no external calls", async (t) => {
   const h = await harness(t)
@@ -433,9 +463,21 @@ test("create path performs verified ordered mutations and secure FIC handoff", a
     joined,
     /https:\/\/api\.github\.com\/repos\/francescostumpo\/legal-callegarin\/actions\/oidc\/customization\/sub/,
   )
-  assert.match(
-    joined,
-    /az account show --query \[id,tenantId,state\] --output tsv/,
+  assert.deepEqual(
+    calls.filter(
+      (call) => call[0] === "az" && call[1] === "account" && call[2] === "show",
+    ),
+    [
+      [
+        "az",
+        "account",
+        "show",
+        "--query",
+        "{id:id,tenantId:tenantId,state:state}",
+        "--output",
+        "json",
+      ],
+    ],
   )
   assert.match(
     joined,
@@ -641,8 +683,6 @@ test("partial state resumes safely", async (t) => {
 for (const [name, scenario] of [
   ["GitHub mismatch", { githubMismatch: true }],
   ["invalid GitHub creation date", { invalidCreated: true }],
-  ["Azure context mismatch", { contextMismatch: true }],
-  ["multiline Azure context", { accountExtra: true }],
   ["resource group mismatch", { groupMismatch: true }],
 ]) {
   test(`${name} fails before mutation`, async (t) => {
@@ -655,6 +695,74 @@ for (const [name, scenario] of [
     )
   })
 }
+
+for (const [name, accountScenario] of [
+  ["malformed JSON", { accountRaw: "{" }],
+  ["null", { account: null }],
+  ["array", { account: [] }],
+  ["non-object", { account: "not-an-object" }],
+  ["extra key", { account: { ...validAccount, unexpected: true } }],
+  ["missing id", { account: { tenantId: tenant, state: "Enabled" } }],
+  ["missing tenantId", { account: { id: subscription, state: "Enabled" } }],
+  ["missing state", { account: { id: subscription, tenantId: tenant } }],
+  [
+    "wrong subscription",
+    {
+      account: {
+        ...validAccount,
+        id: "66666666-6666-4666-8666-666666666666",
+      },
+    },
+  ],
+  [
+    "wrong tenant",
+    {
+      account: {
+        ...validAccount,
+        tenantId: "77777777-7777-4777-8777-777777777777",
+      },
+    },
+  ],
+  ["disabled state", { account: { ...validAccount, state: "Disabled" } }],
+  [
+    "malformed subscription UUID",
+    { account: { ...validAccount, id: "wrong" } },
+  ],
+  ["non-string tenant", { account: { ...validAccount, tenantId: 42 } }],
+]) {
+  test(`invalid Azure account ${name} fails before Azure mutation`, async (t) => {
+    const h = await harness(t, accountScenario)
+    const result = h.run(baseArgs)
+    assert.notEqual(result.status, 0)
+    const calls = await h.calls()
+    assert.equal(
+      calls.some(
+        (call) =>
+          call[0] === "az" &&
+          (call.includes("create") ||
+            (call[1] === "group" && call[2] === "show")),
+      ),
+      false,
+    )
+  })
+}
+
+test("mixed-case Azure account UUIDs match the selected context", async (t) => {
+  const h = await harness(t, {
+    account: {
+      id: subscription.toUpperCase(),
+      tenantId: tenant.toUpperCase(),
+      state: "Enabled",
+    },
+    app: app(),
+    sp: sp(),
+    fic: fic(),
+    rbac: assignment(),
+  })
+  const result = h.run(baseArgs)
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /changes_applied=false/)
+})
 
 for (const [name, scenario] of [
   [

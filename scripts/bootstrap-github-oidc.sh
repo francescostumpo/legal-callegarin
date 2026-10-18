@@ -151,10 +151,17 @@ if (repo.archived !== false || repo.disabled !== false) fail("GitHub repository 
 if (oidc.use_default !== true || oidc.use_immutable_subject !== true || oidc.sub_claim_prefix !== "repo:francescostumpo@55147498/legal-callegarin@1365534753") fail("GitHub immutable OIDC customization mismatch")
 '
 
-account_tsv=$(az account show --query '[id,tenantId,state]' --output tsv)
-[[ $account_tsv != *$'\n'* ]] || die "selected Azure account returned unexpected rows"
-IFS=$'\t' read -r actual_subscription actual_tenant actual_state extra <<<"$account_tsv"
-[[ -z ${extra:-} && ${actual_subscription,,} == "$subscription_id" && ${actual_tenant,,} == "$tenant_id" && $actual_state == "Enabled" ]] || die "selected Azure account does not match"
+account_json=$(az account show --query '{id:id,tenantId:tenantId,state:state}' --output json)
+ACCOUNT_JSON=$account_json EXPECTED_SUBSCRIPTION=$subscription_id EXPECTED_TENANT=$tenant_id node -e '
+const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+let account
+try { account=JSON.parse(process.env.ACCOUNT_JSON) } catch { process.exit(1) }
+if (account===null || Array.isArray(account) || typeof account!=="object") process.exit(1)
+const keys=Object.keys(account).sort()
+if (keys.length!==3 || keys[0]!=="id" || keys[1]!=="state" || keys[2]!=="tenantId") process.exit(1)
+if (typeof account.id!=="string" || typeof account.tenantId!=="string" || !uuid.test(account.id) || !uuid.test(account.tenantId)) process.exit(1)
+if (account.id.toLowerCase()!==process.env.EXPECTED_SUBSCRIPTION || account.tenantId.toLowerCase()!==process.env.EXPECTED_TENANT || account.state!=="Enabled") process.exit(1)
+' || die "selected Azure account does not match"
 
 actual_scope=$(az group show --subscription "$subscription_id" --name "$resource_group" --query id --output tsv)
 [[ ${actual_scope,,} == "${resource_group_scope,,}" ]] || die "resource group scope does not match"
