@@ -57,7 +57,10 @@ const sub = '00000000-0000-0000-0000-000000000000';
 const rg = 'rg-callegarin'; const app = 'callegarin';
 const appPath = '/subscriptions/' + sub + '/resourceGroups/' + rg + '/providers/Microsoft.App/containerApps/' + app;
 const revisionsPath = appPath + '/revisions';
-const prior = 'callegarin--prior'; const candidate = 'callegarin--deploy-test';
+const prior = 'callegarin--prior'; let candidate = 'callegarin--deploy-test';
+if (scenario === 'candidate-wrong-prefix') candidate = 'other--deploy-test';
+if (scenario === 'candidate-name-ending-collision') candidate = 'callegarin--other--deploy-test';
+const observedProjection = ['observed-projection', 'observed-projection-null-scale', 'observed-projection-missing-scale'].includes(scenario);
 const repo = 'ghcr.io/francescostumpo/legal-callegarin-private@sha256:';
 const oldDigest = repo + 'a'.repeat(64); const digest = repo + 'b'.repeat(64);
 const stateFile = process.env.TEST_STATE;
@@ -72,11 +75,26 @@ const template = (image, suffix, overrides = {}) => ({
   terminationGracePeriodSeconds: 30,
   containers: [{
     name: 'callegarin', image,
-    env: [{name:'APP_ENV',value:'production'},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}],
-    resources: {cpu:0.25,memory:'0.5Gi'}, probes:[{type:'Liveness'}], ...overrides
+    env: observedProjection
+      ? [{name:'APP_ENV',value:'production'},{name:'ADMIN_PASSWORD_HASH',secretRef:'admin-password-hash',value:''},{name:'SESSION_KEY_BASE64',secretRef:'session-key-base64',value:''},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}]
+      : [{name:'APP_ENV',value:'production'},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}],
+    resources: {cpu:0.25,memory:'0.5Gi',...(observedProjection ? {ephemeralStorage:'1Gi'} : {})}, probes:[{type:'Liveness'}], ...overrides
   }],
-  scale: {minReplicas:0,maxReplicas:1}
+  scale: {minReplicas:0,maxReplicas:1,...(observedProjection ? {cooldownPeriod:300,pollingInterval:30} : {})}
 });
+const stripObservedDefaults = value => {
+  if (!observedProjection) return value;
+  for (const entry of value.containers[0].env) if (entry.secretRef) delete entry.value;
+  delete value.containers[0].resources.ephemeralStorage;
+  if (scenario === 'observed-projection-null-scale') {
+    value.scale.cooldownPeriod = null;
+    value.scale.pollingInterval = null;
+  } else {
+    delete value.scale.cooldownPeriod;
+    delete value.scale.pollingInterval;
+  }
+  return value;
+};
 const traffic = () => {
   if (scenario === 'rollback-state' && state.rollbackAttempted) return [{revisionName:candidate,weight:100}];
   if (state.rolledBack) return [{revisionName:prior,weight:100}];
@@ -93,10 +111,18 @@ const appTemplate = () => {
   const value = template(state.copied ? digest : oldDigest, state.copied ? 'deploy-test' : 'prior');
   if (scenario === 'app-containers') value.containers.push({...value.containers[0],name:'sidecar'});
   if (scenario === 'template-drift') value.scale.maxReplicas = 2;
+  if (scenario === 'secret-nonempty') value.containers[0].env = [{name:'APP_ENV',value:'production'},{name:'ADMIN_PASSWORD_HASH',secretRef:'admin-password-hash',value:'literal-secret'},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}];
+  if (scenario === 'secret-ref-changed') value.containers[0].env = [{name:'APP_ENV',value:'production'},{name:'ADMIN_PASSWORD_HASH',secretRef:'other-secret',value:''},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}];
+  if (scenario === 'storage-nondefault') value.containers[0].resources.ephemeralStorage = '2Gi';
+  if (scenario === 'cpu-nondefault') value.containers[0].resources.cpu = 0.5;
+  if (scenario === 'memory-nondefault') value.containers[0].resources.memory = '1Gi';
+  if (scenario === 'scale-cooldown-nondefault') value.scale.cooldownPeriod = 301;
+  if (scenario === 'scale-polling-nondefault') value.scale.pollingInterval = 31;
+  if (scenario === 'scale-rule-drift') value.scale.rules = [{name:'http',custom:'rule'}];
   return value;
 };
 const appDoc = () => ({
-  id: scenario === 'app-id' ? appPath + '-wrong' : appPath, name:app, location:'italynorth',
+  id: scenario === 'app-id' ? appPath + '-wrong' : scenario === 'wrong-rg' ? appPath.replace('/resourceGroups/' + rg + '/', '/resourceGroups/another-rg/') : appPath, name:app, location:'italynorth',
   provisioningState: scenario === 'app-provisioning' ? 'Failed' : 'Succeeded',
   latestRevisionName: state.copied ? candidate : prior, latestReadyRevisionName: state.copied ? candidate : prior,
   activeRevisionsMode: scenario === 'app-mode' ? 'Single' : 'Multiple',
@@ -109,8 +135,11 @@ const revision = name => {
   let suffix = isCandidate ? 'deploy-test' : 'prior';
   let mode = 'migrate';
   let fqdn = name + '.example.azurecontainerapps.io';
+  let active = true;
   let healthState = 'Healthy';
+  let provisioningState = 'Provisioned';
   let runningState = isCandidate ? 'Running' : 'ScaledToZero';
+  if (scenario === 'running-at-max-scale') runningState = 'RunningAtMaxScale';
   let extraEnv = [];
   let overrides = {};
   if (!isCandidate && scenario === 'prior-unhealthy') healthState = 'Unhealthy';
@@ -119,15 +148,31 @@ const revision = name => {
   if (!isCandidate && scenario === 'prior-public-package') image = 'ghcr.io/francescostumpo/legal-callegarin@sha256:' + 'c'.repeat(64);
   if (!isCandidate && scenario === 'prior-duplicate-mode') extraEnv = [{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}];
   if (!isCandidate && scenario === 'prior-missing-fqdn') fqdn = '';
+  if (!isCandidate && scenario.startsWith('prior-running-')) runningState = scenario.slice('prior-running-'.length);
+  if (!isCandidate && scenario === 'prior-inactive-max-scale') { runningState = 'RunningAtMaxScale'; active = false; }
+  if (!isCandidate && scenario === 'prior-unhealthy-max-scale') { runningState = 'RunningAtMaxScale'; healthState = 'Unhealthy'; }
+  if (!isCandidate && scenario === 'prior-unprovisioned-max-scale') { runningState = 'RunningAtMaxScale'; provisioningState = 'Provisioning'; }
   if (isCandidate && scenario === 'candidate-unhealthy') healthState = 'Unhealthy';
   if (isCandidate && scenario === 'candidate-image') image = oldDigest;
   if (isCandidate && scenario === 'candidate-env') mode = 'compat';
   if (isCandidate && scenario === 'candidate-template') overrides = {command:['unexpected']};
   if (!isCandidate && state.rolledBack && scenario === 'rollback-health') healthState = 'Unhealthy';
+  const revisionEnv = observedProjection
+    ? [{name:'APP_ENV',value:'production'},{name:'ADMIN_PASSWORD_HASH',secretRef:'admin-password-hash'},{name:'SESSION_KEY_BASE64',secretRef:'session-key-base64'},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}]
+    : scenario === 'secret-nonempty'
+      ? [{name:'APP_ENV',value:'production'},{name:'ADMIN_PASSWORD_HASH',secretRef:'admin-password-hash',value:''},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}]
+      : scenario === 'secret-ref-changed'
+        ? [{name:'APP_ENV',value:'production'},{name:'ADMIN_PASSWORD_HASH',secretRef:'admin-password-hash',value:''},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}]
+    : [{name:'APP_ENV',value:'production'},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:mode},...extraEnv];
+  let revisionTemplate = template(image,suffix,{env:revisionEnv,...overrides});
+  if (!isCandidate) revisionTemplate = stripObservedDefaults(revisionTemplate);
+  if (isCandidate && scenario === 'candidate-null-suffix') revisionTemplate.revisionSuffix = null;
+  if (isCandidate && scenario === 'candidate-missing-suffix') delete revisionTemplate.revisionSuffix;
+  if (isCandidate && scenario === 'candidate-wrong-suffix') revisionTemplate.revisionSuffix = 'other';
   const doc = {
-    id: revisionsPath + '/' + name, name, active:true, healthState, provisioningState:'Provisioned', runningState, fqdn,
+    id: revisionsPath + '/' + name, name, active, healthState, provisioningState, runningState, fqdn,
     trafficWeight: state.promoted ? (isCandidate ? 100 : null) : (isCandidate ? null : 100),
-    template:template(image,suffix,{env:[{name:'APP_ENV',value:'production'},{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:mode},...extraEnv],...overrides})
+    template:revisionTemplate
   };
   return doc;
 };
@@ -138,7 +183,10 @@ const listItems = () => {
   return items;
 };
 if (args[0] === 'account' && args[1] === 'show') output({id: scenario === 'wrong-account' ? '11111111-1111-1111-1111-111111111111' : sub,state:'Enabled'});
-else if (args[0] === 'group' && args[1] === 'show') output(scenario === 'wrong-rg' ? appPath : '/subscriptions/' + sub + '/resourceGroups/' + rg);
+else if (args[0] === 'group' && args[1] === 'show') {
+  if (scenario === 'deny-group-read') process.exit(44);
+  output(scenario === 'wrong-rg' ? appPath.replace('/resourceGroups/' + rg + '/', '/resourceGroups/another-rg/') : '/subscriptions/' + sub + '/resourceGroups/' + rg);
+}
 else if (args[0] === 'rest') {
   const url = new URL(option('--url'));
   const query = option('--query');
@@ -198,7 +246,7 @@ const option = name => args[args.indexOf(name) + 1];
 const url = option('--write-out') === '%{http_code}' ? args.at(-1) : '';
 const headersFile = option('--dump-header'); const bodyFile = option('--output');
 const state = JSON.parse(fs.readFileSync(process.env.TEST_STATE, 'utf8'));
-const candidate = url.includes('callegarin--deploy-test.');
+const candidate = url.includes('deploy-test.');
 const health = url.endsWith('/health/live') || url.endsWith('/health/ready');
 const rollback = state.rolledBack;
 let status = '200'; let body = health ? 'ok\n' : '<html>Alessandro Callegarin</html>';
@@ -459,6 +507,84 @@ test("successful rollout paginates, smokes, promotes exact digest, and keeps pri
       !call.some((value) => forbiddenTokens.has(String(value).toLowerCase())),
       JSON.stringify(call),
     )
+  }
+})
+
+test("successful rollout accepts observed Azure defaults and RunningAtMaxScale without group metadata read", () => {
+  for (const scenario of [
+    "observed-projection",
+    "observed-projection-null-scale",
+    "observed-projection-missing-scale",
+  ]) {
+    const observed = runCase(scenario)
+    assert.equal(observed.status, 0, `${scenario}: ${observed.stderr}`)
+  }
+
+  const maxScale = runCase("running-at-max-scale")
+  assert.equal(maxScale.status, 0, maxScale.stderr)
+
+  const deniedGroupRead = runCase("deny-group-read")
+  assert.equal(deniedGroupRead.status, 0, deniedGroupRead.stderr)
+  assert.equal(
+    deniedGroupRead.calls.filter(
+      (call) => call[0] === "az" && call[1] === "group" && call[2] === "show",
+    ).length,
+    0,
+  )
+})
+
+test("candidate response accepts null or missing suffix only for the exact ARM-derived name", () => {
+  for (const scenario of [
+    "candidate-null-suffix",
+    "candidate-missing-suffix",
+  ]) {
+    const result = runCase(scenario)
+    assert.equal(result.status, 0, `${scenario}: ${result.stderr}`)
+  }
+
+  for (const scenario of [
+    "candidate-wrong-prefix",
+    "candidate-name-ending-collision",
+    "candidate-wrong-suffix",
+  ]) {
+    const result = runCase(scenario)
+    assert.notEqual(result.status, 0, `${scenario}: ${result.stderr}`)
+  }
+})
+
+test("template normalization keeps non-default differences fail-closed", () => {
+  for (const scenario of [
+    "secret-nonempty",
+    "secret-ref-changed",
+    "storage-nondefault",
+    "cpu-nondefault",
+    "memory-nondefault",
+    "scale-cooldown-nondefault",
+    "scale-polling-nondefault",
+    "scale-rule-drift",
+  ]) {
+    const result = runCase(scenario)
+    assert.notEqual(result.status, 0, `${scenario}: ${result.stderr}`)
+    assert.equal(mutations(result).length, 0, scenario)
+  }
+})
+
+test("invalid prior revision status combinations fail before mutation and curl", () => {
+  const scenarios = [
+    "prior-running-Failed",
+    "prior-running-Degraded",
+    "prior-running-Unknown",
+    "prior-running-Stopped",
+    "prior-running-Processing",
+    "prior-inactive-max-scale",
+    "prior-unhealthy-max-scale",
+    "prior-unprovisioned-max-scale",
+  ]
+  for (const scenario of scenarios) {
+    const result = runCase(scenario)
+    assert.notEqual(result.status, 0, scenario)
+    assert.equal(mutations(result).length, 0, scenario)
+    assert.equal(curls(result).length, 0, scenario)
   }
 })
 
