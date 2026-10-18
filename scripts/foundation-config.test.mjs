@@ -83,7 +83,7 @@ test("the container build uses three immutable, exact toolchain stages", async (
 
   assert.deepEqual(fromLines, [
     "FROM node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS frontend",
-    "FROM golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS builder",
+    "FROM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS builder",
     "FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS runtime",
   ])
   assert.match(dockerfile, /^COPY package\.json package-lock\.json \.\/$/m)

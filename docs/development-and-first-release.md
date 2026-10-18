@@ -17,7 +17,7 @@ approvato è una pubblicazione locale una tantum, eseguita da un operatore.
 
 La parità con build e CI richiede esattamente:
 
-- Go `1.27.1`;
+- Go `1.27.2`;
 - Node.js `24.21.0`, con npm proveniente dallo stesso toolchain Node;
 - Azure CLI capace di installare la versione esatta di Bicep `0.45.15`.
 

@@ -186,15 +186,19 @@ function assertWarningFreeBicepWrapper(document) {
 }
 
 test("the guide is linked and its prerequisites match repository toolchain evidence", () => {
-  assert.match(goManifest, /^go 1\.27\.1$/m)
+  assert.match(goManifest, /^go 1\.27\.2$/m)
+  assert.match(goManifest, /^\s*golang\.org\/x\/net v0\.60\.0(?:\s|\/\/)/m)
   assert.match(packageManifest, /"node":\s*"24\.x"/)
   assert.match(dockerfile, /FROM node:24\.21\.0-/)
-  assert.match(dockerfile, /FROM golang:1\.27\.1-/)
+  assert.match(
+    dockerfile,
+    /^FROM golang:1\.27\.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS builder$/m,
+  )
   assert.match(ciWorkflow, /node-version:\s*24\.21\.0/)
   assert.match(ciWorkflow, /az bicep install --version v0\.45\.15/)
 
   requireTerms(guide, [
-    /Go `1\.27\.1`/,
+    /Go `1\.27\.2`/,
     /Node(?:\.js)? `24\.21\.0`/,
     /Bicep `0\.45\.15`/,
     /npm[^.]*toolchain Node/is,
