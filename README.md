@@ -6,7 +6,7 @@ React administration application.
 
 ## Toolchains
 
-- Go 1.27.1, declared in `go.mod`. With `GOTOOLCHAIN=auto` (the Go default), an
+- Go 1.27.2, declared in `go.mod`. With `GOTOOLCHAIN=auto` (the Go default), an
   older local Go command downloads and uses the declared toolchain.
 - Node.js 24, declared in the root `package.json`.
 - npm, using the single root `package-lock.json` for all workspaces.

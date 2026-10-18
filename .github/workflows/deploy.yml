@@ -24,8 +24,8 @@ jobs:
     outputs:
       image_ref: ${{ steps.verify.outputs.image_ref }}
     env:
-      IMAGE_REPOSITORY: ghcr.io/francescostumpo/legal-callegarin
-      IMAGE_TAG: ghcr.io/francescostumpo/legal-callegarin:sha-${{ github.sha }}
+      IMAGE_REPOSITORY: ghcr.io/francescostumpo/legal-callegarin-private
+      IMAGE_TAG: ghcr.io/francescostumpo/legal-callegarin-private:sha-${{ github.sha }}
       IMAGE_VERSION: sha-${{ github.sha }}
     steps:
       - name: Check out exact source revision
@@ -47,7 +47,7 @@ jobs:
             printf 'image tag does not match the validated commit\n' >&2
             exit 1
           fi
-          if [[ ! "$IMAGE_TAG" =~ ^ghcr\.io/francescostumpo/legal-callegarin:sha-[0-9a-f]{40}$ ]]; then
+          if [[ ! "$IMAGE_TAG" =~ ^ghcr\.io/francescostumpo/legal-callegarin-private:sha-[0-9a-f]{40}$ ]]; then
             printf 'invalid image tag\n' >&2
             exit 1
           fi
@@ -161,7 +161,7 @@ jobs:
             printf 'invalid workflow run identity\n' >&2
             exit 1
           fi
-          if [[ ! "$IMAGE_REF" =~ ^ghcr\.io/francescostumpo/legal-callegarin@sha256:[0-9a-f]{64}$ ]]; then
+          if [[ ! "$IMAGE_REF" =~ ^ghcr\.io/francescostumpo/legal-callegarin-private@sha256:[0-9a-f]{64}$ ]]; then
             printf 'invalid immutable image reference\n' >&2
             exit 1
           fi

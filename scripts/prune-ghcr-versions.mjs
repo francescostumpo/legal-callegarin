@@ -5,7 +5,7 @@ import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 const OWNER = "francescostumpo"
-const PACKAGE = "legal-callegarin"
+const PACKAGE = "legal-callegarin-private"
 const IMAGE_REPOSITORY = `ghcr.io/${OWNER}/${PACKAGE}`
 const ARM_ORIGIN = "https://management.azure.com"
 const ARM_API_VERSION = "2026-01-01"

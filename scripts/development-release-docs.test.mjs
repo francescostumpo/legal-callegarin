@@ -186,15 +186,19 @@ function assertWarningFreeBicepWrapper(document) {
 }
 
 test("the guide is linked and its prerequisites match repository toolchain evidence", () => {
-  assert.match(goManifest, /^go 1\.27\.1$/m)
+  assert.match(goManifest, /^go 1\.27\.2$/m)
+  assert.match(goManifest, /^\s*golang\.org\/x\/net v0\.60\.0(?:\s|\/\/)/m)
   assert.match(packageManifest, /"node":\s*"24\.x"/)
   assert.match(dockerfile, /FROM node:24\.21\.0-/)
-  assert.match(dockerfile, /FROM golang:1\.27\.1-/)
+  assert.match(
+    dockerfile,
+    /^FROM golang:1\.27\.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS builder$/m,
+  )
   assert.match(ciWorkflow, /node-version:\s*24\.21\.0/)
   assert.match(ciWorkflow, /az bicep install --version v0\.45\.15/)
 
   requireTerms(guide, [
-    /Go `1\.27\.1`/,
+    /Go `1\.27\.2`/,
     /Node(?:\.js)? `24\.21\.0`/,
     /Bicep `0\.45\.15`/,
     /npm[^.]*toolchain Node/is,
@@ -420,6 +424,14 @@ test("bootstrap publishing uses an isolated write credential and canonical diges
   )
   assert.match(deployWorkflow, /Build and publish immutable image/)
   assert.match(deployWorkflow, /needs: publish/)
+  assert.match(
+    guide,
+    /IMAGE_REPOSITORY='ghcr\.io\/francescostumpo\/legal-callegarin-private'/,
+  )
+  assert.doesNotMatch(
+    guide,
+    /IMAGE_REPOSITORY='ghcr\.io\/francescostumpo\/legal-callegarin'/,
+  )
 
   requireTerms(guide, [
     /cycle breaker/i,
@@ -455,6 +467,23 @@ test("bootstrap publishing uses an isolated write credential and canonical diges
   assert.throws(
     () => assertBuildDigestComparison(withoutEquality),
     /did not match the regular expression/,
+  )
+})
+
+test("private package and runtime pull gates precede the first Bicep deployment", () => {
+  const firstRelease = guide.slice(
+    guide.indexOf("## Pubblicazione una tantum della prima immagine"),
+  )
+  assertOrdered(firstRelease, [
+    /ghcr\.io\/francescostumpo\/legal-callegarin-private/,
+    /package[^.]*privat[^.]*collegat[^.]*repository[^.]*Actions[^.]*admin/is,
+    /PAT runtime[^.]*separat[^.]*solo[^.]*`read:packages`/is,
+    /pull runtime[^.]*Bicep/is,
+    /build-params\/what-if\/deploy/is,
+  ])
+  assert.match(
+    firstRelease,
+    /gate[^.]*bloccante[^.]*prima[^.]*pull runtime[^.]*Bicep/is,
   )
 })
 

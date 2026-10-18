@@ -21,7 +21,9 @@ const baseArgs = [
 ]
 const acceptHeader = "Accept: application/vnd.github+json"
 const versionHeader = "X-GitHub-Api-Version: 2026-03-10"
-const imagePrefix = "ghcr.io/francescostumpo/legal-callegarin@"
+const packageName = "legal-callegarin-private"
+const imagePrefix = `ghcr.io/francescostumpo/${packageName}@`
+const publicImagePrefix = "ghcr.io/francescostumpo/legal-callegarin@"
 const digest = (value) => `sha256:${value.toString(16).padStart(64, "0")}`
 const appQuery =
   "{id:id,name:name,location:location,provisioningState:properties.provisioningState,latestRevisionName:properties.latestRevisionName,latestReadyRevisionName:properties.latestReadyRevisionName,activeRevisionsMode:properties.configuration.activeRevisionsMode,external:properties.configuration.ingress.external,allowInsecure:properties.configuration.ingress.allowInsecure,fqdn:properties.configuration.ingress.fqdn,traffic:properties.configuration.ingress.traffic,template:properties.template}"
@@ -194,7 +196,9 @@ function createStatefulRunner(scenario, state, calls) {
         if (scenario === "container-name") containers[0].name = "other"
         if (scenario === "image")
           containers[0].image =
-            "ghcr.io/francescostumpo/legal-callegarin:latest"
+            "ghcr.io/francescostumpo/legal-callegarin-private:latest"
+        if (scenario === "public-image")
+          containers[0].image = `${publicImagePrefix}${digest(13)}`
         const revisionDocument = {
           id:
             scenario === "revision-id" ? `${revisionPath}-wrong` : revisionPath,
@@ -219,22 +223,20 @@ function createStatefulRunner(scenario, state, calls) {
       throw new Error(`${label} failed`)
     if (scenario === "gh-command-error") throw new Error(`${label} failed`)
     const endpoint = args[1]
-    if (endpoint === "/user/packages/container/legal-callegarin") {
+    if (endpoint === `/user/packages/container/${packageName}`) {
       state.packageReads += 1
       if (scenario === "package-malformed") return "{LEAKME"
       return JSON.stringify({
         owner: {
           login: scenario === "package-owner" ? "other" : "francescostumpo",
         },
-        name: scenario === "package-name" ? "other" : "legal-callegarin",
+        name: scenario === "package-name" ? "other" : packageName,
         package_type: scenario === "package-type" ? "npm" : "container",
         visibility: scenario === "package-visibility" ? "public" : "private",
       })
     }
     if (
-      endpoint?.startsWith(
-        "/user/packages/container/legal-callegarin/versions?",
-      )
+      endpoint?.startsWith(`/user/packages/container/${packageName}/versions?`)
     ) {
       const params = new URL(`https://api.github.invalid${endpoint}`)
         .searchParams
@@ -261,7 +263,7 @@ function createStatefulRunner(scenario, state, calls) {
     }
     if (
       endpoint?.startsWith(
-        "/users/francescostumpo/packages/container/legal-callegarin/versions/",
+        `/users/francescostumpo/packages/container/${packageName}/versions/`,
       )
     ) {
       const id = Number(endpoint.split("/").at(-1))
@@ -448,6 +450,15 @@ test("multi-page dry-run is deterministic, accepts untagged versions, and never 
   assert.ok(pageGets[0][2].endsWith("state=active&per_page=100&page=1"))
   assert.ok(pageGets[1][2].endsWith("state=active&per_page=100&page=2"))
   assert.ok(result.calls.every((call) => !call.includes(token)))
+  const githubEndpoints = result.calls
+    .filter((call) => call[0] === "gh" && call[1] === "api")
+    .map((call) => String(call[2]))
+  assert.ok(githubEndpoints.every((endpoint) => endpoint.includes(packageName)))
+  assert.ok(
+    githubEndpoints.every(
+      (endpoint) => !endpoint.includes("/container/legal-callegarin/"),
+    ),
+  )
   assert.deepEqual(
     new Set(
       result.calls
@@ -492,8 +503,8 @@ test("apply revalidates Azure and snapshot before exact sequential deletes, then
   assert.deepEqual(
     deleteCalls.map((call) => call[2]),
     [
-      "/users/francescostumpo/packages/container/legal-callegarin/versions/11",
-      "/users/francescostumpo/packages/container/legal-callegarin/versions/12",
+      "/users/francescostumpo/packages/container/legal-callegarin-private/versions/11",
+      "/users/francescostumpo/packages/container/legal-callegarin-private/versions/12",
     ],
   )
   for (const call of deleteCalls) {
@@ -543,6 +554,7 @@ test("unsafe Azure account, app, traffic, revision, image, and schema states cau
     "revision-provisioning",
     "revision-running",
     "image",
+    "public-image",
     "containers",
     "container-name",
     "schema",

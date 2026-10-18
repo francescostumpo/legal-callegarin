@@ -6,7 +6,8 @@ import test from "node:test"
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../", import.meta.url)))
 const workflowPath = join(repositoryRoot, ".github", "workflows", "deploy.yml")
-const imageRepository = "ghcr.io/francescostumpo/legal-callegarin"
+const imageRepository = "ghcr.io/francescostumpo/legal-callegarin-private"
+const publicImageRepository = "ghcr.io/francescostumpo/legal-callegarin"
 const checkoutAction =
   "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 const setupBuildxAction =
@@ -262,7 +263,7 @@ test("publish validates identity before ephemeral GHCR login and pushes one amd6
   assert.match(publish, /expected_tag="\$IMAGE_REPOSITORY:sha-\$GITHUB_SHA"/)
   assert.match(
     publish,
-    /\^ghcr\\\.io\/francescostumpo\/legal-callegarin:sha-\[0-9a-f\]\{40\}\$/,
+    /\^ghcr\\\.io\/francescostumpo\/legal-callegarin-private:sha-\[0-9a-f\]\{40\}\$/,
   )
   assert.ok(
     positionOf(
@@ -391,7 +392,7 @@ test("deploy uses environment-backed OIDC and the verified cross-job digest", ()
   )
   assert.match(
     deploy,
-    /\^ghcr\\\.io\/francescostumpo\/legal-callegarin@sha256:\[0-9a-f\]\{64\}\$/,
+    /\^ghcr\\\.io\/francescostumpo\/legal-callegarin-private@sha256:\[0-9a-f\]\{64\}\$/,
   )
   assert.match(deploy, /\^\[0-9a-f\]\{40\}\$/)
   assert.match(deploy, /\^\[0-9\]\+\$/)
@@ -433,4 +434,19 @@ test("workflow contains no mutable publication, direct cloud mutation, retention
     /\b(?:pull_request|pull_request_target|schedule|workflow_call)\b/,
   )
   assert.doesNotMatch(workflow, /set -x|ACTIONS_STEP_DEBUG|RUNNER_DEBUG/)
+})
+
+test("workflow rejects the legacy public package without renaming the source repository", () => {
+  assert.doesNotMatch(
+    workflow,
+    new RegExp(`${publicImageRepository.replaceAll("/", "\\/")}(?=[:@])`),
+  )
+  assert.match(
+    workflow,
+    /github\.repository == 'francescostumpo\/legal-callegarin'/,
+  )
+  assert.match(
+    workflow,
+    /org\.opencontainers\.image\.source=https:\/\/github\.com\/francescostumpo\/legal-callegarin/,
+  )
 })

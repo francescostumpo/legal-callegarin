@@ -17,7 +17,7 @@ approvato è una pubblicazione locale una tantum, eseguita da un operatore.
 
 La parità con build e CI richiede esattamente:
 
-- Go `1.27.1`;
+- Go `1.27.2`;
 - Node.js `24.21.0`, con npm proveniente dallo stesso toolchain Node;
 - Azure CLI capace di installare la versione esatta di Bicep `0.45.15`.
 
@@ -240,7 +240,7 @@ unset BOOTSTRAP_GHCR_PAT
   BOOTSTRAP_COMMIT="$(git rev-parse HEAD)"
   test "$BOOTSTRAP_COMMIT" = "$RELEASE_COMMIT"
   test -z "$(git status --porcelain --untracked-files=all)"
-  IMAGE_REPOSITORY='ghcr.io/francescostumpo/legal-callegarin'
+  IMAGE_REPOSITORY='ghcr.io/francescostumpo/legal-callegarin-private'
   IMAGE_TAG="$IMAGE_REPOSITORY:bootstrap-$BOOTSTRAP_COMMIT"
 
   BOOTSTRAP_DOCKER_CONFIG="$(mktemp -d)"
@@ -333,6 +333,12 @@ anche se un passo successivo è bloccato. Riferimenti ufficiali:
 [autenticazione GHCR](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 e [controllo di accesso dei package](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility).
 
+Creare e verificare quindi un PAT runtime separato con il solo scope
+`read:packages`. Queste verifiche sono un gate bloccante: prima di qualsiasi
+pull runtime o deployment Bicep, visibilità privata, collegamento al repository,
+accesso `admin` di Actions e credenziale runtime read-only devono essere tutti
+confermati. Solo dopo procedere a `build-params`/`what-if`/`deploy`.
+
 ## Tre credenziali distinte
 
 Non sostituire né riutilizzare una credenziale con un'altra:
@@ -404,8 +410,9 @@ Non saltare, scambiare o accorpare questi gate:
    possa crearlo implicitamente;
 3. predisporre con autorità verificata il resource group, OIDC e tutte le
    relative precondizioni, limitando il ruolo al resource group;
-4. pubblicare la prima immagine una tantum e verificare il digest immutabile
-   risolto da GHCR;
+4. pubblicare la prima immagine una tantum, verificare il digest immutabile
+   risolto da GHCR e confermare package privato, collegamento al repository e
+   accesso `admin` di Actions;
 5. preparare il PAT runtime separato, l'hash Argon2id e la chiave di sessione
    stabile tramite input protetti;
 6. eseguire il bootstrap `main.bicep` con `customDomainApex = ''` e modalità

@@ -2,7 +2,7 @@
 set -euo pipefail
 set -f
 
-readonly IMAGE_REPOSITORY='ghcr.io/francescostumpo/legal-callegarin'
+readonly IMAGE_REPOSITORY='ghcr.io/francescostumpo/legal-callegarin-private'
 readonly ARM_API_VERSION='2026-01-01'
 readonly ARM_ORIGIN='https://management.azure.com'
 readonly APP_QUERY='{id:id,name:name,location:location,provisioningState:properties.provisioningState,latestRevisionName:properties.latestRevisionName,latestReadyRevisionName:properties.latestReadyRevisionName,activeRevisionsMode:properties.configuration.activeRevisionsMode,external:properties.configuration.ingress.external,allowInsecure:properties.configuration.ingress.allowInsecure,fqdn:properties.configuration.ingress.fqdn,traffic:properties.configuration.ingress.traffic,template:properties.template}'
@@ -139,7 +139,7 @@ const exactKeys = (object, keys, what) => {
   const expected = [...keys].sort();
   if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`${what} has unexpected or missing fields`);
 };
-const digestPattern = /^ghcr\.io\/francescostumpo\/legal-callegarin@sha256:[0-9a-f]{64}$/;
+const digestPattern = /^ghcr\.io\/francescostumpo\/legal-callegarin-private@sha256:[0-9a-f]{64}$/;
 const fqdnPattern = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/;
 const safeName = value => typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(value);
 const templateFacts = (template, expectedImage, expectedSuffix, expectedContainerName) => {

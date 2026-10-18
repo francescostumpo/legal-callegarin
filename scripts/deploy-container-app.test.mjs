@@ -20,8 +20,11 @@ const rg = "rg-callegarin"
 const app = "callegarin"
 const prior = "callegarin--prior"
 const candidate = "callegarin--deploy-test"
-const oldDigest = `ghcr.io/francescostumpo/legal-callegarin@sha256:${"a".repeat(64)}`
-const digest = `ghcr.io/francescostumpo/legal-callegarin@sha256:${"b".repeat(64)}`
+const imageRepository = "ghcr.io/francescostumpo/legal-callegarin-private"
+const publicImageRepository = "ghcr.io/francescostumpo/legal-callegarin"
+const oldDigest = `${imageRepository}@sha256:${"a".repeat(64)}`
+const digest = `${imageRepository}@sha256:${"b".repeat(64)}`
+const publicDigest = `${publicImageRepository}@sha256:${"c".repeat(64)}`
 const publicBase = "https://www.studio-callegarin.it"
 const baseArgs = [
   "--subscription-id",
@@ -55,7 +58,7 @@ const rg = 'rg-callegarin'; const app = 'callegarin';
 const appPath = '/subscriptions/' + sub + '/resourceGroups/' + rg + '/providers/Microsoft.App/containerApps/' + app;
 const revisionsPath = appPath + '/revisions';
 const prior = 'callegarin--prior'; const candidate = 'callegarin--deploy-test';
-const repo = 'ghcr.io/francescostumpo/legal-callegarin@sha256:';
+const repo = 'ghcr.io/francescostumpo/legal-callegarin-private@sha256:';
 const oldDigest = repo + 'a'.repeat(64); const digest = repo + 'b'.repeat(64);
 const stateFile = process.env.TEST_STATE;
 let state = { copied: false, promoted: false, rolledBack: false, rollbackAttempted: false };
@@ -112,7 +115,8 @@ const revision = name => {
   let overrides = {};
   if (!isCandidate && scenario === 'prior-unhealthy') healthState = 'Unhealthy';
   if (!isCandidate && scenario === 'prior-compat') mode = 'compat';
-  if (!isCandidate && scenario === 'prior-tagged') image = 'ghcr.io/francescostumpo/legal-callegarin:latest';
+  if (!isCandidate && scenario === 'prior-tagged') image = 'ghcr.io/francescostumpo/legal-callegarin-private:latest';
+  if (!isCandidate && scenario === 'prior-public-package') image = 'ghcr.io/francescostumpo/legal-callegarin@sha256:' + 'c'.repeat(64);
   if (!isCandidate && scenario === 'prior-duplicate-mode') extraEnv = [{name:'ARTICLE_STORAGE_SCHEMA_MODE',value:'migrate'}];
   if (!isCandidate && scenario === 'prior-missing-fqdn') fqdn = '';
   if (isCandidate && scenario === 'candidate-unhealthy') healthState = 'Unhealthy';
@@ -345,9 +349,8 @@ test("help and invalid input make no az, curl, or sleep calls", () => {
     baseArgs.slice(0, -2),
     [...baseArgs, "positional"],
     [...baseArgs, "--image-digest", digest],
-    baseArgs.map((v) =>
-      v === digest ? "ghcr.io/francescostumpo/legal-callegarin:latest" : v,
-    ),
+    baseArgs.map((v) => (v === digest ? `${imageRepository}:latest` : v)),
+    baseArgs.map((v) => (v === digest ? publicDigest : v)),
     baseArgs.map((v) => (v === publicBase ? `${publicBase}/path` : v)),
   ]) {
     const result = runCase("success", args)
@@ -558,6 +561,7 @@ test("unsafe preflight states fail before mutation and before curl", () => {
     "prior-unhealthy",
     "prior-compat",
     "prior-tagged",
+    "prior-public-package",
     "prior-duplicate-mode",
     "prior-missing-fqdn",
     "suffix-collision",
