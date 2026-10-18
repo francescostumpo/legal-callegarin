@@ -1,0 +1,13 @@
+.worktrees/
+.superpowers/
+node_modules/
+internal/webassets/admin/dist/
+/bin/*
+!/bin/.keep
+coverage/
+/artifacts/
+*.log
+.env
+.env.*
+!.env.example
+infra/*.local.bicepparam

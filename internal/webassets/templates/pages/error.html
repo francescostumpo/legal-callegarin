@@ -1,0 +1,22 @@
+{{define "content"}}
+<section
+  class="section shell reading-column error-page"
+  aria-labelledby="error-heading"
+>
+  <p class="eyebrow">{{.Eyebrow}}</p>
+  <h1 id="error-heading">{{.Heading}}</h1>
+  <p>{{.Lead}}</p>
+  <p>
+    <a class="button button--primary" href="/">Torna alla pagina iniziale</a>
+  </p>
+  <div class="content-section">
+    <h2>Contatta lo studio</h2>
+    <p>Se necessario, puoi usare i recapiti diretti:</p>
+    {{template "contact-details" .}}
+    <p><a href="/contatti">Pagina contatti</a></p>
+  </div>
+  {{if .RequestID}}
+  <p class="field-help">Riferimento assistenza: <code>{{.RequestID}}</code></p>
+  {{end}}
+</section>
+{{end}}

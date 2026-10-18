@@ -1,0 +1,131 @@
+name: Pull request CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify pull request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AZURE_BICEP_CHECK_VERSION: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install exact Bicep CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AZURE_CONFIG_DIR="$RUNNER_TEMP/azure-cli"
+          export DOTNET_BUNDLE_EXTRACT_BASE_DIR="$RUNNER_TEMP/dotnet"
+          printf 'AZURE_CONFIG_DIR=%s\n' "$AZURE_CONFIG_DIR" >> "$GITHUB_ENV"
+          printf 'DOTNET_BUNDLE_EXTRACT_BASE_DIR=%s\n' "$DOTNET_BUNDLE_EXTRACT_BASE_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$AZURE_CONFIG_DIR" "$DOTNET_BUNDLE_EXTRACT_BASE_DIR"
+          az config set bicep.use_binary_from_path=false
+          az bicep install --version v0.45.15
+          az bicep version | grep --fixed-strings 'Bicep CLI version 0.45.15 '
+
+      - name: Lint GitHub Actions workflows
+        run: |
+          make actionlint
+
+      - name: Run repository checks
+        run: |
+          make check
+
+      - name: Run Go race tests
+        run: |
+          go test -race -count=1 ./...
+
+      - name: Install Playwright browsers
+        run: |
+          ./node_modules/.bin/playwright install --with-deps chromium firefox webkit
+
+      - name: Run full Chromium browser suite
+        run: |
+          npm run e2e -- --project=chromium
+
+      - name: Run three-engine browser smoke suite
+        run: |
+          npm run e2e:smoke
+
+      - name: Start Azurite
+        run: |
+          docker compose -f compose.test.yaml up --detach azurite
+
+      - name: Wait for Azurite
+        shell: bash
+        run: |
+          if timeout 60s bash -c '
+            until
+              curl --silent --show-error --output /dev/null --max-time 2 "http://127.0.0.1:11000/devstoreaccount1?comp=list" &&
+              curl --silent --show-error --output /dev/null --max-time 2 "http://127.0.0.1:11002/devstoreaccount1/Tables"
+            do
+              sleep 1
+            done
+          '; then
+            exit 0
+          fi
+          docker compose -f compose.test.yaml ps
+          docker compose -f compose.test.yaml logs --no-color azurite
+          exit 1
+
+      - name: Run Azurite integration tests
+        env:
+          AZURITE_CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:11000/devstoreaccount1;TableEndpoint=http://127.0.0.1:11002/devstoreaccount1;
+        run: go test -race -count=1 -tags=integration ./internal/storage/azure ./internal/storage/contracttest
+
+      - name: Stop Azurite
+        if: always()
+        run: docker compose -f compose.test.yaml down --volumes --remove-orphans
+
+      - name: Build local verification image
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GITHUB_SHA must be exactly 40 lowercase hexadecimal characters" >&2
+            exit 1
+          fi
+          ci_image="legal-callegarin:ci-$GITHUB_SHA"
+          printf 'CI_IMAGE=%s\n' "$ci_image" >> "$GITHUB_ENV"
+          docker build --pull --build-arg "VERSION=ci-$GITHUB_SHA" --build-arg "COMMIT=$GITHUB_SHA" --tag "$ci_image" .
+
+      - name: Generate local SBOM
+        run: |
+          make sbom IMAGE="$CI_IMAGE"
+
+      - name: Scan local image
+        run: |
+          make scan IMAGE="$CI_IMAGE" SEVERITY=HIGH,CRITICAL
+
+      - name: Upload Playwright failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-failure-diagnostics
+          path: |
+            artifacts/playwright/test-results/**/trace.zip
+            artifacts/playwright/test-results/**/*.png
+          if-no-files-found: ignore
+          retention-days: 3

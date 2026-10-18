@@ -1,0 +1,137 @@
+{{define "content"}}
+<section class="hero" data-home-section="positioning">
+  <div class="hero__media" aria-hidden="true">
+    {{template "editorial-picture" .HeroImage}}
+  </div>
+  <div class="hero__overlay"></div>
+  <div class="hero__content shell">
+    <p class="eyebrow">{{.Eyebrow}}</p>
+    <h1>{{.Heading}}</h1>
+    <p class="hero__lead">{{.Lead}}</p>
+    <a class="button button--primary" href="/contatti"
+      >Richiedi una consulenza <span aria-hidden="true">→</span></a
+    >
+  </div>
+</section>
+
+<section class="section section--intro" data-home-section="introduction">
+  <div class="shell split-layout">
+    <div>
+      <p class="eyebrow">Profilo</p>
+      <h2>Una presenza professionale, comprensibile e misurata</h2>
+    </div>
+    <div class="reading-column">
+      <p>
+        Alessandro Callegarin si è laureato in Giurisprudenza presso
+        l’Università degli Studi di Milano nel 2018. Svolge l’attività di
+        avvocato a Gallarate dal 2022.
+      </p>
+      <a class="text-link" href="/profilo"
+        >Conosci il profilo <span aria-hidden="true">→</span></a
+      >
+    </div>
+  </div>
+</section>
+
+<section class="section section--stone" data-home-section="practice-areas">
+  <div class="shell">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Competenze</p>
+        <h2>Aree di attività</h2>
+      </div>
+      <a class="text-link" href="/aree-di-attivita"
+        >Vedi tutte <span aria-hidden="true">→</span></a
+      >
+    </div>
+    <div class="area-grid area-grid--featured">
+      {{range .HighlightedAreas}}
+      <article class="area-card">
+        <a class="area-card__media" href="{{.Href}}"
+          >{{template "editorial-picture" .Image}}</a
+        >
+        <div class="area-card__body">
+          <h3><a href="{{.Href}}">{{.Title}}</a></h3>
+          <p>{{.Description}}</p>
+        </div>
+      </article>
+      {{end}}
+    </div>
+  </div>
+</section>
+
+<section class="section approach-panel" data-home-section="approach">
+  <div class="approach-panel__copy">
+    <div class="approach-panel__inner">
+      <p class="eyebrow">Approccio</p>
+      <h2>Ogni questione è unica</h2>
+      <p>
+        Ogni questione richiede attenzione, metodo e una valutazione costruita
+        sulle reali esigenze della persona.
+      </p>
+      <a class="text-link" href="/approccio"
+        >Scopri il metodo <span aria-hidden="true">→</span></a
+      >
+    </div>
+  </div>
+  <div class="approach-panel__media">
+    {{template "editorial-picture" .ApproachImage}}
+  </div>
+</section>
+
+<section class="section" data-home-section="articles">
+  <div class="shell">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Sentenze e riflessioni</p>
+        <h2>Approfondimenti recenti</h2>
+      </div>
+      <a class="text-link" href="/sentenze-e-riflessioni"
+        >Vai agli approfondimenti <span aria-hidden="true">→</span></a
+      >
+    </div>
+    {{if .Articles}}
+    <div class="area-grid article-grid">
+      {{range .Articles}}
+      <article class="area-card article-card article-card--media">
+        <a class="area-card__media" href="{{.Href}}"
+          >{{template "editorial-picture" .Image}}</a
+        >
+        <div class="area-card__body">
+          <p class="eyebrow">{{.AreaTitle}}</p>
+          <h3><a href="{{.Href}}">{{.Title}}</a></h3>
+          <p>{{.Summary}}</p>
+        </div>
+      </article>
+      {{end}}
+    </div>
+    {{else}}
+    <p>Nessun approfondimento è attualmente pubblicato.</p>
+    {{end}}
+  </div>
+</section>
+
+<section class="statement" data-home-section="statement">
+  <div class="shell statement__inner">
+    <span class="statement__mark" aria-hidden="true">“</span>
+    <blockquote>
+      Comprendere il problema, chiarire le possibilità, costruire una tutela
+      concreta.
+    </blockquote>
+  </div>
+</section>
+
+<section class="section contact-panel" data-home-section="contact">
+  <div class="contact-panel__media">
+    {{template "editorial-picture" .ContactImage}}
+  </div>
+  <div class="contact-panel__copy content-section">
+    <p class="eyebrow">Contatti</p>
+    <h2>Gallarate e provincia di Varese</h2>
+    {{template "contact-details" .}}
+    <a class="button button--primary" href="/contatti"
+      >Contatta lo studio <span aria-hidden="true">→</span></a
+    >
+  </div>
+</section>
+{{end}}

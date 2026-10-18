@@ -1,0 +1,24 @@
+{{define "editorial-picture"}}
+<picture class="editorial-picture">
+  <source
+    media="(max-width: 47.99rem)"
+    srcset="/assets/covers/{{.CardAVIF}}"
+    type="image/avif"
+  />
+  <source
+    media="(max-width: 47.99rem)"
+    srcset="/assets/covers/{{.CardWebP}}"
+    type="image/webp"
+  />
+  <source srcset="/assets/covers/{{.LandscapeAVIF}}" type="image/avif" />
+  <source srcset="/assets/covers/{{.LandscapeWebP}}" type="image/webp" />
+  <img
+    src="/assets/covers/{{.LandscapeWebP}}"
+    width="1600"
+    height="900"
+    alt="{{.Alt}}"
+    loading="lazy"
+    decoding="async"
+  />
+</picture>
+{{end}}

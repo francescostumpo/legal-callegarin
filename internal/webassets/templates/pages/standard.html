@@ -1,0 +1,88 @@
+{{define "content"}}
+<header class="page-hero">
+  <div class="page-hero__media" aria-hidden="true">
+    {{template "editorial-picture" .HeroImage}}
+  </div>
+  <div class="page-hero__overlay"></div>
+  <div class="page-hero__content shell">
+    <p class="eyebrow">{{.Eyebrow}}</p>
+    <h1>{{.Heading}}</h1>
+    <p>{{.Lead}}</p>
+  </div>
+</header>
+
+{{if eq .Kind "contact"}}
+<section
+  class="section shell content-section"
+  aria-labelledby="contact-heading"
+>
+  <p class="eyebrow">Recapiti diretti</p>
+  <h2 id="contact-heading">Contatta lo studio</h2>
+  {{template "contact-details" .}}
+</section>
+{{end}} {{if .Areas}}
+<section class="section" aria-labelledby="areas-heading">
+  <div class="shell">
+    <h2 id="areas-heading" class="visually-hidden">Tutte le aree</h2>
+    <div class="area-grid">
+      {{range .Areas}}
+      <article class="area-card">
+        <a class="area-card__media" href="{{.Href}}"
+          >{{template "editorial-picture" .Image}}</a
+        >
+        <div class="area-card__body">
+          <h3><a href="{{.Href}}">{{.Title}}</a></h3>
+          <p>{{.Description}}</p>
+        </div>
+      </article>
+      {{end}}
+    </div>
+  </div>
+</section>
+{{end}} {{if .Sections}}
+<div class="section shell content-stack">
+  {{range .Sections}}
+  <section class="content-section">
+    <h2>{{.Heading}}</h2>
+    {{range .Paragraphs}}
+    <p>{{.}}</p>
+    {{end}} {{if .Items}}
+    <ul>
+      {{range .Items}}
+      <li>{{.}}</li>
+      {{end}}
+    </ul>
+    {{end}}
+  </section>
+  {{end}}
+</div>
+{{end}} {{if eq .Kind "area"}} {{if .Articles}}
+<section class="section section--stone" aria-labelledby="related-articles">
+  <div class="shell">
+    <h2 id="related-articles">Approfondimenti collegati</h2>
+    <div class="area-grid article-grid">
+      {{range .Articles}}
+      <article class="area-card article-card article-card--text">
+        <div class="area-card__body">
+          <p class="eyebrow">Sentenze e riflessioni</p>
+          <h3><a href="{{.Href}}">{{.Title}}</a></h3>
+          <p>{{.Summary}}</p>
+        </div>
+      </article>
+      {{end}}
+    </div>
+  </div>
+</section>
+{{end}}
+<aside class="consultation-callout">
+  <div class="shell consultation-callout__inner">
+    <div>
+      <p class="eyebrow">Primo confronto</p>
+      <h2>Esponi la tua situazione con riservatezza</h2>
+    </div>
+    <a class="button button--primary" href="/contatti"
+      >Richiedi una consulenza <span aria-hidden="true">→</span></a
+    >
+  </div>
+</aside>
+{{end}} {{end}}

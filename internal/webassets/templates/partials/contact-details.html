@@ -1,0 +1,24 @@
+{{define "contact-details"}}
+<ul class="contact-list">
+  <li>
+    Telefono:
+    <a class="text-link" {{studioContactHref .Contact.PhoneHref}}
+      >{{.Contact.PhoneDisplay}}</a
+    >
+  </li>
+  <li>
+    Email:
+    <a class="text-link" {{studioContactHref .Contact.EmailHref}}
+      >{{.Contact.Email}}</a
+    >
+  </li>
+  <li>
+    PEC:
+    <a class="text-link" {{studioContactHref .Contact.PECHref}}
+      >{{.Contact.PEC}}</a
+    >
+  </li>
+  <li>Indirizzo: {{.Contact.Address}}</li>
+  <li>Orari: {{.Contact.Hours}}</li>
+</ul>
+{{end}}
