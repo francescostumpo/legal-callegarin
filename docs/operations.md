@@ -617,6 +617,20 @@ pubblica e assenza di cookie pubblici. Solo dopo gli smoke check assegna il 100%
 alla revisione candidata per nome; un fallimento successivo tenta il rollback
 automatico alla revisione precedente verificata.
 
+Il deploy verifica l'ambito confrontando l'ID ARM completo della Container App,
+comprensivo di sottoscrizione e resource group, con l'identità attesa; non
+richiede una lettura separata dei metadati del resource group. Le risposte Azure
+sono confrontate con sole normalizzazioni osservate e semantiche: un valore
+letterale vuoto accanto a un `secretRef` invariato equivale al valore assente,
+`ephemeralStorage` assente equivale a `1Gi` soltanto con CPU `0.25`, e
+`cooldownPeriod`/`pollingInterval` nulli o assenti equivalgono rispettivamente a
+`300` e `30`. Valori non vuoti, riferimenti cambiati e ogni altro scostamento di
+storage, risorse, scala o routing fanno fallire il deploy. La revisione candidata
+deve avere esattamente il nome `<container-app>--<revision-suffix>` derivato
+dall'ID ARM verificato; solo in quel caso `revisionSuffix` nullo o assente è
+compatibile. Sono accettati gli stati `Running`, `ScaledToZero` e
+`RunningAtMaxScale` soltanto insieme a revisione attiva, sana e provisioned.
+
 Il bootstrap iniziale Bicep resta un'operazione revisionata dall'operatore e
 avvia l'applicazione in modalità `compat`. La migrazione iniziale è obbligatoria
 prima di abilitare i deploy ordinari. Il passaggio successivo obbligatorio è il

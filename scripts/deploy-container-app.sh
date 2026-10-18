@@ -158,6 +158,17 @@ const templateFacts = (template, expectedImage, expectedSuffix, expectedContaine
 const normalizedTemplate = template => {
   const value = structuredClone(template);
   if (!Array.isArray(value.containers) || value.containers.length !== 1) throw new Error('template must contain exactly one container');
+  const container = value.containers[0];
+  if (Array.isArray(container.env)) {
+    for (const entry of container.env) {
+      if (entry && typeof entry === 'object' && own(entry, 'secretRef') && own(entry, 'value') && entry.value === '') delete entry.value;
+    }
+  }
+  if (container.resources && typeof container.resources === 'object' && !Array.isArray(container.resources) && container.resources.cpu === 0.25 && !own(container.resources, 'ephemeralStorage')) container.resources.ephemeralStorage = '1Gi';
+  if (value.scale && typeof value.scale === 'object' && !Array.isArray(value.scale)) {
+    if (!own(value.scale, 'cooldownPeriod') || value.scale.cooldownPeriod === null) value.scale.cooldownPeriod = 300;
+    if (!own(value.scale, 'pollingInterval') || value.scale.pollingInterval === null) value.scale.pollingInterval = 30;
+  }
   value.revisionSuffix = '__REVISION_SUFFIX__';
   value.containers[0].image = '__IMAGE__';
   return value;
@@ -204,8 +215,12 @@ const assertRevisionIdentity = (revision, expectedId, expectedName) => {
   if (JSON.stringify(keys.sort()) !== JSON.stringify(expectedKeys.sort())) throw new Error('revision projection has unexpected or missing fields');
   if (typeof revision.id !== 'string' || revision.id.toLowerCase() !== expectedId.toLowerCase() || revision.name !== expectedName) throw new Error('revision identity does not match requested resource');
 };
+const assertCandidateName = (expectedId, name, suffix) => {
+  const match = /^.+\/containerApps\/([a-z0-9-]+)\/revisions\/([a-z0-9-]+)$/.exec(expectedId);
+  if (!match || match[2] !== name || name !== `${match[1]}--${suffix}`) throw new Error('candidate revision name does not match requested suffix');
+};
 const assertRevisionStatus = (revision, weightMode) => {
-  if (revision.active !== true || revision.healthState !== 'Healthy' || revision.provisioningState !== 'Provisioned' || !['Running','ScaledToZero'].includes(revision.runningState)) throw new Error('revision is not active, healthy, provisioned, or runnable');
+  if (revision.active !== true || revision.healthState !== 'Healthy' || revision.provisioningState !== 'Provisioned' || !['Running','ScaledToZero','RunningAtMaxScale'].includes(revision.runningState)) throw new Error('revision is not active, healthy, provisioned, or runnable');
   if (weightMode === '100' && revision.trafficWeight !== 100) throw new Error('revision traffic weight is not 100');
   if (weightMode === 'zero' && !(revision.trafficWeight === 0 || revision.trafficWeight === null || !own(revision, 'trafficWeight'))) throw new Error('revision traffic weight is not absent or zero');
   if (typeof revision.fqdn !== 'string' || !fqdnPattern.test(revision.fqdn) || revision.fqdn.includes('..')) throw new Error('revision FQDN is missing or malformed');
@@ -235,7 +250,10 @@ try {
     assertRevisionIdentity(value, expectedId, name); assertRevisionStatus(value, '100'); templateFacts(value.template, undefined, undefined, containerName);
   } else if (action === 'revision-candidate') {
     const [file, expectedId, name, image, suffix, priorFile, containerName] = args; const value = read(file);
-    assertRevisionIdentity(value, expectedId, name); assertRevisionStatus(value, 'zero'); templateFacts(value.template, image, suffix, containerName);
+    assertRevisionIdentity(value, expectedId, name); assertCandidateName(expectedId, name, suffix); assertRevisionStatus(value, 'zero');
+    const candidateTemplate = assertObject(value.template, 'template');
+    if (own(candidateTemplate, 'revisionSuffix') && candidateTemplate.revisionSuffix !== null && candidateTemplate.revisionSuffix !== suffix) throw new Error('revision suffix does not match');
+    templateFacts(candidateTemplate, image, undefined, containerName);
     const prior = read(priorFile); assertTemplatesEqual(value.template, prior.template);
     process.stdout.write(`${value.fqdn}\n`);
   } else if (action === 'revision-promoted') {
@@ -380,10 +398,6 @@ rollback() {
 account_file="$work_dir/account.json"
 az account show --query '{id:id,state:state}' --output json >"$account_file"
 json_tool account "$account_file" "$subscription_id"
-
-expected_rg_id="/subscriptions/$subscription_id/resourceGroups/$resource_group"
-actual_rg_id=$(az group show --subscription "$subscription_id" --name "$resource_group" --query id --output tsv)
-[[ -n $actual_rg_id && ${actual_rg_id,,} == ${expected_rg_id,,} ]] || fail 'resource group identity mismatch'
 
 app_file="$work_dir/app-preflight.json"
 read_app "$app_file"
