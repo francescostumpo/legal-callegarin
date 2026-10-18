@@ -420,6 +420,14 @@ test("bootstrap publishing uses an isolated write credential and canonical diges
   )
   assert.match(deployWorkflow, /Build and publish immutable image/)
   assert.match(deployWorkflow, /needs: publish/)
+  assert.match(
+    guide,
+    /IMAGE_REPOSITORY='ghcr\.io\/francescostumpo\/legal-callegarin-private'/,
+  )
+  assert.doesNotMatch(
+    guide,
+    /IMAGE_REPOSITORY='ghcr\.io\/francescostumpo\/legal-callegarin'/,
+  )
 
   requireTerms(guide, [
     /cycle breaker/i,
@@ -455,6 +463,23 @@ test("bootstrap publishing uses an isolated write credential and canonical diges
   assert.throws(
     () => assertBuildDigestComparison(withoutEquality),
     /did not match the regular expression/,
+  )
+})
+
+test("private package and runtime pull gates precede the first Bicep deployment", () => {
+  const firstRelease = guide.slice(
+    guide.indexOf("## Pubblicazione una tantum della prima immagine"),
+  )
+  assertOrdered(firstRelease, [
+    /ghcr\.io\/francescostumpo\/legal-callegarin-private/,
+    /package[^.]*privat[^.]*collegat[^.]*repository[^.]*Actions[^.]*admin/is,
+    /PAT runtime[^.]*separat[^.]*solo[^.]*`read:packages`/is,
+    /pull runtime[^.]*Bicep/is,
+    /build-params\/what-if\/deploy/is,
+  ])
+  assert.match(
+    firstRelease,
+    /gate[^.]*bloccante[^.]*prima[^.]*pull runtime[^.]*Bicep/is,
   )
 })
 
